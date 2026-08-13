@@ -285,3 +285,4 @@ docker-compose.yml.bak
 
 # CLI local cache/state
 .playwright-cli
+.sandbox/
