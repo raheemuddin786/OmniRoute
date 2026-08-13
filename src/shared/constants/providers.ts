@@ -46,14 +46,13 @@ export function supportsApiKeyOnFreeProvider(providerId: unknown): boolean {
 
 // OAuth-primary providers that also accept a direct API key. Keep these out of
 // FREE_APIKEY_PROVIDER_IDS so the dashboard's primary action remains OAuth.
-const DUAL_AUTH_PROVIDER_IDS = new Set(["clinepass", "codebuddy-cn"]);
+const DUAL_AUTH_PROVIDER_IDS = new Set(["clinepass", "codebuddy-cn", "cline", "kilocode"]);
 
 export function supportsDualAuthProvider(providerId: unknown): boolean {
   return typeof providerId === "string" && DUAL_AUTH_PROVIDER_IDS.has(providerId);
 }
 
 // Web / Cookie Providers
-
 
 // API Key Providers
 
@@ -120,8 +119,7 @@ export const AGGREGATOR_PROVIDER_IDS = new Set([
   "chat-oripe",
   "freeinference",
   "free-ai",
-
-]);;
+]);
 
 export const ENTERPRISE_CLOUD_PROVIDER_IDS = new Set([
   "azure-openai",

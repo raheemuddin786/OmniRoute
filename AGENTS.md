@@ -334,6 +334,12 @@ Documentation must describe verified behavior, not plausible behavior.
 5. Register models in `open-sse/config/providerRegistry.ts`
 6. Write tests in `tests/unit/` (include the publicCreds shape assertion if you added a new embedded default)
 
+### Enabling Dual Auth (Multiple API Keys) for a Provider
+
+1. Add the provider's ID to the `DUAL_AUTH_PROVIDER_IDS` set in `src/shared/constants/providers.ts`. This flags the frontend to render the multi-key textarea input instead of a single-line password input.
+2. Update the `authHint` for the provider (in `src/shared/constants/providers.ts` or `src/shared/constants/providers/oauth.ts`) to inform users that they can provide multiple keys separated by commas.
+3. The backend proxy layers (like `src/shared/utils/apiKeyPolicy.ts`) automatically parse comma-separated keys and rotate/fallback between them when `DUAL_AUTH_PROVIDER_IDS` includes the provider.
+
 ### Adding a New API Route
 
 1. Create directory under `src/app/api/v1/your-route/`
@@ -679,7 +685,7 @@ the stale-enforcement added in Fase 6A.3.
     causa-raiz de DOIS wipes (2026-08-08 e 2026-08-10: `git reset --hard` materializou o
     symlink rastreado por cima do diretório real e o git apagou todo o conteúdo ignorado sem
     aviso); (c) após qualquer escrita relevante, `git -C _tasks add -A && git -C _tasks commit
-    && git -C _tasks push` — o push frequente é o backup real; (d) repetir esta proibição
+&& git -C _tasks push` — o push frequente é o backup real; (d) repetir esta proibição
     VERBATIM no prompt de todo subagente que toque git; (e) se `_tasks` aparecer como symlink
     quebrado, NÃO commitar nada — restaurar do remote e avisar o operador. O gate
     `check:tracked-artifacts` (pre-commit + CI) bloqueia `_tasks` rastreado em qualquer forma.
