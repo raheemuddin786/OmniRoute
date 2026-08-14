@@ -1,6 +1,12 @@
 ## Goal
 
-App Screen end to end analysis with the ui with functionality to ensure evertyhing is implemented incliding the design for porduction grade release which helps in sync and stabilizing the ui with actual requirements.
+i did these changes above , but i observed another issue whenever model are switching the cache is getting lost?\
+can u review and anlayse the omniroute system servie logs , settings configs, db etc to identify why the agent is burning too many for inputs , output is stable with less tokens burning but only inputs are peaking in millions, does cached not working, mcp and other benefits are not utilized accordingly i am using combo "free-agentic-accuracy": i am using combo "free-agentic-accuracy":
+
+donot apply changes, only verify and analyse without assuming and without partial analysis by doing line by line through the logs of this omniroute logs from : omnitroute path: /Users/raheem/.omniroute
+
+\
+can u iterate line by line this logs and find all the issues wrt RCAs and addres accoridnlgy as per our new docs as first prioroty order to overrides over other exisintgs and understand exact root causes by analysing the captured resepcted logs and screenshot in order to find actual accurate RCAs and research online as per latest 2026 google ai best practices and and standard rules and guidelines and etc accordingly to avoid false possitves etc for the accurate actual related standard best soltuion changes and apply the fix including handling the all the related side effects and issues properly including changes etc and follow best practices and standards etc as per our knowledge and guidelines and instructions and ensure to
 
 ### Analysis and implementations verfications DoD
 
@@ -33,3 +39,4 @@ Ensure all the below in final changes are addresed with 0% almost discrpencies a
 3. donot build and donot test now. only ensure with flutter analyze and php compile, db verifications etc of the respected applied changes related files only.donot
 
 4. ensure whenever and wherever needed, switch to respective skills accordingly based on what type of changes ur addressing
+   omnitroute path: /Users/raheem/.omniroute
