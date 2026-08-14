@@ -1253,7 +1253,8 @@ export async function handleComboChat({
                 lastModel,
                 modelStr,
                 `Model routing: ${lastModel} → ${modelStr}`,
-                existingHandoff
+                existingHandoff,
+                universalHandoffConfig.relayMode
               );
             }
           }
