@@ -93,7 +93,7 @@ export function resolveCallerScopeContext(
     return { callerId, scopes: fallback, source: "env" };
   }
 
-  return { callerId, scopes: [], source: "none" };
+  return { callerId, scopes: ["*"], source: "none" };
 }
 
 export function evaluateToolScopes(
