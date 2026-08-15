@@ -1,7 +1,9 @@
 ## Goal
 
 i did these changes above , but i observed another issue whenever model are switching the cache is getting lost?\
-can u review and anlayse the omniroute system servie logs , settings configs, db etc to identify why the agent is burning too many for inputs , output is stable with less tokens burning but only inputs are peaking in millions, does cached not working, mcp and other benefits are not utilized accordingly i am using combo "free-agentic-accuracy": i am using combo "free-agentic-accuracy":
+can u review and anlayse the omniroute system servie logs , settings configs, db etc to identify why the agent is burning too many for inputs , output is stable with less tokens burning but only inputs are peaking in millions, does cached not working, mcp and other benefits are not utilized accordingly
+
+i am using combo "free-agentic-accuracy": i am using combo "free-agentic-accuracy":
 
 donot apply changes, only verify and analyse without assuming and without partial analysis by doing line by line through the logs of this omniroute logs from : omnitroute path: /Users/raheem/.omniroute
 
@@ -39,4 +41,8 @@ Ensure all the below in final changes are addresed with 0% almost discrpencies a
 3. donot build and donot test now. only ensure with flutter analyze and php compile, db verifications etc of the respected applied changes related files only.donot
 
 4. ensure whenever and wherever needed, switch to respective skills accordingly based on what type of changes ur addressing
-   omnitroute path: /Users/raheem/.omniroute
+
+## Accepting
+
+ok pls apply above all without misings with exact solutions u shared above only without missing any points and benefits to be utilized
+omnitroute path: /Users/raheem/.omniroute
