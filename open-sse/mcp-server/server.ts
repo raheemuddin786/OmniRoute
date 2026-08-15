@@ -100,7 +100,7 @@ export { getMcpModelsCatalog } from "./catalog.ts";
 const OMNIROUTE_BASE_URL = resolveOmniRouteBaseUrl();
 const MCP_ENFORCE_SCOPES = process.env.OMNIROUTE_MCP_ENFORCE_SCOPES === "true";
 const MCP_ALLOWED_SCOPES = new Set(
-  (process.env.OMNIROUTE_MCP_SCOPES || "")
+  (process.env.OMNIROUTE_MCP_SCOPES || "*")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
