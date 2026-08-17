@@ -198,6 +198,12 @@ const IGNORE_FROM_CODE = new Set([
   // Node.js module resolution path — OS/Node internal, not an OmniRoute config var.
   // Referenced in resolveSpawnArgs (ninerouter) to pass bundled native modules to subprocess.
   "NODE_PATH",
+  // Conductor fleet tokens/urls & CI step summary / TS7 test helpers.
+  "CONDUCTOR_ORCHESTRATOR_TOKEN",
+  "CONDUCTOR_SPOKESPERSON_URL",
+  "DEBUG_CLAUDE_NONSTREAM",
+  "GITHUB_STEP_SUMMARY",
+  "TS7_BASE_REF",
   // NVIDIA diagnostic/test helpers used only by ad-hoc scripts.
   "NVIDIA_BASE_URL",
   "NVIDIA_MODEL",
@@ -240,6 +246,7 @@ const DOC_ONLY_ALLOWLIST = new Set([
   "CHANGEME",
   // Legacy aliases — present in docs as "would be aliases" but read-only
   // through their canonical names today.
+  "ADOBE_FIREFLY_CHROME_HEADED",
   "OMNIROUTE_CRYPT_KEY",
   "OMNIROUTE_API_KEY_BASE64",
   // Future-supported hooks: documented but currently hardcoded constants.
