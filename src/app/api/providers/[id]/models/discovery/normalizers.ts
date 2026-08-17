@@ -143,9 +143,15 @@ export async function fetchAntigravityDiscoveryModelsCached(
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.warn(
-            `[models] ${provider} discovery failed at ${discoveryUrl} (${response.status}): ${errorText}`
-          );
+          if (response.status === 404) {
+            console.debug(
+              `[models] ${provider} discovery 404 (endpoint not supported) at ${discoveryUrl}`
+            );
+          } else {
+            console.warn(
+              `[models] ${provider} discovery failed at ${discoveryUrl} (${response.status}): ${errorText}`
+            );
+          }
           continue;
         }
 

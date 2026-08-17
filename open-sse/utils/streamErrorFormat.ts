@@ -53,13 +53,14 @@ export function normalizeStreamFailurePayload(payload: unknown): StreamFailurePa
     : Object.keys(asRecord(record.error)).length
       ? asRecord(record.error)
       : record;
-  const code = typeof error.code === "string" ? error.code : "upstream_error";
-  const type = typeof error.type === "string" ? error.type : undefined;
+  const code =
+    typeof error.code === "string" && error.code.trim() ? error.code.trim() : "upstream_error";
+  const type = typeof error.type === "string" && error.type.trim() ? error.type.trim() : undefined;
   const message =
     typeof error.message === "string" && error.message.trim()
-      ? error.message
+      ? error.message.trim()
       : typeof record.message === "string" && record.message.trim()
-        ? record.message
+        ? record.message.trim()
         : "Upstream failure";
   const status =
     toStreamFailureStatus(error.status_code) ??

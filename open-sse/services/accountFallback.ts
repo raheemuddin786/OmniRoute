@@ -841,6 +841,8 @@ export function shouldMarkAccountExhaustedFrom429(
 export function classifyLockoutReason(status: number): string {
   if (status === 429) return "rate_limit";
   if (status === 403) return "quota_exhausted";
+  if (status === 410) return "model_shutdown";
+  if (status === 404) return "not_found";
   return "unknown";
 }
 
