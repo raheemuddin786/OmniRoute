@@ -87,7 +87,7 @@ export const clientApiPolicy: RoutePolicy = {
       // anonymous instead of rejecting. We log a warning so the bad key is
       // still observable in the request log.
       if (!isRequireApiKeyEnabled()) {
-        console.warn(
+        console.debug(
           `[clientApiPolicy] invalid bearer presented to ${ctx.classification.normalizedPath} ` +
             `but REQUIRE_API_KEY=false — falling through to anonymous (key_id=${maskKeyId(bearer)})`
         );
