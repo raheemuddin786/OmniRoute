@@ -1,3 +1,8 @@
+---
+title: "Agent Persistent Memory & Knowledge Management Guide"
+description: "How AI agents use, store, and automatically update persistent project knowledge, vector memories, and architecture guidelines."
+---
+
 # Agent Persistent Memory & Knowledge Management Guide
 
 This document defines how AI agents interacting with OmniRoute use, store, and automatically update persistent project knowledge, vector memories, and architecture guidelines.
