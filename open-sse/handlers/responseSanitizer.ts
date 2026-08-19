@@ -1,6 +1,7 @@
 import {
   copyOpenAICompatibleReasoningFields,
   getReadableReasoningValue,
+  getAnyReasoningValue,
 } from "../utils/reasoningFields.ts";
 import { stripInternalReasoningPlaceholder } from "../utils/reasoningPlaceholder.ts";
 import { normalizeOpenAICompatibleFinishReason } from "../utils/finishReason.ts";
@@ -482,6 +483,20 @@ function sanitizeMessage(msg: unknown, options: ParseOptions = {}): unknown {
 
   if (msgRecord.function_call) {
     sanitized.function_call = stripZeroWidthFunctionArguments(msgRecord.function_call);
+  }
+
+  const hasContent =
+    typeof sanitized.content === "string"
+      ? sanitized.content.trim().length > 0
+      : Boolean(sanitized.content);
+  const hasToolCalls =
+    (Array.isArray(sanitized.tool_calls) && sanitized.tool_calls.length > 0) ||
+    Boolean(sanitized.function_call);
+  if (!hasContent && !hasToolCalls) {
+    const reasoningText = getAnyReasoningValue(sanitized) || getAnyReasoningValue(msgRecord);
+    if (reasoningText && reasoningText.trim().length > 0) {
+      sanitized.content = reasoningText;
+    }
   }
 
   return sanitized;
@@ -996,8 +1011,11 @@ function convertOpenAIResponseToResponses(openaiResponse: JsonRecord): JsonRecor
   }
 
   const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
-  const messageContent = sanitizeResponsesMessageContent(message.content);
-  if (messageContent.length > 0 || (!hasToolCalls && !reasoningContent)) {
+  let messageContent = sanitizeResponsesMessageContent(message.content);
+  if (messageContent.length === 0 && !hasToolCalls && reasoningContent) {
+    messageContent = [{ type: "output_text", text: reasoningContent, annotations: [] }];
+  }
+  if (messageContent.length > 0 || !hasToolCalls) {
     output.push({
       id: `msg_${responseId}_0`,
       type: "message",
