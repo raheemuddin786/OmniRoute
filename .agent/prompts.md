@@ -3,7 +3,9 @@
 i did these changes above , but i observed another issue whenever model are switching the cache is getting lost?  
 can u review and anlayse the omniroute system servie logs , settings configs, db etc to identify why the agent is burning too many for inputs , output is stable with less tokens burning but only inputs are peaking in millions, does cached not working, mcp and other benefits are not utilized accordingly
 
-i am using combo "free-agentic-accuracy": i am using combo "free-agentic-accuracy":
+## Pre-condtion
+
+i am using combo "free-agentic-accuracy"
 
 donot apply changes, only verify and analyse without assuming and without partial analysis by doing line by line through the logs of this omniroute logs from : omnitroute path: /Users/raheem/.omniroute
 
@@ -11,10 +13,11 @@ can u iterate line by line this logs and find all the issues wrt RCAs and addres
 
 ### Analysis and implementations verfications DoD
 
-1. identify and find all Functionalitiy Discrepencies
-2. Identify accordingly the pre existing issues
-3. then analyze those all extracted from snapshot comparing with respective docs line by line and consider priority is the new docs to override over the already existings from etiher docs or code... considering to identify from the snapshots and respective files to identify all the related and reported issues to be sync and stabilize accordingly and
-4. then If found anything not as expected and has issues and discrepancies et then list down all those and understand exact root causes by analysing the captured resepcted screenshot in order to find actual accurate RCAs and research online for the accurate actual related standard best soltuion changes and apply the fix including handling the all the related side effects and issues properly including changes etc and follow best practices and standards etc as per our knowledge and guidelines and instructions etc.
+1. review and anlayse the omniroute system servie logs , settings configs, db etc to identify
+2. identify and find all Functionalitiy Discrepencies
+3. Identify accordingly the pre existing issues
+4. then analyze those all extracted from snapshot comparing with respective docs line by line and consider priority is the new docs to override over the already existings from etiher docs or code... considering to identify from the snapshots and respective files to identify all the related and reported issues to be sync and stabilize accordingly and
+5. then If found anything not as expected and has issues and discrepancies et then list down all those and understand exact root causes by analysing the captured resepcted screenshot in order to find actual accurate RCAs and research online for the accurate actual related standard best soltuion changes and apply the fix including handling the all the related side effects and issues properly including changes etc and follow best practices and standards etc as per our knowledge and guidelines and instructions etc.
 
 ## DOD
 
