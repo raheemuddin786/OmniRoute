@@ -1,6 +1,7 @@
 import {
   copyOpenAICompatibleReasoningFields,
   getReadableReasoningValue,
+  getAnyReasoningValue,
 } from "../utils/reasoningFields.ts";
 import { stripInternalReasoningPlaceholder } from "../utils/reasoningPlaceholder.ts";
 import { normalizeOpenAICompatibleFinishReason } from "../utils/finishReason.ts";
@@ -8,7 +9,10 @@ import {
   collapseExcessiveNewlines,
   extractThinkingFromContent,
 } from "./responseSanitizer/reasoning.ts";
-import { applyCacheHitTokensToUsage, applyCacheHitTokensToResponsesUsage } from "./responseSanitizer/cacheHitTokens.ts";
+import {
+  applyCacheHitTokensToUsage,
+  applyCacheHitTokensToResponsesUsage,
+} from "./responseSanitizer/cacheHitTokens.ts";
 export {
   extractThinkingFromContent,
   shouldParseTextualReasoningTags,
@@ -31,7 +35,9 @@ const ALLOWED_USAGE_FIELDS = new Set([
   "total_tokens",
   "cached_tokens",
   "prompt_tokens_details",
-  "completion_tokens_details", "cache_read_input_tokens", "cache_creation_input_tokens",
+  "completion_tokens_details",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
   // Keep through sanitize → applyClientUsageBuffer so heuristic web usage is
   // not inflated by the default USAGE_TOKEN_BUFFER (2000).
   "estimated",
@@ -479,6 +485,20 @@ function sanitizeMessage(msg: unknown, options: ParseOptions = {}): unknown {
     sanitized.function_call = stripZeroWidthFunctionArguments(msgRecord.function_call);
   }
 
+  const hasContent =
+    typeof sanitized.content === "string"
+      ? sanitized.content.trim().length > 0
+      : Boolean(sanitized.content);
+  const hasToolCalls =
+    (Array.isArray(sanitized.tool_calls) && sanitized.tool_calls.length > 0) ||
+    Boolean(sanitized.function_call);
+  if (!hasContent && !hasToolCalls) {
+    const reasoningText = getAnyReasoningValue(sanitized) || getAnyReasoningValue(msgRecord);
+    if (reasoningText && reasoningText.trim().length > 0) {
+      sanitized.content = reasoningText;
+    }
+  }
+
   return sanitized;
 }
 
@@ -550,7 +570,7 @@ function sanitizeResponsesUsage(usage: unknown): unknown {
     !(toRecord(normalized.input_tokens_details) ?? {}).cached_tokens
   ) {
     normalized.input_tokens_details = {
-      ...(normalized.input_tokens_details as Record<string, unknown> || {}),
+      ...((normalized.input_tokens_details as Record<string, unknown>) || {}),
       cached_tokens: normalized.prompt_cache_hit_tokens,
     };
   }
@@ -562,7 +582,7 @@ function sanitizeResponsesUsage(usage: unknown): unknown {
     !(toRecord(normalized.input_tokens_details) ?? {}).cached_tokens
   ) {
     normalized.input_tokens_details = {
-      ...(normalized.input_tokens_details as Record<string, unknown> || {}),
+      ...((normalized.input_tokens_details as Record<string, unknown>) || {}),
       cached_tokens: normalized.cache_read_input_tokens,
     };
   }
@@ -990,8 +1010,11 @@ function convertOpenAIResponseToResponses(openaiResponse: JsonRecord): JsonRecor
   }
 
   const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
-  const messageContent = sanitizeResponsesMessageContent(message.content);
-  if (messageContent.length > 0 || (!hasToolCalls && !reasoningContent)) {
+  let messageContent = sanitizeResponsesMessageContent(message.content);
+  if (messageContent.length === 0 && !hasToolCalls && reasoningContent) {
+    messageContent = [{ type: "output_text", text: reasoningContent, annotations: [] }];
+  }
+  if (messageContent.length > 0 || !hasToolCalls) {
     output.push({
       id: `msg_${responseId}_0`,
       type: "message",

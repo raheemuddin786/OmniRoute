@@ -244,7 +244,15 @@ export function translateNonStreamingResponse(
     if (toolCalls.length > 0) {
       message.tool_calls = toolCalls;
     }
-    if (message.content === undefined) {
+    if (
+      (!message.content ||
+        (typeof message.content === "string" && message.content.trim().length === 0)) &&
+      toolCalls.length === 0 &&
+      reasoningContent &&
+      reasoningContent.trim().length > 0
+    ) {
+      message.content = reasoningContent;
+    } else if (message.content === undefined) {
       message.content = "";
     }
 
@@ -448,7 +456,15 @@ export function translateNonStreamingResponse(
               if (toolCalls.length > 0) {
                 message.tool_calls = toolCalls;
               }
-              if (!message.content && !message.tool_calls) {
+              if (
+                (!message.content ||
+                  (typeof message.content === "string" && message.content.trim().length === 0)) &&
+                toolCalls.length === 0 &&
+                reasoningContent &&
+                reasoningContent.trim().length > 0
+              ) {
+                message.content = reasoningContent;
+              } else if (!message.content && !message.tool_calls) {
                 message.content = "";
               }
 

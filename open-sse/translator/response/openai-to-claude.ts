@@ -251,6 +251,7 @@ export function openaiToClaudeResponse(chunk, state) {
     reasoningContent !== "" &&
     !isInternalReasoningPlaceholder(reasoningContent)
   ) {
+    state.accumulatedReasoningText = (state.accumulatedReasoningText || "") + reasoningContent;
     stopTextBlock(state, results);
 
     if (!state.thinkingBlockStarted) {
@@ -299,6 +300,7 @@ export function openaiToClaudeResponse(chunk, state) {
           state.textBlockIndex = state.nextBlockIndex++;
           state.textBlockStarted = true;
           state.textBlockClosed = false;
+          state.hasEmittedTextBlock = true;
           results.push({
             type: "content_block_start",
             index: state.textBlockIndex,
@@ -316,6 +318,7 @@ export function openaiToClaudeResponse(chunk, state) {
           state.textBlockIndex = state.nextBlockIndex++;
           state.textBlockStarted = true;
           state.textBlockClosed = false;
+          state.hasEmittedTextBlock = true;
           results.push({
             type: "content_block_start",
             index: state.textBlockIndex,
@@ -501,6 +504,33 @@ export function openaiToClaudeResponse(chunk, state) {
 
     // Override finish_reason to tool_use if XML tool calls were found
     const overrideFinishReason = xmlToolCalls.length > 0 ? "tool_calls" : choice.finish_reason;
+
+    // Fallback: If no text block or tool use was ever emitted and we had reasoning content,
+    // promote the accumulated reasoning text to a text block so Claude Code receives non-empty content.
+    if (
+      !state.hasEmittedTextBlock &&
+      state.toolCalls.size === 0 &&
+      xmlToolCalls.length === 0 &&
+      state.accumulatedReasoningText &&
+      state.accumulatedReasoningText.trim().length > 0
+    ) {
+      const fallbackIdx = state.nextBlockIndex++;
+      results.push({
+        type: "content_block_start",
+        index: fallbackIdx,
+        content_block: { type: "text", text: "" },
+      });
+      results.push({
+        type: "content_block_delta",
+        index: fallbackIdx,
+        delta: { type: "text_delta", text: state.accumulatedReasoningText },
+      });
+      results.push({
+        type: "content_block_stop",
+        index: fallbackIdx,
+      });
+      state.hasEmittedTextBlock = true;
+    }
 
     // Mark finish for later usage injection in stream.js
     state.finishReason = overrideFinishReason;
