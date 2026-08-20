@@ -102,3 +102,19 @@ export function getRelevanceScore(memory: Memory, query: string): number {
 
   return score;
 }
+
+/**
+ * Safely format user search query string for SQLite FTS5 MATCH queries.
+ * Strips FTS5 control operators/punctuation and quotes all tokens to prevent syntax errors.
+ */
+export function sanitizeFts5Query(query: string): string {
+  if (!query || typeof query !== "string") return "";
+  const cleaned = query.replace(/[^\p{L}\p{N}\s]/gu, " ").trim();
+  if (!cleaned) return "";
+  const FTS_RESERVED = new Set(["AND", "OR", "NOT", "NEAR"]);
+  const tokens = cleaned
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && !FTS_RESERVED.has(t.toUpperCase()));
+  if (tokens.length === 0) return "";
+  return tokens.map((t) => `"${t}"`).join(" ");
+}

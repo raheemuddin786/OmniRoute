@@ -46,15 +46,18 @@ function normalizeQueryString(query: string): {
   tokens: string[];
 } {
   const normalizedQuery = query.trim().toLowerCase();
-  // Strip client prefixes like mcp_, mcp-, mcp:
-  const strippedQuery = normalizedQuery.replace(/^(mcp[_-]|mcp:)/, "");
+  // Strip client prefixes like mcp_, mcp-, mcp:, skill_, skill-, skill:, omr_skill_, omr_skill:
+  const strippedQuery = normalizedQuery.replace(
+    /^(mcp[_-]|mcp:|skill[_-]|skill:|omr_skill[_-]|omr_skill:)/,
+    ""
+  );
 
   const rawTokens = normalizedQuery.split(/[_\-:\s]+/).filter(Boolean);
   const strippedTokens = strippedQuery.split(/[_\-:\s]+/).filter(Boolean);
 
   const tokensSet = new Set<string>();
   for (const t of [...rawTokens, ...strippedTokens]) {
-    if (t !== "mcp" && t.length > 0) {
+    if (t !== "mcp" && t !== "skill" && t !== "omr" && t.length > 0) {
       tokensSet.add(t);
     }
   }
@@ -73,17 +76,31 @@ function scoreEntry(
   tokens: string[]
 ): number {
   const nameLower = entry.name.toLowerCase();
+  const nameStripped = nameLower.replace(
+    /^(mcp[_-]|mcp:|skill[_-]|skill:|omr_skill[_-]|omr_skill:)/,
+    ""
+  );
   const descLower = entry.description.toLowerCase();
 
   let score = 0;
 
   // 1. Exact Name Match (Highest priority boost)
-  if (nameLower === normalizedQuery || (strippedQuery && nameLower === strippedQuery)) {
+  if (
+    nameLower === normalizedQuery ||
+    (strippedQuery && nameLower === strippedQuery) ||
+    (strippedQuery && nameStripped === strippedQuery) ||
+    (normalizedQuery && nameStripped === normalizedQuery)
+  ) {
     score += EXACT_NAME_BONUS;
   }
 
   // 2. Name phrase scoring
-  if (nameLower.includes(normalizedQuery) || (strippedQuery && nameLower.includes(strippedQuery))) {
+  if (
+    nameLower.includes(normalizedQuery) ||
+    (strippedQuery && nameLower.includes(strippedQuery)) ||
+    (strippedQuery && nameStripped.includes(strippedQuery)) ||
+    (normalizedQuery && nameStripped.includes(normalizedQuery))
+  ) {
     score += NAME_PHRASE_BONUS;
   }
 

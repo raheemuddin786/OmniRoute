@@ -10,7 +10,13 @@ import { recordMemoryAccess } from "./store";
 import { stats as embeddingCacheStats } from "./embedding/cache";
 import { getQdrantConfig, checkQdrantHealth, searchSemanticMemory } from "./qdrant";
 import type { MemoryEngineStatus } from "@/shared/schemas/memory";
-import { estimateTokens, parseMetadata, rowToMemory, getRelevanceScore } from "./retrieval/scoring";
+import {
+  estimateTokens,
+  parseMetadata,
+  rowToMemory,
+  getRelevanceScore,
+  sanitizeFts5Query,
+} from "./retrieval/scoring";
 import type { MemoryRow } from "./retrieval/scoring";
 
 const log = logger("MEMORY_RETRIEVAL");
@@ -96,6 +102,8 @@ interface FtsColConfig {
  */
 function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
   if (!config.query) return [];
+  const safeQuery = sanitizeFts5Query(config.query);
+  if (!safeQuery) return [];
   const db = getDbInstance();
   const {
     apiKeyCol,
@@ -103,7 +111,6 @@ function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
     createdCol,
     sessionCol,
     tableName,
-    query: q,
     scope,
     sessionId,
     retentionDays,
@@ -122,7 +129,7 @@ function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
   }
   ftsQueryStr += ` ORDER BY f.rank LIMIT 100`;
 
-  const ftsParams: unknown[] = [q, apiKeyId];
+  const ftsParams: unknown[] = [safeQuery, apiKeyId];
   if (scope === "session" && sessionId) ftsParams.push(sessionId);
   if (retentionDays && retentionDays > 0) {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
@@ -915,14 +922,17 @@ export async function retrievePreview(
     // Semantic/hybrid degraded to FTS5
     let ftsRows: MemoryRow[] = [];
     if (query && ftsAvailable) {
-      const ftsQueryStr = apiKeyId
-        ? `SELECT m.* FROM ${tableName} m JOIN memory_fts f ON m.memory_id = f.rowid WHERE f.memory_fts MATCH ? AND m.${apiKeyCol} = ? ORDER BY f.rank LIMIT ?`
-        : `SELECT m.* FROM ${tableName} m JOIN memory_fts f ON m.memory_id = f.rowid WHERE f.memory_fts MATCH ? ORDER BY f.rank LIMIT ?`;
-      const ftsP: unknown[] = apiKeyId ? [query, apiKeyId, limit] : [query, limit];
-      try {
-        ftsRows = db.prepare(ftsQueryStr).all(...ftsP) as MemoryRow[];
-      } catch {
-        ftsRows = [];
+      const safeQuery = sanitizeFts5Query(query);
+      if (safeQuery) {
+        const ftsQueryStr = apiKeyId
+          ? `SELECT m.* FROM ${tableName} m JOIN memory_fts f ON m.memory_id = f.rowid WHERE f.memory_fts MATCH ? AND m.${apiKeyCol} = ? ORDER BY f.rank LIMIT ?`
+          : `SELECT m.* FROM ${tableName} m JOIN memory_fts f ON m.memory_id = f.rowid WHERE f.memory_fts MATCH ? ORDER BY f.rank LIMIT ?`;
+        const ftsP: unknown[] = apiKeyId ? [safeQuery, apiKeyId, limit] : [safeQuery, limit];
+        try {
+          ftsRows = db.prepare(ftsQueryStr).all(...ftsP) as MemoryRow[];
+        } catch {
+          ftsRows = [];
+        }
       }
     }
 

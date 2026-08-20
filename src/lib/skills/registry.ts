@@ -181,13 +181,19 @@ class SkillRegistry {
   list(apiKeyId?: string): Skill[] {
     log.debug("skills.registry.list", { apiKeyId, cached: !this.isCacheStale() });
     if (apiKeyId) {
-      return Array.from(this.registeredSkills.values()).filter((s) => s.apiKeyId === apiKeyId);
+      return Array.from(this.registeredSkills.values()).filter(
+        (s) => s.apiKeyId === apiKeyId || s.apiKeyId === "system" || s.apiKeyId === "global"
+      );
     }
     return Array.from(this.registeredSkills.values());
   }
 
   getSkill(identifier: string, apiKeyId?: string): Skill | undefined {
-    const matchesScope = (skill: Skill) => !apiKeyId || skill.apiKeyId === apiKeyId;
+    const matchesScope = (skill: Skill) =>
+      !apiKeyId ||
+      skill.apiKeyId === apiKeyId ||
+      skill.apiKeyId === "system" ||
+      skill.apiKeyId === "global";
     const skills = Array.from(this.registeredSkills.values()).filter(matchesScope);
 
     const byId = skills.find((skill) => skill.id === identifier);
@@ -207,7 +213,14 @@ class SkillRegistry {
 
   getSkillVersions(name: string, apiKeyId?: string): Skill[] {
     return Array.from(this.registeredSkills.values())
-      .filter((skill) => skill.name === name && (!apiKeyId || skill.apiKeyId === apiKeyId))
+      .filter(
+        (skill) =>
+          skill.name === name &&
+          (!apiKeyId ||
+            skill.apiKeyId === apiKeyId ||
+            skill.apiKeyId === "system" ||
+            skill.apiKeyId === "global")
+      )
       .sort((a, b) => this.compareVersions(b.version, a.version));
   }
 
@@ -305,11 +318,20 @@ class SkillRegistry {
         log.debug("skills.registry.loadFromDatabase", { cached: false });
         const db = getDbInstance();
         const rows = apiKeyId
-          ? db.prepare("SELECT * FROM skills WHERE api_key_id = ?").all(apiKeyId)
+          ? db
+              .prepare(
+                "SELECT * FROM skills WHERE api_key_id = ? OR api_key_id = 'system' OR api_key_id = 'global'"
+              )
+              .all(apiKeyId)
           : db.prepare("SELECT * FROM skills").all();
 
         if (apiKeyId) {
-          this.removeCachedSkills((skill) => skill.apiKeyId === apiKeyId);
+          this.removeCachedSkills(
+            (skill) =>
+              skill.apiKeyId === apiKeyId ||
+              skill.apiKeyId === "system" ||
+              skill.apiKeyId === "global"
+          );
         } else {
           this.registeredSkills.clear();
           this.versionCache.clear();
