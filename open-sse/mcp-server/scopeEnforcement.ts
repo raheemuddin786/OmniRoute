@@ -78,9 +78,10 @@ export function resolveCallerScopeContext(
     (typeof extra?.sessionId === "string" && extra.sessionId.trim()) ||
     "anonymous";
 
-  const authScopes = normalizeScopeList(extra?.authInfo?.scopes);
-  if (authScopes.length > 0) {
-    return { callerId, scopes: authScopes, source: "authInfo" };
+  const rawAuthScopes = normalizeScopeList(extra?.authInfo?.scopes);
+  const explicitAuthScopes = rawAuthScopes.filter((s) => s !== "self:usage");
+  if (explicitAuthScopes.length > 0) {
+    return { callerId, scopes: rawAuthScopes, source: "authInfo" };
   }
 
   const metaScopes = extractMetaScopeList(extra?._meta);

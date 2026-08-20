@@ -18,17 +18,27 @@ function esmRuntimeRequire(specifier: string): unknown {
 
 export function runtimeRequire(specifier: string): unknown {
   if (typeof require === "function") {
-    switch (specifier) {
-      case "better-sqlite3":
-        return require("better-sqlite3");
-      case "node:sqlite":
-        return require("node:sqlite");
-      case "bun:sqlite":
-        return require("bun:sqlite");
-      case "sql.js":
-        return require("sql.js");
-      case "sqlite-vec":
-        return require("sqlite-vec");
+    try {
+      switch (specifier) {
+        case "better-sqlite3":
+          return require("better-sqlite3");
+        case "node:sqlite":
+          return require("node:sqlite");
+        case "bun:sqlite":
+          return require("bun:sqlite");
+        case "sql.js":
+          return require("sql.js");
+        case "sqlite-vec":
+          return require("sqlite-vec");
+      }
+    } catch (err: unknown) {
+      // In bundled ESM (e.g. esbuild --format=esm for MCP server), esbuild provides
+      // a dummy `require` shim that throws "Dynamic require of ... is not supported".
+      // When that happens, fall through to createRequire(import.meta.url) below.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("Dynamic require of")) {
+        throw err;
+      }
     }
   }
 

@@ -332,8 +332,12 @@ highest-priority source, which was previously unfed over HTTP. When no API key r
 (no header, invalid key), `authInfo` stays `undefined` and resolution falls through to the
 existing `meta`/env chain unchanged. This does NOT flip `OMNIROUTE_MCP_ENFORCE_SCOPES`'s
 default — enforcement still has to be explicitly enabled; this change only makes the
-per-key path take precedence once it is. stdio has no per-caller identity (see
-`mcpCallerIdentity.ts`) and is unaffected — it stays on the `_meta`/env fallback chain.
+
+### Default Agent Scopes & Fallthrough
+
+For automatic CLI and agent keys without explicit scope overrides, OmniRoute assigns `DEFAULT_AGENT_SCOPES` (`src/shared/constants/mcpScopes.ts`). These curated scopes grant essential operational tools (`read:memory`, `write:memory`, `read:skills`, `write:skills`, `execute:skills`, `read:local-corpus`, `read:tools`, `read:catalog`, `read:health`, `read:combos`, `read:models`, `read:usage`, `read:cache`, `read:compression`, `execute:search`, `execute:completions`) while withholding sensitive management capabilities (`admin`, `write:connections`, `manage:combos`).
+
+If a key has no explicit scopes or only holds legacy telemetry markers (`self:usage`), `resolveCallerScopeContext()` smoothly falls through to the environment configuration (`OMNIROUTE_MCP_SCOPES`) or wildcard defaults rather than denying all tool calls.
 
 ---
 

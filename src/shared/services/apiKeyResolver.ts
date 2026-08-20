@@ -1,5 +1,6 @@
 import { getApiKeyById, createApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { DEFAULT_AGENT_SCOPES } from "@/shared/constants/mcpScopes";
 
 export async function resolveApiKey(
   apiKeyId?: string | null,
@@ -35,7 +36,7 @@ export async function getOrCreateApiKey(apiKeyId?: string | null): Promise<strin
   let machineId = "unknown";
   try {
     machineId = await getConsistentMachineId();
-    const keyRecord = await createApiKey("CLI Auto-Key", machineId);
+    const keyRecord = await createApiKey("CLI Auto-Key", machineId, [...DEFAULT_AGENT_SCOPES]);
     return keyRecord.key as string;
   } catch {
     // Fallback: generate a deterministic key if DB write fails

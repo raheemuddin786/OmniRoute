@@ -55,6 +55,11 @@ if (process.argv.includes("--mcp")) {
   const stderrConsole = new Console({ stdout: process.stderr, stderr: process.stderr });
   console.log = stderrConsole.log.bind(stderrConsole);
   console.warn = stderrConsole.warn.bind(stderrConsole);
+  console.info = stderrConsole.info.bind(stderrConsole);
+  console.debug = stderrConsole.debug.bind(stderrConsole);
+  console.trace = stderrConsole.trace.bind(stderrConsole);
+  console.dir = stderrConsole.dir.bind(stderrConsole);
+  console.dirxml = stderrConsole.dirxml.bind(stderrConsole);
 }
 
 // Register tsx so dynamic imports of .ts source files (referenced as .js per
@@ -86,9 +91,7 @@ function migrateElectronServerEnv(dataDir) {
     const serverEnvPath = join(dataDir, "server.env");
     if (existsSync(envPath) || !existsSync(serverEnvPath)) return;
     writeFileSync(envPath, readFileSync(serverEnvPath, "utf-8"), "utf-8");
-    console.log(
-      `  \x1b[2m♻ Migrated Electron secrets from ${serverEnvPath} to ${envPath}\x1b[0m`
-    );
+    console.log(`  \x1b[2m♻ Migrated Electron secrets from ${serverEnvPath} to ${envPath}\x1b[0m`);
   } catch {
     // Ignore errors migrating server.env — fall back to normal env loading below.
   }
@@ -227,9 +230,7 @@ if (shouldProvisionStorageKey(process.argv)) {
   const langEnv = process.env.OMNIROUTE_LANG;
   const chosen = langArg || langEnv;
   if (chosen) {
-    const { setLocale } = await import(
-      pathToFileURL(join(ROOT, "bin", "cli", "i18n.mjs")).href
-    );
+    const { setLocale } = await import(pathToFileURL(join(ROOT, "bin", "cli", "i18n.mjs")).href);
     setLocale(chosen);
   }
 }
@@ -244,7 +245,15 @@ process.on("exit", () => {
   const outputIdx = process.argv.indexOf("--output");
   const outputVal = outputIdx >= 0 ? process.argv[outputIdx + 1] : null;
   if (outputVal === "json" || outputVal === "jsonl" || outputVal === "csv") return;
-  if (process.argv.some((a) => a.startsWith("--output=json") || a.startsWith("--output=jsonl") || a.startsWith("--output=csv"))) return;
+  if (
+    process.argv.some(
+      (a) =>
+        a.startsWith("--output=json") ||
+        a.startsWith("--output=jsonl") ||
+        a.startsWith("--output=csv")
+    )
+  )
+    return;
   if (_notifier.update) {
     _notifier.notify({
       defer: false,

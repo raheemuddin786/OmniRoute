@@ -26,9 +26,41 @@ export const MCP_SCOPE_LIST = [
   "read:compression",
   "write:compression",
   "read:proxies",
+  "read:memory",
+  "write:memory",
+  "read:skills",
+  "write:skills",
+  "execute:skills",
+  "read:local-corpus",
+  "read:tools",
+  "read:catalog",
+  "read:notion",
+  "write:notion",
+  "read:obsidian",
+  "write:obsidian",
 ] as const;
 
 export type McpScope = (typeof MCP_SCOPE_LIST)[number];
+
+/** Default curated scopes granted to AI agents for standard task execution */
+export const DEFAULT_AGENT_SCOPES: readonly McpScope[] = [
+  "read:memory",
+  "write:memory",
+  "read:skills",
+  "write:skills",
+  "execute:skills",
+  "read:local-corpus",
+  "read:tools",
+  "read:catalog",
+  "read:health",
+  "read:combos",
+  "read:models",
+  "read:usage",
+  "read:cache",
+  "read:compression",
+  "execute:search",
+  "execute:completions",
+] as const;
 
 // ============ Tool → Scope Mapping ============
 

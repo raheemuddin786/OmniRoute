@@ -70,3 +70,20 @@ test("evaluateToolScopes denies unknown tool names", () => {
   assert.equal(check.allowed, false);
   assert.equal(check.reason, "tool_definition_missing");
 });
+
+test("resolveCallerScopeContext falls through to env when authInfo only contains self:usage", () => {
+  const context = resolveCallerScopeContext(
+    {
+      authInfo: {
+        clientId: "cli-agent",
+        scopes: ["self:usage"],
+      },
+      sessionId: "session-agent",
+    },
+    ["read:memory", "read:skills"]
+  );
+
+  assert.equal(context.callerId, "cli-agent");
+  assert.equal(context.source, "env");
+  assert.deepEqual(context.scopes, ["read:memory", "read:skills"]);
+});
