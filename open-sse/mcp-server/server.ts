@@ -1456,10 +1456,17 @@ export function createMcpServer(): McpServer {
  * Called when `omniroute --mcp` is used.
  */
 export async function startMcpStdio(): Promise<void> {
-  // Stdout is reserved for JSON-RPC — bin/mcpStdioConsoleGuard.mjs is preloaded via
-  // `node --import` (see bin/mcp-server.mjs) so console.log/warn already redirect to
-  // stderr before this module's own imports evaluate (DB init happens as a side effect of
-  // createMcpServer()'s tool registration, earlier than any code placed here could catch).
+  // Stdout is reserved for JSON-RPC. Ensure console methods redirect to stderr.
+  const { Console } = await import("node:console");
+  const stderrConsole = new Console({ stdout: process.stderr, stderr: process.stderr });
+  console.log = stderrConsole.log.bind(stderrConsole);
+  console.warn = stderrConsole.warn.bind(stderrConsole);
+  console.info = stderrConsole.info.bind(stderrConsole);
+  console.debug = stderrConsole.debug.bind(stderrConsole);
+  console.trace = stderrConsole.trace.bind(stderrConsole);
+  console.dir = stderrConsole.dir.bind(stderrConsole);
+  console.dirxml = stderrConsole.dirxml.bind(stderrConsole);
+
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   const version = process.env.npm_package_version || "1.8.1";

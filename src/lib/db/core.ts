@@ -997,7 +997,7 @@ function startWalTruncateScheduler(db: SqliteDatabase) {
       // TRUNCATE waits for readers; under concurrent write load it can no-op without
       // shrinking the file. That is expected — it retries on the next tick.
       if (checkpointDb(db, "TRUNCATE")) {
-        console.log("[DB] Periodic SQLite WAL checkpoint completed (TRUNCATE).");
+        console.error("[DB] Periodic SQLite WAL checkpoint completed (TRUNCATE).");
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
