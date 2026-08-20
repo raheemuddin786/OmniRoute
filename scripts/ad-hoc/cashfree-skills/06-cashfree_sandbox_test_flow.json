@@ -1,0 +1,25 @@
+{
+  "name": "cashfree_sandbox_test_flow",
+  "version": "1.0.0",
+  "description": "Executes an automated end-to-end Cashfree sandbox test.",
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string",
+          "description": "Cashfree Client App ID"
+        },
+        "client_secret": {
+          "type": "string",
+          "description": "Cashfree Client Secret Key"
+        }
+      },
+      "required": ["client_id", "client_secret"]
+    },
+    "output": {
+      "type": "object"
+    }
+  },
+  "handlerCode": "async function handler(input) {\n  const { client_id, client_secret } = input;\n  const testOrderId = 'test_order_' + Date.now();\n\n  const createRes = await fetch('https://sandbox.cashfree.com/pg/orders', {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'x-api-version': '2023-08-01',\n      'x-client-id': client_id,\n      'x-client-secret': client_secret\n    },\n    body: JSON.stringify({\n      order_id: testOrderId,\n      order_amount: 1.00,\n      order_currency: 'INR',\n      customer_details: {\n        customer_id: 'sandbox_test_user',\n        customer_email: 'sandbox@cashfree.test',\n        customer_phone: '9999999999'\n      }\n    })\n  });\n\n  const orderData = await createRes.json();\n  if (!createRes.ok) {\n    return { success: false, phase: 'ORDER_CREATION', error: orderData.message };\n  }\n\n  const getRes = await fetch(`https://sandbox.cashfree.com/pg/orders/${testOrderId}`, {\n    method: 'GET',\n    headers: {\n      'x-api-version': '2023-08-01',\n      'x-client-id': client_id,\n      'x-client-secret': client_secret\n    }\n  });\n\n  const statusData = await getRes.json();\n  return {\n    success: true,\n    message: 'Cashfree Sandbox test passed!',\n    test_order_id: testOrderId,\n    order_status: statusData.order_status,\n    payment_session_id: orderData.payment_session_id\n  };\n}"
+}
