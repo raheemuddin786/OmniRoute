@@ -21,6 +21,7 @@ export interface ScoredTool {
   score: number;
 }
 
+const EXACT_NAME_BONUS = 100;
 const NAME_PHRASE_BONUS = 25;
 const NAME_TOKEN_BONUS = 6;
 const DESC_PHRASE_BONUS = 20;
@@ -39,24 +40,64 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
-function scoreEntry(entry: ToolCatalogEntry, normalizedQuery: string, tokens: string[]): number {
+function normalizeQueryString(query: string): {
+  normalizedQuery: string;
+  strippedQuery: string;
+  tokens: string[];
+} {
+  const normalizedQuery = query.trim().toLowerCase();
+  // Strip client prefixes like mcp_, mcp-, mcp:
+  const strippedQuery = normalizedQuery.replace(/^(mcp[_-]|mcp:)/, "");
+
+  const rawTokens = normalizedQuery.split(/[_\-:\s]+/).filter(Boolean);
+  const strippedTokens = strippedQuery.split(/[_\-:\s]+/).filter(Boolean);
+
+  const tokensSet = new Set<string>();
+  for (const t of [...rawTokens, ...strippedTokens]) {
+    if (t !== "mcp" && t.length > 0) {
+      tokensSet.add(t);
+    }
+  }
+
+  return {
+    normalizedQuery,
+    strippedQuery,
+    tokens: Array.from(tokensSet),
+  };
+}
+
+function scoreEntry(
+  entry: ToolCatalogEntry,
+  normalizedQuery: string,
+  strippedQuery: string,
+  tokens: string[]
+): number {
   const nameLower = entry.name.toLowerCase();
   const descLower = entry.description.toLowerCase();
 
   let score = 0;
 
-  // Name scoring (higher weight)
-  if (nameLower.includes(normalizedQuery)) {
+  // 1. Exact Name Match (Highest priority boost)
+  if (nameLower === normalizedQuery || (strippedQuery && nameLower === strippedQuery)) {
+    score += EXACT_NAME_BONUS;
+  }
+
+  // 2. Name phrase scoring
+  if (nameLower.includes(normalizedQuery) || (strippedQuery && nameLower.includes(strippedQuery))) {
     score += NAME_PHRASE_BONUS;
   }
+
+  // 3. Name token scoring
   for (const token of tokens) {
     score += countOccurrences(nameLower, token) * NAME_TOKEN_BONUS;
   }
 
-  // Description scoring
-  if (descLower.includes(normalizedQuery)) {
+  // 4. Description phrase scoring
+  if (descLower.includes(normalizedQuery) || (strippedQuery && descLower.includes(strippedQuery))) {
     score += DESC_PHRASE_BONUS;
   }
+
+  // 5. Description token scoring
   for (const token of tokens) {
     score += countOccurrences(descLower, token) * DESC_TOKEN_BONUS;
   }
@@ -68,20 +109,14 @@ function scoreEntry(entry: ToolCatalogEntry, normalizedQuery: string, tokens: st
  * Search tool catalog entries lexically (no RegExp on user input).
  * Returns top-K results ordered by score desc, name asc for ties.
  */
-export function searchTools(
-  entries: ToolCatalogEntry[],
-  query: string,
-  limit = 8
-): ScoredTool[] {
+export function searchTools(entries: ToolCatalogEntry[], query: string, limit = 8): ScoredTool[] {
   const clampedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, limit));
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) return [];
-
-  const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  const { normalizedQuery, strippedQuery, tokens } = normalizeQueryString(query);
+  if (!normalizedQuery && !strippedQuery) return [];
 
   const scored: ScoredTool[] = [];
   for (const entry of entries) {
-    const score = scoreEntry(entry, normalizedQuery, tokens);
+    const score = scoreEntry(entry, normalizedQuery, strippedQuery, tokens);
     if (score > 0) {
       scored.push({ ...entry, score });
     }

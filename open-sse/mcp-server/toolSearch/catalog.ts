@@ -12,6 +12,7 @@ import { MCP_TOOLS } from "../schemas/tools.ts";
 import { memoryTools } from "../tools/memoryTools.ts";
 import { skillTools } from "../tools/skillTools.ts";
 import { agentSkillTools } from "../tools/agentSkillTools.ts";
+import { githubSkillTools } from "../tools/githubSkillTools.ts";
 import { poolTools } from "../tools/poolTools.ts";
 import { gamificationTools } from "../tools/gamificationTools.ts";
 import { pluginTools } from "../tools/pluginTools.ts";
@@ -72,6 +73,7 @@ export function getAllToolDefinitions(): ToolCatalogEntry[] {
     memoryTools,
     skillTools,
     agentSkillTools,
+    githubSkillTools,
     poolTools,
     gamificationTools,
     pluginTools,
