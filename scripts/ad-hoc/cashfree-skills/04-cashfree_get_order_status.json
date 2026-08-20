@@ -1,0 +1,34 @@
+{
+  "name": "cashfree_get_order_status",
+  "version": "1.0.0",
+  "description": "Fetches current payment status of a Cashfree order.",
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string",
+          "description": "Cashfree Client App ID"
+        },
+        "client_secret": {
+          "type": "string",
+          "description": "Cashfree Client Secret Key"
+        },
+        "order_id": {
+          "type": "string",
+          "description": "Cashfree Order ID"
+        },
+        "env": {
+          "type": "string",
+          "enum": ["SANDBOX", "PRODUCTION"],
+          "default": "SANDBOX"
+        }
+      },
+      "required": ["client_id", "client_secret", "order_id"]
+    },
+    "output": {
+      "type": "object"
+    }
+  },
+  "handlerCode": "async function handler(input) {\n  const { order_id, client_id, client_secret, env } = input;\n  const endpoint = (env === 'PRODUCTION')\n    ? `https://api.cashfree.com/pg/orders/${order_id}`\n    : `https://sandbox.cashfree.com/pg/orders/${order_id}`;\n\n  const response = await fetch(endpoint, {\n    method: 'GET',\n    headers: {\n      'x-api-version': '2023-08-01',\n      'x-client-id': client_id,\n      'x-client-secret': client_secret\n    }\n  });\n\n  const data = await response.json();\n  if (!response.ok) {\n    throw new Error(data.message || 'Failed to fetch status');\n  }\n  return data;\n}"
+}

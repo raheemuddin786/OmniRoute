@@ -1,0 +1,54 @@
+{
+  "name": "cashfree_create_order",
+  "version": "1.0.0",
+  "description": "Creates a Cashfree payment order session for web or mobile checkout.",
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string",
+          "description": "Cashfree Client App ID"
+        },
+        "client_secret": {
+          "type": "string",
+          "description": "Cashfree Client Secret Key"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Order amount in INR"
+        },
+        "currency": {
+          "type": "string",
+          "default": "INR"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "customer_email": {
+          "type": "string"
+        },
+        "customer_phone": {
+          "type": "string"
+        },
+        "env": {
+          "type": "string",
+          "enum": ["SANDBOX", "PRODUCTION"],
+          "default": "SANDBOX"
+        }
+      },
+      "required": [
+        "client_id",
+        "client_secret",
+        "amount",
+        "customer_id",
+        "customer_email",
+        "customer_phone"
+      ]
+    },
+    "output": {
+      "type": "object"
+    }
+  },
+  "handlerCode": "async function handler(input) {\n  const { amount, currency, customer_id, customer_email, customer_phone, client_id, client_secret, env } = input;\n  const endpoint = (env === 'PRODUCTION')\n    ? 'https://api.cashfree.com/pg/orders'\n    : 'https://sandbox.cashfree.com/pg/orders';\n\n  const response = await fetch(endpoint, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'x-api-version': '2023-08-01',\n      'x-client-id': client_id,\n      'x-client-secret': client_secret\n    },\n    body: JSON.stringify({\n      order_amount: amount,\n      order_currency: currency || 'INR',\n      customer_details: { customer_id, customer_email, customer_phone }\n    })\n  });\n\n  const data = await response.json();\n  if (!response.ok) {\n    throw new Error(data.message || 'Failed to create order');\n  }\n  return data;\n}"
+}
