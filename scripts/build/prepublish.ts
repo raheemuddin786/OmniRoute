@@ -320,6 +320,7 @@ const mcpDestFile = join(mcpDestDir, "server.js");
 if (existsSync(mcpSrcFile)) {
   console.log("  🔨 Bundling MCP Server (TypeScript → JavaScript)...");
   mkdirSync(mcpDestDir, { recursive: true });
+  writeFileSync(join(mcpDestDir, "package.json"), JSON.stringify({ type: "module" }, null, 2));
   try {
     runBuildTool(
       "esbuild",

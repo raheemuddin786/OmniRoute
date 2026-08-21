@@ -39,6 +39,11 @@ describe("Claude Code Tool Name Casing Fixes", () => {
     assert.equal(restoreClaudeToolName("applypatch"), "ApplyPatch");
   });
 
+  it("restoreClaudeToolName preserves canonical PascalCase with no map", () => {
+    assert.equal(restoreClaudeToolName("TodoWrite"), "TodoWrite");
+    assert.equal(restoreClaudeToolName("Read"), "Read");
+  });
+
   it("restoreClaudeToolName covers the tools the 7-entry map missed", () => {
     assert.equal(restoreClaudeToolName("todowrite"), "TodoWrite");
     assert.equal(restoreClaudeToolName("glob"), "Glob");
@@ -50,11 +55,6 @@ describe("Claude Code Tool Name Casing Fixes", () => {
     assert.equal(restoreClaudeToolName("exitplanmode"), "ExitPlanMode");
   });
 
-  it("restoreClaudeToolName keeps the #7926 TitleCase→lowercase fallback with no map", () => {
-    // Clients with no request-side map (XML / OpenCode-style) expect lowercase.
-    assert.equal(restoreClaudeToolName("TodoWrite"), "todowrite");
-    assert.equal(restoreClaudeToolName("Read"), "read");
-  });
 
   it("restoreClaudeToolName prefers toolNameMap over the static map", () => {
     const toolNameMap = new Map([

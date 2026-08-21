@@ -50,9 +50,9 @@ test("#9008 restoreClaudeToolName: maps lowercased upstream names back to declar
   assert.equal(restoreClaudeToolName("websearch", map), "WebSearch");
 });
 
-test("#9008 restoreClaudeToolName: still lowercases TitleCase when no request map (#7926)", () => {
-  assert.equal(restoreClaudeToolName("Bash", null), "bash");
-  assert.equal(restoreClaudeToolName("Read", undefined), "read");
+test("#9008 restoreClaudeToolName: preserves PascalCase when no request map", () => {
+  assert.equal(restoreClaudeToolName("Bash", null), "Bash");
+  assert.equal(restoreClaudeToolName("Read", undefined), "Read");
 });
 
 test("#9008 Gemini → Claude: PascalCase tool_use survives when upstream echoes TitleCase", () => {

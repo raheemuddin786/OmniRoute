@@ -219,6 +219,24 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
 
     if (normalizedTools.length > 0) {
       result.tools = normalizedTools;
+      const toolNameMap = new Map<string, string>();
+      if (Array.isArray(body.tools)) {
+        for (const tool of body.tools as Array<{ name?: string }>) {
+          if (tool && typeof tool.name === "string" && tool.name.trim()) {
+            const raw = tool.name.trim();
+            toolNameMap.set(raw, raw);
+            toolNameMap.set(raw.toLowerCase(), raw);
+          }
+        }
+      }
+      if (toolNameMap.size > 0) {
+        Object.defineProperty(result, "_toolNameMap", {
+          value: toolNameMap,
+          enumerable: false,
+          configurable: true,
+          writable: true,
+        });
+      }
     }
   }
 

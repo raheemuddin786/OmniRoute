@@ -232,16 +232,15 @@ export function restoreClaudeToolName(
     }
   }
 
-  // When no request toolNameMap is provided (e.g. non-Claude client):
-  // If rawName is already TitleCase, apply REVERSE_MAP for #7926 backward compatibility (Bash → bash).
+  const canonical = TOOL_RENAME_MAP[rawName.toLowerCase()];
+  if (canonical) return canonical;
+
+  // When no request toolNameMap is provided and tool is unknown, preserve or fallback
   if (!toolNameMap && REVERSE_MAP[rawName]) {
     return REVERSE_MAP[rawName];
   }
 
-  const canonical = TOOL_RENAME_MAP[rawName.toLowerCase()];
-  if (canonical) return canonical;
-
-  return REVERSE_MAP[rawName] ?? rawName;
+  return rawName;
 }
 
 export { TOOL_RENAME_MAP, REVERSE_MAP };
