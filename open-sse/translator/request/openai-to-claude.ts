@@ -4,6 +4,7 @@ import { FORMATS } from "../formats.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../../config/providerModels.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
 import { sanitizeToolId } from "../helpers/schemaCoercion.ts";
+import { normalizeClaudeToolName } from "../helpers/toolCallHelper.ts";
 import { safeParseJSON } from "../helpers/jsonUtil.ts";
 import { applyKimiCodingThinking } from "../helpers/claudeHelper.ts";
 import { DEFAULT_THINKING_CLAUDE_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
@@ -415,11 +416,13 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
         // through to `toolData = tool` (the wrapper itself, with no `.name`),
         // producing an empty `originalName` and silently dropping the tool.
         const toolData = tool.function ?? tool;
-        const originalName = typeof toolData.name === "string" ? toolData.name.trim() : "";
+        let originalName = typeof toolData.name === "string" ? toolData.name.trim() : "";
 
         if (!originalName) {
           return null;
         }
+
+        originalName = normalizeClaudeToolName(originalName);
 
         // Claude OAuth requires prefixed tool names to avoid conflicts
         // When prefix is disabled (non-Claude backends), use original name
@@ -661,8 +664,10 @@ function getContentBlocksFromMessage(
       for (const tc of msg.tool_calls) {
         if (tc.type === "function") {
           // CRITICAL: Skip tool_calls with empty function name (causes Claude 400 error)
-          const fnName = tc.function?.name;
+          let fnName = tc.function?.name;
           if (!fnName || !fnName.trim()) continue;
+
+          fnName = normalizeClaudeToolName(fnName);
 
           // Apply prefix to tool name (skip if disabled)
           const toolName = disableToolPrefix ? fnName : CLAUDE_OAUTH_TOOL_PREFIX + fnName;
@@ -724,21 +729,23 @@ function convertOpenAIToolChoice(choice) {
   if (typeof choice === "object" && choice.type) {
     // OpenAI sends {type: "function", function: {name}} — convert to Claude {type: "tool", name}
     if (choice.type === "function" && choice.function?.name) {
-      return { type: "tool", name: choice.function.name };
+      return { type: "tool", name: normalizeClaudeToolName(choice.function.name) };
     }
     // Map OpenAI string types to Claude equivalents
     if (choice.type === "auto" || choice.type === "none") return { type: "auto" };
     if (choice.type === "required" || choice.type === "any")
       return { type: CLAUDE_TOOL_CHOICE_REQUIRED };
     // If type is "tool" already (Claude-native), pass through
-    if (choice.type === "tool" && choice.name) return choice;
+    if (choice.type === "tool" && choice.name) {
+      return { ...choice, name: normalizeClaudeToolName(choice.name) };
+    }
     // Fallback: unknown object type — default to auto to avoid 400 errors
     return { type: "auto" };
   }
   if (choice === "auto" || choice === "none") return { type: "auto" };
   if (choice === "required") return { type: CLAUDE_TOOL_CHOICE_REQUIRED };
   if (typeof choice === "object" && choice.function) {
-    return { type: "tool", name: choice.function.name };
+    return { type: "tool", name: normalizeClaudeToolName(choice.function.name) };
   }
   return { type: "auto" };
 }

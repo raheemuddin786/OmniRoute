@@ -1,6 +1,7 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
+import { normalizeOpenAIToolName } from "../helpers/toolCallHelper.ts";
 
 type JsonRecord = Record<string, unknown>;
 const TOOL_CHOICE_ANY = ["a", "n", "y"].join("");
@@ -209,7 +210,7 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
         return {
           type: "function",
           function: {
-            name,
+            name: normalizeOpenAIToolName(name),
             description: typeof record.description === "string" ? record.description : "", // fix: never null (#276)
             parameters: normalizeToolSchema(record.input_schema),
           },
@@ -416,7 +417,7 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
             id: block.id,
             type: "function",
             function: {
-              name: block.name,
+              name: normalizeOpenAIToolName(block.name),
               arguments:
                 typeof block.input === "string" ? block.input : JSON.stringify(block.input || {}),
             },
@@ -529,7 +530,7 @@ function convertToolChoice(choice, hasServerWebSearch = false) {
       if (hasServerWebSearch && choice.name === "web_search") {
         return { type: "web_search" };
       }
-      return { type: "function", function: { name: choice.name } };
+      return { type: "function", function: { name: normalizeOpenAIToolName(choice.name) } };
     default:
       return "auto";
   }

@@ -12,6 +12,55 @@ interface ToolFunction extends JsonRecord {
   arguments?: unknown;
 }
 
+export const CLAUDE_STANDARD_TOOLS: Record<string, string> = {
+  bash: "Bash",
+  globtool: "GlobTool",
+  edit: "Edit",
+  view: "View",
+  notebookedit: "NotebookEdit",
+  browsertool: "BrowserTool",
+  greptool: "GrepTool",
+  fetchtool: "FetchTool",
+  stripetool: "StripeTool",
+  str_replace_editor: "Edit",
+  text_editor: "Edit",
+  computer: "Computer",
+  read: "Read",
+  write: "Write",
+  grep: "Grep",
+  glob: "Glob",
+  list: "List",
+  search: "Search",
+};
+
+export const OPENAI_STANDARD_TOOLS: Record<string, string> = {
+  Bash: "bash",
+  GlobTool: "globtool",
+  Edit: "str_replace_editor",
+  View: "view",
+  NotebookEdit: "notebookedit",
+  BrowserTool: "browsertool",
+  GrepTool: "greptool",
+  FetchTool: "fetchtool",
+  StripeTool: "stripetool",
+  Computer: "computer",
+  Read: "read",
+  Write: "write",
+  Grep: "grep",
+  Glob: "glob",
+  List: "list",
+  Search: "search",
+};
+
+export function normalizeClaudeToolName(name: string): string {
+  const lower = name.toLowerCase();
+  return CLAUDE_STANDARD_TOOLS[lower] || name;
+}
+
+export function normalizeOpenAIToolName(name: string): string {
+  return OPENAI_STANDARD_TOOLS[name] || name;
+}
+
 interface ToolCallRecord extends JsonRecord {
   id?: unknown;
   type?: unknown;
