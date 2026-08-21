@@ -259,10 +259,10 @@ export function translateNonStreamingResponse(
       (!message.content ||
         (typeof message.content === "string" && message.content.trim().length === 0)) &&
       toolCalls.length === 0 &&
-      reasoningContent &&
-      reasoningContent.trim().length > 0
+      replayableReasoningContent &&
+      replayableReasoningContent.trim().length > 0
     ) {
-      message.content = reasoningContent;
+      message.content = replayableReasoningContent;
     } else if (message.content === undefined) {
       message.content = "";
     }
