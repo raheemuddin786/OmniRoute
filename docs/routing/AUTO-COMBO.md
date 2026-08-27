@@ -711,7 +711,7 @@ Coverage includes:
 - `quota-share` (internal) end-to-end: DRR fairness + saturation deprioritization via the
   real `selectQuotaShareTarget` seam (`registerQuotaFetcher` / `setLKGP` /
   `__setHeadroomSaturationFetcherForTests`).
-- `context-relay` universal-handoff coverage across every target count.
+- `context-relay` universal-handoff coverage across every target count. Supports `relayMode`: `"standard"` (default, includes system message in summary slice) or `"schema-locked"` (excludes system prompt to avoid schema collisions on handoff targets).
 
 This suite runs in CI (`test:integration` job) with `--test-concurrency=1` and
 `--test-force-exit` so it is deterministic and does not require live credentials.
