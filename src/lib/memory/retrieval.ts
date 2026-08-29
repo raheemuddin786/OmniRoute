@@ -51,6 +51,19 @@ export { estimateTokens } from "./retrieval/scoring";
 
 // ──────────────── Helpers ────────────────
 
+/**
+ * Sanitize query text for SQLite FTS5 MATCH expressions.
+ * Strips FTS control operators and wraps individual terms in double quotes.
+ */
+export function sanitizeFts5Query(query?: string): string {
+  if (!query) return "";
+  const cleaned = query.replace(/[^\w\s\u00C0-\u024F\u1E00-\u1EFF]/g, " ").trim();
+  if (!cleaned) return "";
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return "";
+  return tokens.map((t) => `"${t}"`).join(" ");
+}
+
 function hasTable(tableName: string): boolean {
   const db = getDbInstance();
   const row = db
@@ -96,6 +109,8 @@ interface FtsColConfig {
  */
 function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
   if (!config.query) return [];
+  const safeQuery = sanitizeFts5Query(config.query);
+  if (!safeQuery) return [];
   const db = getDbInstance();
   const {
     apiKeyCol,
@@ -103,7 +118,6 @@ function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
     createdCol,
     sessionCol,
     tableName,
-    query: q,
     scope,
     sessionId,
     retentionDays,
@@ -122,7 +136,7 @@ function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
   }
   ftsQueryStr += ` ORDER BY f.rank LIMIT 100`;
 
-  const ftsParams: unknown[] = [q, apiKeyId];
+  const ftsParams: unknown[] = [safeQuery, apiKeyId];
   if (scope === "session" && sessionId) ftsParams.push(sessionId);
   if (retentionDays && retentionDays > 0) {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
