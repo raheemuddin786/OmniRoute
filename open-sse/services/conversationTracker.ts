@@ -154,6 +154,24 @@ export function extractCanonicalTurns(body: JsonRecord | null | undefined): Cano
     raw = body.messages;
   } else if (Array.isArray(body.input)) {
     raw = body.input;
+  } else if (Array.isArray(body.choices)) {
+    raw = body.choices.map((c) => {
+      const choiceRec = c && typeof c === "object" ? (c as JsonRecord) : null;
+      if (!choiceRec) return {};
+      const msg =
+        choiceRec.message && typeof choiceRec.message === "object"
+          ? (choiceRec.message as JsonRecord)
+          : null;
+      const delta =
+        choiceRec.delta && typeof choiceRec.delta === "object"
+          ? (choiceRec.delta as JsonRecord)
+          : null;
+      const target = msg ?? delta ?? choiceRec;
+      if (!target.role) {
+        return { role: "assistant", ...target };
+      }
+      return target;
+    });
   } else if (typeof body.input === "string") {
     raw = [{ role: "user", content: body.input }];
   } else if (body.input && typeof body.input === "object") {
