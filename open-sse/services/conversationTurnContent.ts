@@ -41,47 +41,6 @@ function turnsFromBody(body: unknown): CanonicalTurnLike[] {
   return rec ? extractCanonicalTurns(rec) : [];
 }
 
-/**
- * extractCanonicalTurns's Chat Completions branch only reads a message's
- * `content` -- a tool-calling assistant message carries its call in
- * `tool_calls` instead with `content: null`, so it silently produces no turn
- * at all and the matching conversation_turn_nodes row can never resolve.
- * Deliberately scoped to this read-only display path instead of extending
- * extractCanonicalTurns itself: that function also drives
- * conversationTracker.ts's write-path identity/hashing, and this codebase's
- * only caller of it there (chat.ts's resolveConversationId) always feeds the
- * client-facing Responses-API body -- never Chat Completions
- * `messages`/`tool_calls` -- so extending it there would be unreachable for
- * real traffic here but still carries real write-path identity-hash risk for
- * any other caller/format that function might ever serve. Mirrors
- * extractCanonicalTurns's own Responses-shape function_call handling: one
- * turn per call, role "tool" (matches how a Responses API function_call item,
- * which also carries no `role`, canonicalizes -- not "assistant"), toolName
- * from the call, text the raw arguments string untouched (already a JSON
- * string in both APIs, so passing it through unmodified is what a
- * byte-identical hash against the original Responses-shaped item needs).
- */
-function extractChatCompletionsToolUseTurns(messages: unknown): CanonicalTurnLike[] {
-  if (!Array.isArray(messages)) return [];
-  const turns: CanonicalTurnLike[] = [];
-  for (const item of messages) {
-    const rec = asRecord(item) ?? {};
-    if (rec.role !== "assistant" || !Array.isArray(rec.tool_calls)) continue;
-    for (const call of rec.tool_calls) {
-      const fn = asRecord(asRecord(call)?.function);
-      const args = fn?.arguments;
-      if (typeof args !== "string" || !args) continue;
-      turns.push({
-        role: "tool",
-        text: args,
-        blockKind: "tool_use",
-        toolName: typeof fn?.name === "string" ? fn.name : null,
-      });
-    }
-  }
-  return turns;
-}
-
 function turnsFromClientResponse(clientResponse: unknown): CanonicalTurnLike[] {
   const rec = asRecord(clientResponse);
   if (!rec) return [];
@@ -92,7 +51,7 @@ function turnsFromClientResponse(clientResponse: unknown): CanonicalTurnLike[] {
 
 function turnsFromProviderRequest(body: unknown): CanonicalTurnLike[] {
   const rec = asRecord(body);
-  return [...turnsFromBody(rec), ...extractChatCompletionsToolUseTurns(rec?.messages)];
+  return turnsFromBody(rec);
 }
 
 function indexTurns(result: Map<string, TurnDisplayContent>, turns: CanonicalTurnLike[]): void {

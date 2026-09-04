@@ -123,6 +123,42 @@ test("resolveTurnDisplayContent skips nodes with no correlation id without throw
   assert.equal(result.size, 0);
 });
 
+test("resolveTurnDisplayContent resolves ChatCompletions assistant tool_calls content", () => {
+  insertCallLog({
+    id: "log-tool-call",
+    correlationId: "corr-tc",
+    artifactRelPath: "2026-01-01/log-tc.json",
+  });
+  writeArtifact("2026-01-01/log-tc.json", {
+    messages: [
+      { role: "user", content: "read file" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_999",
+            type: "function",
+            function: { name: "get_file", arguments: '{"file":"/tmp/test"}' },
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = resolveTurnDisplayContent([{ lastCorrelationId: "corr-tc" }]);
+  const tcHash = hashTurnContent({
+    role: "assistant",
+    text: '{"file":"/tmp/test"}',
+    blockKind: "tool_use",
+    toolName: "get_file",
+  });
+  const content = result.get(tcHash);
+  assert.equal(content?.blockKind, "tool_use");
+  assert.equal(content?.toolName, "get_file");
+  assert.equal(content?.textPreview, '{"file":"/tmp/test"}');
+});
+
 test("resolveTurnDisplayContent omits content for an unresolvable correlation id (missing call_logs row, purged artifact, or no pipeline captured)", () => {
   const missingRow = resolveTurnDisplayContent([{ lastCorrelationId: "corr-does-not-exist" }]);
   assert.equal(missingRow.size, 0);

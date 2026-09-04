@@ -55,12 +55,15 @@ export async function GET(
     return NextResponse.json({
       nodes: nodes.map((n) => {
         const content = displayContent.get(n.contentHash);
+        const textPreview =
+          content?.textPreview ??
+          (content ? "" : "[Turn content unavailable — call artifact missing or uncaptured]");
         return {
           seq: n.seq,
           id: n.id,
           parentId: n.parentId,
           role: n.role,
-          textPreview: content?.textPreview ?? "",
+          textPreview,
           blockKind: content?.blockKind ?? "text",
           toolName: content?.toolName ?? null,
           firstSeenAt: n.firstSeenAt,

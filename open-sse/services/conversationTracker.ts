@@ -174,6 +174,36 @@ export function extractCanonicalTurns(body: JsonRecord | null | undefined): Cano
         ? "tool"
         : null;
     if (!role) continue;
+
+    // Handle ChatCompletions assistant tool_calls (which often have content: null or "")
+    if (role === "assistant" && Array.isArray(rec.tool_calls) && rec.tool_calls.length > 0) {
+      for (const tc of rec.tool_calls as JsonRecord[]) {
+        const fn =
+          tc?.function && typeof tc.function === "object" ? (tc.function as JsonRecord) : {};
+        const toolName =
+          typeof fn.name === "string" ? fn.name : typeof tc?.name === "string" ? tc.name : null;
+        const rawArgs = fn.arguments ?? tc?.arguments;
+        const argsStr =
+          typeof rawArgs === "string"
+            ? rawArgs
+            : rawArgs && typeof rawArgs === "object"
+              ? JSON.stringify(rawArgs)
+              : "";
+        turns.push({
+          role: "assistant",
+          text: argsStr,
+          blockKind: "tool_use",
+          toolName,
+        });
+      }
+      // If there is also text content in the assistant message, include it as a text turn as well
+      const contentText = stringifyContent(rec.content ?? rec.text);
+      if (contentText) {
+        turns.push({ role: "assistant", text: contentText, blockKind: "text", toolName: null });
+      }
+      continue;
+    }
+
     const text = stringifyContent(rec.content ?? rec.text ?? rec.arguments ?? rec.output);
     if (!text) continue;
 
