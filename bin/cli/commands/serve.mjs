@@ -4,7 +4,12 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { platform, totalmem } from "node:os";
 import { t } from "../i18n.mjs";
-import { writePidFile, cleanupPidFile, waitForServer, resolveReadyTimeoutMs } from "../utils/pid.mjs";
+import {
+  writePidFile,
+  cleanupPidFile,
+  waitForServer,
+  resolveReadyTimeoutMs,
+} from "../utils/pid.mjs";
 import {
   ServerSupervisor,
   detectMitmCrash,
@@ -304,7 +309,11 @@ export async function runServe(opts = {}) {
     opts.maxRestarts ?? 2,
     startedAt,
     useTray,
-    { trayReadyPort: opts.trayReadyPort, trayReadyToken: opts.trayReadyToken }
+    { trayReadyPort: opts.trayReadyPort, trayReadyToken: opts.trayReadyToken },
+    // `--ready-timeout <ms>` is a Commander STRING option and
+    // resolveReadyTimeoutMs() only honours a number > 0, so coerce it here.
+    // null/NaN falls back to OMNIROUTE_READY_TIMEOUT_MS / the 60s default.
+    opts.readyTimeout == null ? undefined : Number(opts.readyTimeout)
   );
 }
 
@@ -418,7 +427,8 @@ async function runWithSupervisor(
   maxRestarts,
   startedAt,
   useTray = false,
-  { trayReadyPort, trayReadyToken } = {}
+  { trayReadyPort, trayReadyToken } = {},
+  readyTimeout = undefined
 ) {
   if (showLog) process.env.OMNIROUTE_SHOW_LOG = "1";
   writePidFile("supervisor", process.pid);
@@ -457,7 +467,10 @@ async function runWithSupervisor(
   });
 
   if (!showLog) {
-    const readyTimeoutMs = resolveReadyTimeoutMs({ timeoutMs: opts.readyTimeout });
+    // `opts` is NOT in scope in runWithSupervisor - it only exists in runServe().
+    // Reading opts.readyTimeout here threw `ReferenceError: opts is not defined`
+    // on every default `omniroute serve`, killing startup.
+    const readyTimeoutMs = resolveReadyTimeoutMs({ timeoutMs: readyTimeout });
     waitForServer(dashboardPort, readyTimeoutMs).then(async (up) => {
       if (up) {
         if (useTray) {
@@ -482,7 +495,7 @@ async function runWithSupervisor(
         }
         onReady(dashboardPort, apiPort, noOpen, startedAt);
       } else {
-        reportReadinessTimeout(dashboardPort, supervisor);
+        reportReadinessTimeout(dashboardPort, supervisor, readyTimeoutMs);
       }
     });
   }
@@ -494,8 +507,11 @@ async function runWithSupervisor(
 // stuck (issue reports show the server sometimes actually comes up later, or is
 // reachable directly while the CLI still looks hung). Surface a clear diagnostic
 // plus whatever stdout/stderr the child buffered instead of going silent.
-export function reportReadinessTimeout(dashboardPort, supervisor) {
-  const readyTimeoutMs = resolveReadyTimeoutMs();
+export function reportReadinessTimeout(
+  dashboardPort,
+  supervisor,
+  readyTimeoutMs = resolveReadyTimeoutMs()
+) {
   const seconds = Math.round(readyTimeoutMs / 1000);
   console.error(
     `\n\x1b[33m⚠ Server did not respond within ${seconds}s.\x1b[0m It may still be starting, or may` +
