@@ -12,11 +12,17 @@ export function resolveKilocodeChatUrl(baseUrl: string) {
   return `${cleaned}/chat/completions`;
 }
 
+export interface ValidateKilocodeProviderOptions {
+  apiKey?: string;
+  providerSpecificData?: Record<string, unknown> | null;
+  isLocal?: boolean;
+}
+
 export async function validateKilocodeProvider({
   apiKey,
   providerSpecificData = {},
   isLocal = false,
-}: any) {
+}: ValidateKilocodeProviderOptions = {}) {
   const configuredBaseUrl =
     normalizeBaseUrl(providerSpecificData.baseUrl) ||
     getRegistryEntry("kilocode")?.baseUrl ||

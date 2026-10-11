@@ -594,11 +594,8 @@ export class DefaultExecutor extends BaseExecutor {
         // source of truth for the OAuth-vs-BYOK decision, keyed off
         // credentials.accessToken — do not re-decide it here off credentials.authType,
         // which can diverge from the real credential shape (#11828 review).
-        if (credentials?.accessToken) {
-          console.debug("[Auth] Using OAuth token for Cline/Kilo Code request.");
-        } else {
-          console.debug("[Auth] Using direct API key for Cline/Kilo Code request.");
-        }
+        // OAuth token vs BYOK API key handled inside applyClineAuthHeaders
+        // (keyed off credentials.accessToken); no duplicate decision needed here.
         applyClineAuthHeaders(headers, credentials, effectiveKey, clientHeaders, true);
         break;
       default:

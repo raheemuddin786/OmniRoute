@@ -15,12 +15,19 @@ export function resolveClineChatUrl(baseUrl: string) {
   return `${cleaned}/api/v1/chat/completions`;
 }
 
+export interface ValidateClineProviderOptions {
+  apiKey?: string;
+  providerSpecificData?: Record<string, unknown> | null;
+  isLocal?: boolean;
+  provider?: string;
+}
+
 export async function validateClineProvider({
   apiKey,
   providerSpecificData = {},
   isLocal = false,
   provider = "cline",
-}: any) {
+}: ValidateClineProviderOptions = {}) {
   const configuredBaseUrl =
     normalizeBaseUrl(providerSpecificData.baseUrl) ||
     getRegistryEntry(provider)?.baseUrl ||

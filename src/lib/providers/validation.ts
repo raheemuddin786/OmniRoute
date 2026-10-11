@@ -275,7 +275,11 @@ export async function validateProviderApiKey({
     // Cline and ClinePass serve unauthenticated GET /v1/models (open catalog returning 200 for any key)
     // and require streaming + Cline client headers on /chat/completions. Probe the authenticated route.
     cline: validateClineProvider,
-    clinepass: (args: any) => validateClineProvider({ ...args, provider: "clinepass" }),
+    clinepass: (args: {
+      apiKey?: string;
+      providerSpecificData?: Record<string, unknown> | null;
+      isLocal?: boolean;
+    }) => validateClineProvider({ ...args, provider: "clinepass" }),
     // Kilo Code serves unauthenticated GET /models (open catalog returning 200 for any key).
     // Authenticate against /chat/completions with the required X-KILOCODE-EDITORNAME header.
     kilocode: validateKilocodeProvider,
