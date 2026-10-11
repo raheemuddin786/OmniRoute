@@ -26,28 +26,44 @@ export function smartTruncate(
   const preserveHead = Math.max(0, Math.floor(options.preserveHead ?? 20));
   const preserveTail = Math.max(0, Math.floor(options.preserveTail ?? 20));
   const priorityPatterns = options.priorityPatterns ?? [];
-  const priorityLines = priorityPatterns.length
-    ? lines.filter((line) => priorityPatterns.some((pattern) => pattern.test(line)))
-    : [];
 
-  const head = lines.slice(0, preserveHead);
-  const tail = preserveTail > 0 ? lines.slice(-preserveTail) : [];
-  const selected = [...head];
-  for (const line of priorityLines) {
-    if (!selected.includes(line)) selected.push(line);
+  const selectedIndices = new Set<number>();
+
+  // 1. Add head indices
+  for (let i = 0; i < Math.min(preserveHead, lines.length); i++) {
+    selectedIndices.add(i);
   }
-  const tailStart = lines.length - tail.length;
-  tail.forEach((line, offset) => {
-    const originalIndex = tailStart + offset;
-    if (originalIndex >= preserveHead && !selected.includes(line)) selected.push(line);
-  });
 
-  const droppedLines = Math.max(0, lines.length - selected.length);
-  let result = [
-    ...selected.slice(0, head.length),
-    `[rtk:truncated ${droppedLines} lines]`,
-    ...selected.slice(head.length),
-  ].join("\n");
+  // 2. Add tail indices
+  const tailStart = Math.max(0, lines.length - preserveTail);
+  for (let i = tailStart; i < lines.length; i++) {
+    selectedIndices.add(i);
+  }
+
+  // 3. Add priority lines by index
+  if (priorityPatterns.length > 0) {
+    for (let i = 0; i < lines.length; i++) {
+      if (priorityPatterns.some((pattern) => pattern.test(lines[i]))) {
+        selectedIndices.add(i);
+      }
+    }
+  }
+
+  // Convert Set to sorted array of indices to strictly preserve original line order
+  const sortedIndices = Array.from(selectedIndices).sort((a, b) => a - b);
+  const droppedLines = Math.max(0, lines.length - sortedIndices.length);
+
+  // Re-split into head vs remainder to place the EXACT single marker
+  const headEndIdx = sortedIndices.findIndex((idx) => idx >= preserveHead);
+  const splitIndex = headEndIdx === -1 ? sortedIndices.length : headEndIdx;
+
+  const headLines = sortedIndices.slice(0, splitIndex).map((i) => lines[i]);
+  const tailLines = sortedIndices.slice(splitIndex).map((i) => lines[i]);
+
+  let result =
+    droppedLines > 0
+      ? [...headLines, `[rtk:truncated ${droppedLines} lines]`, ...tailLines].join("\n")
+      : [...headLines, ...tailLines].join("\n");
 
   if (maxChars > 0 && result.length > maxChars) {
     const marker = "\n[rtk:truncated by chars]\n";

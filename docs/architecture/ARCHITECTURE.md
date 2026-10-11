@@ -296,6 +296,10 @@ Services (business logic):
 - Context handoff: `open-sse/services/contextHandoff.ts` — handoff summary generation and injection for context-relay strategy
 - Compression: `open-sse/services/compression/*` — proactive compression before provider translation;
   includes Caveman rules, RTK filters, stacked pipelines, compression combos, stats, and validation
+  RTK smart truncation (`smartTruncate.ts`) uses index-based selection (not string-content dedup),
+  exact single marker insertion (`[rtk:truncated N lines]`), budget enforcement (`forcedCap = budget/2`,
+  selectivity filter `hits * 2 <= lines.length` excludes non-selective patterns, 55/45 head/tail split),
+  and duplication guard (`filter` before join) — see `open-sse/services/compression/engines/rtk/smartTruncate.ts`.
 - Codex quota fetcher: `open-sse/services/codexQuotaFetcher.ts` — fetches Codex quota for context-relay handoff decisions
 - Cooldown-aware retry: `src/sse/services/cooldownAwareRetry.ts` — per-model cooldown retries with configurable `requestRetry` / `maxRetryIntervalSec`
 - Safe outbound fetch: `src/shared/network/safeOutboundFetch.ts` — guarded provider/model fetch with SSRF guard, private-URL blocking, retry, and timeout
