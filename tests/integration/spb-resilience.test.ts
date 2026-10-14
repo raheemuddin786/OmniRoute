@@ -4,7 +4,18 @@ import {
   processSmartProxyRouting,
   shouldTriggerZeroLossFallback,
 } from "../../open-sse/services/spb/proxyBridge.ts";
-import { saveCheckpoint, getCheckpoint } from "../../src/lib/db/spbState.ts";
+import {
+  saveCheckpoint,
+  getCheckpoint,
+  __resetSpbStateInitForTests,
+} from "../../src/lib/db/spbState.ts";
+import { resetDbInstance } from "../../src/lib/db/core.ts";
+
+// Close the DB handle after all tests so the native test runner does not hang.
+test.after(() => {
+  __resetSpbStateInitForTests();
+  resetDbInstance();
+});
 
 test("SPB Integration: Zero-loss resilience and state resumption across mock failover", async () => {
   const sessionId = "integration_session_" + Date.now();
