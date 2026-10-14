@@ -156,6 +156,18 @@ function getRerankLoopbackUrl(): string {
 }
 
 /**
+ * Resolve the rerank request timeout from an optional string value
+ * (typically `process.env.OMNIROUTE_RERANK_TIMEOUT_MS`). Returns the
+ * default of 10000ms when the input is unset, empty, or non-positive.
+ * Extracted as a pure function so unit tests can pass values directly without
+ * module-cache manipulation.
+ */
+function getRerankTimeoutMs(env?: string): number {
+  const parsed = Number.parseInt(String(env ?? process.env.OMNIROUTE_RERANK_TIMEOUT_MS), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10_000;
+}
+
+/**
  * Apply reranking via /v1/rerank (loopback-only) if rerankEnabled + rerankProviderModel is set.
  * Returns reordered array (or original order on any error — rerank failure never fails retrieval).
  *
@@ -195,7 +207,7 @@ async function applyRerank<T extends { memory: Memory; score: number }>(
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(getRerankTimeoutMs()),
     });
 
     if (!res.ok) {
