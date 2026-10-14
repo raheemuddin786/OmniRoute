@@ -1,3 +1,9 @@
+---
+title: "Smart Proxy Bridge with Intelligent Routing (SPB-IR) RFC"
+version: 1.0.0
+lastUpdated: 2026-10-13
+---
+
 # RFC: Smart Proxy Bridge with Intelligent Routing (`SPB-IR`)
 
 **Status:** Proposed / Draft for Architecture Review  
