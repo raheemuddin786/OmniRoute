@@ -12,6 +12,7 @@ import McpDashboardPage from "./components/MCPDashboard";
 import NotionSourceCard from "./components/NotionSourceCard";
 import ObsidianSourceCard from "./components/ObsidianSourceCard";
 import VscodeTokenAliasCard from "./VscodeTokenAliasCard";
+import SmartProxyBridgeTab from "./SmartProxyBridgeTab";
 
 const BUILD_TIME_CLOUD_URL = process.env.NEXT_PUBLIC_CLOUD_URL || null;
 const CLOUD_ACTION_TIMEOUT_MS = 15000;
@@ -106,13 +107,19 @@ type EndpointTunnelVisibility = {
   showNgrokTunnel: boolean;
 };
 
-type EndpointTab = "apis" | "mcp" | "a2a" | "context-sources";
+type EndpointTab = "apis" | "mcp" | "a2a" | "context-sources" | "smart-proxy";
 
-const ENDPOINT_TABS: Array<{ value: EndpointTab; labelKey: string; icon: string }> = [
+const ENDPOINT_TABS: Array<{
+  value: EndpointTab;
+  labelKey?: string;
+  label?: string;
+  icon: string;
+}> = [
   { value: "apis", labelKey: "tabApis", icon: "api" },
   { value: "mcp", labelKey: "tabMcp", icon: "extension" },
   { value: "a2a", labelKey: "tabA2a", icon: "hub" },
   { value: "context-sources", labelKey: "tabContextSources", icon: "database" },
+  { value: "smart-proxy", label: "Smart Proxy", icon: "cpu" },
 ];
 
 const DEFAULT_TUNNEL_VISIBILITY: EndpointTunnelVisibility = {
@@ -1266,7 +1273,10 @@ export default function APIPageClient({ machineId }: Readonly<APIPageClientProps
         </div>
       </div>
       <SegmentedControl
-        options={ENDPOINT_TABS.map((tab) => ({ ...tab, label: t(tab.labelKey) }))}
+        options={ENDPOINT_TABS.map((tab) => ({
+          ...tab,
+          label: tab.labelKey ? t(tab.labelKey) : tab.label,
+        }))}
         value={activeEndpointTab}
         onChange={(value) => setActiveEndpointTab(value as EndpointTab)}
         aria-label={t("endpointSections")}
@@ -1275,6 +1285,7 @@ export default function APIPageClient({ machineId }: Readonly<APIPageClientProps
 
       {activeEndpointTab === "mcp" ? <McpDashboardPage /> : null}
       {activeEndpointTab === "a2a" ? <A2ADashboardPage /> : null}
+      {activeEndpointTab === "smart-proxy" ? <SmartProxyBridgeTab /> : null}
       {activeEndpointTab === "context-sources" ? (
         <div className="flex flex-col gap-4">
           <NotionSourceCard />
