@@ -49,7 +49,7 @@ export function SpbConfig() {
       }
     }
     fetchSpbConfig();
-  }, [config?.tierWeights, toast]);
+  }, [toast]);
 
   async function saveConfig() {
     setLoading(true);

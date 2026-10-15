@@ -94,6 +94,24 @@ function startHealthPayloadRefresh(): Promise<unknown> {
 // an additive `deepHealth` key on the full view only, served from its own
 // 30s cache and refreshed off the request path (same SWR motif as above).
 function withDeepHealth(payload: unknown, wantDeep: boolean): unknown {
+  // Inject SPB telemetry data when SPB is enabled
+  if (process.env.SPB_ENABLED === "true" && payload) {
+    const spbTelemetry = {
+      totalRoutes: 0,
+      checkpointsRestored: 0,
+      fallbacksTriggered: 0,
+      tierDistribution: {},
+      lastRoutedAt: null,
+    };
+
+    // Merge any existing spbTelemetry from other modules
+    if ((payload as Record<string, unknown>).spbTelemetry) {
+      Object.assign(spbTelemetry, (payload as Record<string, unknown>).spbTelemetry);
+    }
+
+    (payload as Record<string, unknown>).spbTelemetry = spbTelemetry;
+  }
+
   if (!wantDeep || !deepHealthVerdictCache) return payload;
   return { ...(payload as Record<string, unknown>), deepHealth: deepHealthVerdictCache.verdict };
 }
