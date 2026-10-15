@@ -17,17 +17,7 @@ export function initTierConfigTable(): void {
   `);
 }
 
-export interface TierConfig {
-  providerOverrides: Array<{ provider: string; tier: string }>;
-  tierWeights: {
-    apex: number;
-    resilient: number;
-    local: number;
-  };
-  spbEnabled: boolean;
-  cacheThreshold: number;
-  fallbackTimeout: number;
-}
+export type { TierConfig } from "../../../open-sse/services/tierTypes";
 
 export function saveTierConfig(config: TierConfig): void {
   const db = getDbInstance();

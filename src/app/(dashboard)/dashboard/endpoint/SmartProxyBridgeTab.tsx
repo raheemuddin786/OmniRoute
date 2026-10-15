@@ -1,29 +1,36 @@
-"tsx";
 /**
  * Smart Proxy Bridge with Intelligent Routing (SPB-IR) Dashboard Tab
  * Provides real-time visibility into intent classification, model tier assignment,
  * prompt anchor caching, zero-loss state checkpointing, and live feature toggle.
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Toggle from "@/shared/components/Toggle";
 
 interface BridgeStats {
   totalRouted: number;
   activeTiers: { apex: number; resilient: number; local: number };
-  cacheHits: number;
-  checkpointsCount: number;
+  checkpointsRestored: number;
+  fallbacksTriggered: number;
+  lastRoutedAt: string | null;
 }
 
-const DEFAULT_STATS: BridgeStats = {
-  totalRouted: 1428,
-  activeTiers: { apex: 312, resilient: 846, local: 270 },
-  cacheHits: 1190,
-  checkpointsCount: 45,
+interface TierWeights {
+  apex: number;
+  resilient: number;
+  local: number;
+}
+
+const EMPTY_STATS: BridgeStats = {
+  totalRouted: 0,
+  activeTiers: { apex: 0, resilient: 0, local: 0 },
+  checkpointsRestored: 0,
+  fallbacksTriggered: 0,
+  lastRoutedAt: null,
 };
 
 export function SmartProxyBridgeTab() {
-  const [stats, setStats] = useState<BridgeStats>(DEFAULT_STATS);
+  const [stats, setStats] = useState<BridgeStats>(EMPTY_STATS);
   const [loading, setLoading] = useState(false);
   const [spbEnabled, setSpbEnabled] = useState<boolean>(false);
   const [toggling, setToggling] = useState(false);
@@ -31,64 +38,152 @@ export function SmartProxyBridgeTab() {
   // Config state
   const [cacheThreshold, setCacheThreshold] = useState(5000);
   const [fallbackTimeout, setFallbackTimeout] = useState(5000);
+  const [tierWeights, setTierWeights] = useState<TierWeights>({
+    apex: 0.3,
+    resilient: 0.5,
+    local: 0.2,
+  });
   const [savingConfig, setSavingConfig] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  const loadData = useCallback(async (signal?: AbortSignal) => {
+    try {
+      // 1. Fetch Tier Config
+      const tierRes = await fetch("/api/settings/tier-config", { signal });
+      if (tierRes.ok) {
+        const tierData = await tierRes.json();
+        setSpbEnabled(Boolean(tierData.spbEnabled));
+        if (typeof tierData.cacheThreshold === "number") {
+          setCacheThreshold(tierData.cacheThreshold);
+        }
+        if (typeof tierData.fallbackTimeout === "number") {
+          setFallbackTimeout(tierData.fallbackTimeout);
+        }
+        if (tierData.tierWeights) {
+          setTierWeights({
+            apex: tierData.tierWeights.apex ?? 0.3,
+            resilient: tierData.tierWeights.resilient ?? 0.5,
+            local: tierData.tierWeights.local ?? 0.2,
+          });
+        }
+      }
+
+      // 2. Fetch System Health Telemetry
+      const healthRes = await fetch("/api/monitoring/health", { signal });
+      if (healthRes.ok) {
+        const healthData = await healthRes.json();
+        const telem = healthData.spbTelemetry;
+        if (telem) {
+          setStats({
+            totalRouted: telem.totalRoutes || 0,
+            activeTiers: {
+              apex: telem.tierDistribution?.tier_1_apex || 0,
+              resilient: telem.tierDistribution?.tier_2_resilient || 0,
+              local: telem.tierDistribution?.tier_3_local || 0,
+            },
+            checkpointsRestored: telem.checkpointsRestored || 0,
+            fallbacksTriggered: telem.fallbacksTriggered || 0,
+            lastRoutedAt: telem.lastRoutedAt || null,
+          });
+        }
+      }
+    } catch (err: unknown) {
+      if (signal?.aborted) return;
+      console.error("Failed to load SPB configuration or stats", err);
+    }
+  }, []);
+
   useEffect(() => {
+    let ignore = false;
     const controller = new AbortController();
-    (async () => {
+
+    const runFetch = async () => {
       try {
-        // Fetch feature flags to determine SPB status
-        const flagRes = await fetch("/api/settings/feature-flags", { signal: controller.signal });
-        if (flagRes.ok) {
-          const data = await flagRes.json();
-          const spbFlag = data.flags?.find((f: { key: string }) => f.key === "SPB_ENABLED");
-          if (spbFlag) {
-            setSpbEnabled(
-              spbFlag.effectiveValue === "true" ||
-                spbFlag.effectiveValue === "1" ||
-                spbFlag.effectiveValue === "yes"
-            );
+        const [tierRes, healthRes] = await Promise.all([
+          fetch("/api/settings/tier-config", { signal: controller.signal }),
+          fetch("/api/monitoring/health", { signal: controller.signal }),
+        ]);
+
+        if (!ignore && tierRes.ok) {
+          const tierData = await tierRes.json();
+          setSpbEnabled(Boolean(tierData.spbEnabled));
+          if (typeof tierData.cacheThreshold === "number") {
+            setCacheThreshold(tierData.cacheThreshold);
+          }
+          if (typeof tierData.fallbackTimeout === "number") {
+            setFallbackTimeout(tierData.fallbackTimeout);
+          }
+          if (tierData.tierWeights) {
+            setTierWeights({
+              apex: tierData.tierWeights.apex ?? 0.3,
+              resilient: tierData.tierWeights.resilient ?? 0.5,
+              local: tierData.tierWeights.local ?? 0.2,
+            });
           }
         }
 
-        // Fetch tier config
-        const tierRes = await fetch("/api/settings/tier-config", { signal: controller.signal });
-        if (tierRes.ok) {
-          const tierData = await tierRes.json();
-          if (tierData.spbEnabled !== undefined) {
-            setSpbEnabled(Boolean(tierData.spbEnabled));
+        if (!ignore && healthRes.ok) {
+          const healthData = await healthRes.json();
+          const telem = healthData.spbTelemetry;
+          if (telem) {
+            setStats({
+              totalRouted: telem.totalRoutes || 0,
+              activeTiers: {
+                apex: telem.tierDistribution?.tier_1_apex || 0,
+                resilient: telem.tierDistribution?.tier_2_resilient || 0,
+                local: telem.tierDistribution?.tier_3_local || 0,
+              },
+              checkpointsRestored: telem.checkpointsRestored || 0,
+              fallbacksTriggered: telem.fallbacksTriggered || 0,
+              lastRoutedAt: telem.lastRoutedAt || null,
+            });
           }
         }
-      } catch (err) {
+      } catch (err: unknown) {
         if (!controller.signal.aborted) {
           console.error("Failed to load SPB configuration or stats", err);
         }
       }
-    })();
-    return () => controller.abort();
+    };
+
+    void runFetch();
+
+    return () => {
+      ignore = true;
+      controller.abort();
+    };
   }, []);
 
   const handleToggleSpb = async (checked: boolean) => {
     setToggling(true);
     setStatusMessage(null);
     try {
-      const res = await fetch("/api/settings/feature-flags", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          key: "SPB_ENABLED",
-          value: checked ? "true" : "false",
+      // Synchronize both tier-config and feature-flags to ensure durable persistence
+      const [tierRes, flagRes] = await Promise.all([
+        fetch("/api/settings/tier-config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ spbEnabled: checked }),
         }),
-      });
+        fetch("/api/settings/feature-flags", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key: "SPB_ENABLED",
+            value: checked ? "true" : "false",
+          }),
+        }),
+      ]);
 
-      if (res.ok) {
+      if (tierRes.ok && flagRes.ok) {
         setSpbEnabled(checked);
         setStatusMessage(
-          checked ? "SPB-IR successfully enabled" : "SPB-IR successfully disabled (pass-through)"
+          checked
+            ? "SPB-IR successfully enabled and persisted."
+            : "SPB-IR successfully disabled (pass-through)."
         );
       } else {
-        const errText = await res.text();
+        const errText = await tierRes.text();
         setStatusMessage(`Failed to update SPB state: ${errText}`);
       }
     } catch (err) {
@@ -106,14 +201,15 @@ export function SmartProxyBridgeTab() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider: "spb",
-          tier: spbEnabled ? "premium" : "free",
           spbEnabled,
+          cacheThreshold,
+          fallbackTimeout,
+          tierWeights,
         }),
       });
 
       if (res.ok) {
-        setStatusMessage("SPB configuration saved successfully");
+        setStatusMessage("SPB parameters saved successfully.");
       } else {
         const errText = await res.text();
         setStatusMessage(`Failed to save configuration: ${errText}`);
@@ -128,15 +224,20 @@ export function SmartProxyBridgeTab() {
   const handleRefresh = async () => {
     setLoading(true);
     try {
-      await new Promise((r) => setTimeout(r, 400));
-      setStats((prev) => ({
-        ...prev,
-        totalRouted: prev.totalRouted + Math.floor(Math.random() * 10) + 1,
-      }));
+      await loadData();
     } finally {
       setLoading(false);
     }
   };
+
+  const cacheHitRate =
+    stats.totalRouted > 0 ? Math.round((stats.checkpointsRestored / stats.totalRouted) * 100) : 100;
+
+  const totalTierSum =
+    stats.activeTiers.apex + stats.activeTiers.resilient + stats.activeTiers.local || 1;
+  const apexPercent = Math.round((stats.activeTiers.apex / totalTierSum) * 100);
+  const resilientPercent = Math.round((stats.activeTiers.resilient / totalTierSum) * 100);
+  const localPercent = Math.round((stats.activeTiers.local / totalTierSum) * 100);
 
   return (
     <div className="space-y-6 p-6">
@@ -193,24 +294,34 @@ export function SmartProxyBridgeTab() {
           <div className="mt-2 text-3xl font-bold text-foreground">
             {stats.totalRouted.toLocaleString()}
           </div>
-          <p className="mt-1 text-xs text-emerald-500 font-medium">↑ 14.2% vs last hour</p>
+          <p className="mt-1 text-xs text-muted-foreground font-medium">
+            {stats.lastRoutedAt
+              ? `Last routed: ${new Date(stats.lastRoutedAt).toLocaleTimeString()}`
+              : "Live telemetry from SQLite WAL"}
+          </p>
         </div>
         <div className="rounded-lg border bg-card p-5 shadow-sm">
           <div className="text-sm font-medium text-muted-foreground">Prompt Cache Hit Rate</div>
-          <div className="mt-2 text-3xl font-bold text-foreground">
-            {Math.round((stats.cacheHits / stats.totalRouted) * 100)}%
-          </div>
+          <div className="mt-2 text-3xl font-bold text-foreground">{cacheHitRate}%</div>
           <p className="mt-1 text-xs text-muted-foreground">Zero context degradation across hops</p>
         </div>
         <div className="rounded-lg border bg-card p-5 shadow-sm">
-          <div className="text-sm font-medium text-muted-foreground">Active Checkpoints</div>
-          <div className="mt-2 text-3xl font-bold text-foreground">{stats.checkpointsCount}</div>
-          <p className="mt-1 text-xs text-muted-foreground">SQLite WAL-journaled state</p>
+          <div className="text-sm font-medium text-muted-foreground">Checkpoints Restored</div>
+          <div className="mt-2 text-3xl font-bold text-foreground">
+            {stats.checkpointsRestored.toLocaleString()}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">Prompt anchor hash matches</p>
         </div>
         <div className="rounded-lg border bg-card p-5 shadow-sm">
-          <div className="text-sm font-medium text-muted-foreground">Zero-Loss Failover</div>
-          <div className="mt-2 text-3xl font-bold text-foreground">100%</div>
-          <p className="mt-1 text-xs text-emerald-500 font-medium">0 failed recovery attempts</p>
+          <div className="text-sm font-medium text-muted-foreground">Zero-Loss Fallbacks</div>
+          <div className="mt-2 text-3xl font-bold text-foreground">
+            {stats.fallbacksTriggered.toLocaleString()}
+          </div>
+          <p className="mt-1 text-xs text-emerald-500 font-medium">
+            {stats.fallbacksTriggered === 0
+              ? "0 failovers required"
+              : "Recovered via resilient tier"}
+          </p>
         </div>
       </div>
 
@@ -224,28 +335,43 @@ export function SmartProxyBridgeTab() {
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
                   <span>Tier 1: Apex Reasoning (Claude 3.5 Sonnet / GPT-4o)</span>
-                  <span>{stats.activeTiers.apex} requests</span>
+                  <span>
+                    {stats.activeTiers.apex} requests ({apexPercent}%)
+                  </span>
                 </div>
                 <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: "22%" }} />
+                  <div
+                    className="h-full bg-indigo-500 rounded-full transition-all duration-300"
+                    style={{ width: `${stats.totalRouted > 0 ? apexPercent : 30}%` }}
+                  />
                 </div>
               </div>
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
                   <span>Tier 2: Resilient Execution (DeepSeek / Gemini)</span>
-                  <span>{stats.activeTiers.resilient} requests</span>
+                  <span>
+                    {stats.activeTiers.resilient} requests ({resilientPercent}%)
+                  </span>
                 </div>
                 <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                  <div className="h-full bg-blue-500 rounded-full" style={{ width: "59%" }} />
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                    style={{ width: `${stats.totalRouted > 0 ? resilientPercent : 50}%` }}
+                  />
                 </div>
               </div>
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
                   <span>Tier 3: Local Edge Inference (Ollama / Llama-3)</span>
-                  <span>{stats.activeTiers.local} requests</span>
+                  <span>
+                    {stats.activeTiers.local} requests ({localPercent}%)
+                  </span>
                 </div>
                 <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                  <div className="h-full bg-emerald-500 rounded-full" style={{ width: "19%" }} />
+                  <div
+                    className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                    style={{ width: `${stats.totalRouted > 0 ? localPercent : 20}%` }}
+                  />
                 </div>
               </div>
             </div>
@@ -255,33 +381,84 @@ export function SmartProxyBridgeTab() {
             <h4 className="text-md font-semibold text-foreground mb-3">
               Bridge Parameters & Thresholds
             </h4>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">
-                  Cache Threshold (tokens)
-                </label>
-                <input
-                  type="number"
-                  value={cacheThreshold}
-                  onChange={(e) => setCacheThreshold(Number(e.target.value))}
-                  className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Apex Weight</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={tierWeights.apex}
+                    onChange={(e) =>
+                      setTierWeights((w) => ({ ...w, apex: parseFloat(e.target.value) || 0 }))
+                    }
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Resilient Weight
+                  </label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={tierWeights.resilient}
+                    onChange={(e) =>
+                      setTierWeights((w) => ({
+                        ...w,
+                        resilient: parseFloat(e.target.value) || 0,
+                      }))
+                    }
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Local Weight</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={tierWeights.local}
+                    onChange={(e) =>
+                      setTierWeights((w) => ({ ...w, local: parseFloat(e.target.value) || 0 }))
+                    }
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">
-                  Fallback Timeout (ms)
-                </label>
-                <input
-                  type="number"
-                  value={fallbackTimeout}
-                  onChange={(e) => setFallbackTimeout(Number(e.target.value))}
-                  className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Cache Threshold (tokens)
+                  </label>
+                  <input
+                    type="number"
+                    value={cacheThreshold}
+                    onChange={(e) => setCacheThreshold(Number(e.target.value))}
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Fallback Timeout (ms)
+                  </label>
+                  <input
+                    type="number"
+                    value={fallbackTimeout}
+                    onChange={(e) => setFallbackTimeout(Number(e.target.value))}
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
               </div>
               <button
                 onClick={handleSaveConfig}
                 disabled={savingConfig}
-                className="mt-2 inline-flex items-center justify-center rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors disabled:opacity-50"
+                className="inline-flex items-center justify-center rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors disabled:opacity-50"
               >
                 {savingConfig ? "Saving Configuration..." : "Apply Bridge Parameters"}
               </button>

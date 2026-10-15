@@ -4,29 +4,64 @@ import { loadTierConfig, saveTierConfig } from "@/lib/db/tierConfig";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { setTierConfig } from "@omniroute/open-sse/services/tierResolver";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
 
 /**
- * Settings route for a single provider's routing-tier override (#7818).
+ * Settings route for routing-tier and SPB-IR configurations (#7818, SPB-IR).
  *
  * `classifyTier()` (`open-sse/services/tierResolver.ts`) already honors
  * `TierConfig.providerOverrides` — an array of `{ provider, tier }` keyed by the
- * provider **id string** — but nothing exposed it through the API/UI for any
- * provider, built-in or custom. This route is that missing surface: it reads
- * and writes a single entry in that same array through the existing
- * `tier_config` table (`loadTierConfig()`/`saveTierConfig()`), and busts the
- * in-process routing cache via `setTierConfig()` so a change takes effect on
- * the very next request without a restart.
+ * provider **id string**. This route manages both individual provider tier overrides
+ * and global SPB-IR parameters (spbEnabled, tierWeights, cacheThreshold, fallbackTimeout).
+ * It persists changes in `tier_config` (and synchronizes the `SPB_ENABLED` feature flag),
+ * and busts the in-process routing cache via `setTierConfig()` so changes take effect
+ * on the very next request without a restart.
  */
 
-const tierOverridePutSchema = z.object({
-  provider: z.string().min(1),
-  tier: z.enum(["free", "cheap", "premium"]).nullable(),
-});
+const tierSettingsPutSchema = z
+  .object({
+    provider: z.string().min(1).optional(),
+    tier: z.enum(["free", "cheap", "premium"]).nullable().optional(),
+    spbEnabled: z.boolean().optional(),
+    tierWeights: z
+      .object({
+        apex: z.number().min(0).max(1),
+        resilient: z.number().min(0).max(1),
+        local: z.number().min(0).max(1),
+      })
+      .optional(),
+    cacheThreshold: z.number().min(0).optional(),
+    fallbackTimeout: z.number().min(0).optional(),
+    providerOverrides: z
+      .array(
+        z.object({
+          provider: z.string().min(1),
+          tier: z.enum(["free", "cheap", "premium"]),
+        })
+      )
+      .optional(),
+  })
+  .refine(
+    (data) =>
+      data.provider !== undefined ||
+      data.spbEnabled !== undefined ||
+      data.tierWeights !== undefined ||
+      data.cacheThreshold !== undefined ||
+      data.fallbackTimeout !== undefined ||
+      data.providerOverrides !== undefined,
+    { message: "At least one configuration property must be provided" }
+  );
 
 export async function GET(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
-  return NextResponse.json(loadTierConfig());
+  const config = loadTierConfig();
+  const spbFlagActive = isFeatureFlagEnabled("SPB_ENABLED");
+  return NextResponse.json({
+    ...config,
+    spbEnabled: config.spbEnabled || spbFlagActive,
+  });
 }
 
 export async function PUT(request: Request) {
@@ -34,22 +69,52 @@ export async function PUT(request: Request) {
   if (authError) return authError;
 
   const rawBody = await request.json().catch(() => null);
-  const parsed = tierOverridePutSchema.safeParse(rawBody);
+  const parsed = tierSettingsPutSchema.safeParse(rawBody);
   if (!parsed.success) {
     return NextResponse.json(buildErrorBody(400, "Invalid tier override payload"), {
       status: 400,
     });
   }
 
-  const { provider, tier } = parsed.data;
+  const {
+    provider,
+    tier,
+    spbEnabled,
+    tierWeights,
+    cacheThreshold,
+    fallbackTimeout,
+    providerOverrides,
+  } = parsed.data;
   const config = loadTierConfig();
-  const nextOverrides = config.providerOverrides.filter(
-    (o) => o.provider.toLowerCase() !== provider.toLowerCase()
-  );
-  if (tier !== null) {
-    nextOverrides.push({ provider, tier });
+  let nextOverrides = [...config.providerOverrides];
+
+  if (providerOverrides !== undefined) {
+    nextOverrides = providerOverrides;
+  } else if (provider !== undefined && tier !== undefined) {
+    nextOverrides = nextOverrides.filter(
+      (o) => o.provider.toLowerCase() !== provider.toLowerCase()
+    );
+    if (tier !== null) {
+      nextOverrides.push({ provider, tier });
+    }
   }
-  const nextConfig = { ...config, providerOverrides: nextOverrides };
+
+  if (spbEnabled !== undefined) {
+    try {
+      setFeatureFlagOverride("SPB_ENABLED", spbEnabled ? "true" : "false");
+    } catch (err) {
+      console.warn("[TierConfig Route] Failed to sync SPB_ENABLED feature flag:", err);
+    }
+  }
+
+  const nextConfig = {
+    ...config,
+    providerOverrides: nextOverrides,
+    spbEnabled: spbEnabled ?? config.spbEnabled,
+    tierWeights: tierWeights ?? config.tierWeights,
+    cacheThreshold: cacheThreshold ?? config.cacheThreshold,
+    fallbackTimeout: fallbackTimeout ?? config.fallbackTimeout,
+  };
 
   saveTierConfig(nextConfig);
   setTierConfig(nextConfig); // bust the in-process routing cache immediately

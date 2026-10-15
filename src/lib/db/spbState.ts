@@ -140,6 +140,21 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
   }
 }
 
+export function pruneStaleCheckpoints(maxAgeMs: number = 24 * 60 * 60 * 1000): number {
+  try {
+    initSpbStateTable();
+    const db = getDbInstance();
+    const pruneThreshold = Date.now() - maxAgeMs;
+    const result = db
+      .prepare(`DELETE FROM spb_state_checkpoints WHERE created_at < ?`)
+      .run(pruneThreshold);
+    return result.changes;
+  } catch (err) {
+    console.error("[SPB State] Failed to prune stale checkpoints:", err);
+    return 0;
+  }
+}
+
 export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
   try {
     initSpbStateTable();

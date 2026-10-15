@@ -13,8 +13,7 @@
  */
 
 import { isNextBuildPhase } from "@/lib/buildPhase";
-import { getSpbTelemetrySummary } from "@/lib/db/spbState";
-import { getDbInstance } from "@/lib/db/core";
+import { getSpbTelemetrySummary, pruneStaleCheckpoints } from "@/lib/db/spbState";
 import {
   loadAllCircuitBreakerStates,
   loadCircuitBreakerState,
@@ -91,18 +90,13 @@ class SpbRecoveryDaemon {
     }
 
     try {
-      const db = getDbInstance();
       const now = Date.now();
 
       // 1. Prune stale SPB state checkpoints older than 24 hours.
-      const pruneThreshold = now - STALE_CHECKPOINT_MAX_AGE_MS;
-      const pruneResult = db
-        .prepare(`DELETE FROM spb_state_checkpoints WHERE created_at < ?`)
-        .run(pruneThreshold);
-      if (pruneResult.changes > 0) {
-        console.log(
-          `[SPB Recovery Daemon] Pruned ${pruneResult.changes} stale SPB state checkpoints.`
-        );
+      //    All operations route strictly through the spbState domain module — no raw SQL.
+      const prunedCount = pruneStaleCheckpoints(STALE_CHECKPOINT_MAX_AGE_MS);
+      if (prunedCount > 0) {
+        console.log(`[SPB Recovery Daemon] Pruned ${prunedCount} stale SPB state checkpoints.`);
       }
 
       // 2. Evaluate Circuit Breakers for auto-recovery (OPEN → HALF_OPEN probe readiness).

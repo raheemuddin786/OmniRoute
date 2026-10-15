@@ -27,6 +27,13 @@ export interface TierConfig {
   modelOverrides: ModelTierOverride[];
   freeProviders: string[];
   spbEnabled: boolean;
+  tierWeights?: {
+    apex: number;
+    resilient: number;
+    local: number;
+  };
+  cacheThreshold?: number;
+  fallbackTimeout?: number;
 }
 
 export interface ProviderTierOverride {

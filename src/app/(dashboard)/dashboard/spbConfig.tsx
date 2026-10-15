@@ -1,4 +1,3 @@
-tsx;
 /**
  * Smart Proxy Bridge Configuration Panel
  * Provides UI controls for enabling/disabling SPB, tier weights, cache thresholds,
@@ -14,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 
-interface SpbConfig {
+interface SpbConfigData {
   enabled: boolean;
   tierWeights: {
     apex: number;
@@ -26,7 +25,7 @@ interface SpbConfig {
 }
 
 export function SpbConfig() {
-  const [config, setConfig] = useState<SpbConfig>(null);
+  const [config, setConfig] = useState<SpbConfigData | null>(null);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
@@ -34,14 +33,13 @@ export function SpbConfig() {
     async function fetchSpbConfig() {
       try {
         const res = await fetch("/api/settings/tier-config");
-        const data = await res.json();
-        if (data.tierConfig?.providerOverrides) {
-          const weights = { apex: 0.3, resilient: 0.5, local: 0.2 };
+        if (res.ok) {
+          const data = await res.json();
           setConfig({
-            enabled: data.tierConfig?.spbEnabled ?? true,
-            tierWeights: weights,
-            cacheThreshold: 5000,
-            fallbackTimeout: 5000,
+            enabled: Boolean(data.spbEnabled),
+            tierWeights: data.tierWeights ?? { apex: 0.3, resilient: 0.5, local: 0.2 },
+            cacheThreshold: data.cacheThreshold ?? 5000,
+            fallbackTimeout: data.fallbackTimeout ?? 5000,
           });
         }
       } catch (err) {
@@ -52,15 +50,17 @@ export function SpbConfig() {
   }, [toast]);
 
   async function saveConfig() {
+    if (!config) return;
     setLoading(true);
     try {
       const res = await fetch("/api/settings/tier-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider: "spb",
-          tier: config.enabled ? "premium" : "free",
           spbEnabled: config.enabled,
+          tierWeights: config.tierWeights,
+          cacheThreshold: config.cacheThreshold,
+          fallbackTimeout: config.fallbackTimeout,
         }),
       });
       if (res.ok) {

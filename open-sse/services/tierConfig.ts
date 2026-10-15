@@ -14,8 +14,7 @@
  */
 
 import { z } from "zod";
-import type { TierConfig, ProviderTierOverride, ModelTierOverride } from "./tierTypes";
-import { PROVIDER_TIER } from "./tierTypes";
+import type { TierConfig } from "./tierTypes";
 import { NOAUTH_PROVIDERS } from "@/shared/constants/providers";
 
 export const providerTierOverrideSchema = z.object({
@@ -39,6 +38,15 @@ export const tierConfigSchema = z.object({
   modelOverrides: z.array(modelTierOverrideSchema).default([]),
   freeProviders: z.array(z.string()).default([]),
   spbEnabled: z.boolean().default(false),
+  tierWeights: z
+    .object({
+      apex: z.number().min(0).max(1).default(0.3),
+      resilient: z.number().min(0).max(1).default(0.5),
+      local: z.number().min(0).max(1).default(0.2),
+    })
+    .default({ apex: 0.3, resilient: 0.5, local: 0.2 }),
+  cacheThreshold: z.number().min(0).default(5000),
+  fallbackTimeout: z.number().min(0).default(5000),
 });
 
 /**
@@ -97,6 +105,13 @@ export const DEFAULT_TIER_CONFIG: TierConfig = {
   modelOverrides: [],
   freeProviders: [...new Set([...LEGACY_FREE_PROVIDERS, ...NOAUTH_FREE_PROVIDERS])],
   spbEnabled: false,
+  tierWeights: {
+    apex: 0.3,
+    resilient: 0.5,
+    local: 0.2,
+  },
+  cacheThreshold: 5000,
+  fallbackTimeout: 5000,
 };
 
 export function validateTierConfig(raw: unknown): TierConfig {
@@ -120,5 +135,10 @@ export function mergeTierConfig(userConfig?: Partial<TierConfig>): TierConfig {
     freeProviders: [
       ...new Set([...DEFAULT_TIER_CONFIG.freeProviders, ...(userConfig.freeProviders || [])]),
     ],
+    tierWeights: userConfig.tierWeights
+      ? { ...DEFAULT_TIER_CONFIG.tierWeights!, ...userConfig.tierWeights }
+      : DEFAULT_TIER_CONFIG.tierWeights,
+    cacheThreshold: userConfig.cacheThreshold ?? DEFAULT_TIER_CONFIG.cacheThreshold,
+    fallbackTimeout: userConfig.fallbackTimeout ?? DEFAULT_TIER_CONFIG.fallbackTimeout,
   };
 }

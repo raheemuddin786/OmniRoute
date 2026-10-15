@@ -433,6 +433,30 @@ function logBreakerStateChange(name: string, from: string, to: string): void {
 
 export { shouldTripProviderBreakerForResult } from "./chatPredicates";
 
+function withSpbHeaders(res: Response, spbDecision: any): Response {
+  if (!spbDecision || !res) return res;
+  try {
+    const headers = new Headers(res.headers);
+    if (spbDecision.tierAssignment?.tier) {
+      headers.set("X-OmniRoute-SPB-Tier", spbDecision.tierAssignment.tier);
+    }
+    headers.set(
+      "X-OmniRoute-SPB-Checkpoint",
+      spbDecision.checkpointRestored ? "restored" : "created"
+    );
+    if (spbDecision.intent?.taskPhase) {
+      headers.set("X-OmniRoute-SPB-Phase", spbDecision.intent.taskPhase);
+    }
+    return new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
+  } catch {
+    return res;
+  }
+}
+
 async function handleChatImplementation(
   request: any,
   clientRawRequest: any = null,
@@ -781,6 +805,34 @@ async function handleChatImplementation(
   const requestedConnectionId = request.headers.get("x-omniroute-connection")?.trim() || null;
   if (sessionId) {
     touchSession(sessionId);
+  }
+
+  // SPB-IR: Intelligent Routing, Intent Classification & Zero-Loss State Checkpointing
+  const strategyHeader =
+    request.headers.get("x-omniroute-strategy") || request.headers.get("X-OmniRoute-Strategy");
+  const isSpbRequested =
+    strategyHeader === "smart-proxy-bridge" ||
+    strategyHeader === "smart_proxy_bridge" ||
+    strategyHeader === "spb";
+  const isSpbActive = isSpbRequested || isFeatureFlagEnabled("SPB_ENABLED");
+
+  let spbDecision: any = null;
+  if (isSpbActive && Array.isArray(body?.messages)) {
+    try {
+      const { processSmartProxyRouting } =
+        await import("@omniroute/open-sse/services/spb/proxyBridge");
+      spbDecision = await processSmartProxyRouting({
+        sessionId,
+        messages: body.messages,
+        tools: body.tools,
+      });
+      log.info(
+        "SPB",
+        `SPB-IR routed: phase=${spbDecision.intent.taskPhase}, tier=${spbDecision.tierAssignment.tier}, checkpointRestored=${spbDecision.checkpointRestored}`
+      );
+    } catch (spbErr) {
+      log.warn("SPB", `SPB-IR processing warning: ${spbErr}`);
+    }
   }
 
   // Pipeline: API key policy enforcement (model restrictions + budget limits)
@@ -1408,9 +1460,12 @@ async function handleChatImplementation(
         if (fallbackResponse.ok) {
           log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
           recordTelemetry(telemetry);
-          return withModalityBridgeHeader(
-            withConversationId(withSessionHeader(fallbackResponse, sessionId), conversationId),
-            modalityBridgeHeader
+          return withSpbHeaders(
+            withModalityBridgeHeader(
+              withConversationId(withSessionHeader(fallbackResponse, sessionId), conversationId),
+              modalityBridgeHeader
+            ),
+            spbDecision
           );
         }
         log.warn(
@@ -1449,12 +1504,15 @@ async function handleChatImplementation(
         });
       } catch {}
     }
-    return withModalityBridgeHeader(
-      withConversationId(
-        withCorrelationId(withSessionHeader(response, sessionId), reqId),
-        conversationId
+    return withSpbHeaders(
+      withModalityBridgeHeader(
+        withConversationId(
+          withCorrelationId(withSessionHeader(response, sessionId), reqId),
+          conversationId
+        ),
+        modalityBridgeHeader
       ),
-      modalityBridgeHeader
+      spbDecision
     );
   }
   telemetry.endPhase();
@@ -1503,12 +1561,15 @@ async function handleChatImplementation(
     false
   );
   recordTelemetry(telemetry);
-  return withModalityBridgeHeader(
-    withConversationId(
-      withCorrelationId(withSessionHeader(response, sessionId), reqId),
-      conversationId
+  return withSpbHeaders(
+    withModalityBridgeHeader(
+      withConversationId(
+        withCorrelationId(withSessionHeader(response, sessionId), reqId),
+        conversationId
+      ),
+      modalityBridgeHeader
     ),
-    modalityBridgeHeader
+    spbDecision
   );
 }
 
