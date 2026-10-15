@@ -3,6 +3,7 @@ import { z } from "zod";
 import { loadTierConfig, saveTierConfig } from "@/lib/db/tierConfig";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { setTierConfig } from "@omniroute/open-sse/services/tierResolver";
+import { DEFAULT_SPB_TIER_MODELS } from "@omniroute/open-sse/services/tierTypes";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
@@ -13,7 +14,7 @@ import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
  * `classifyTier()` (`open-sse/services/tierResolver.ts`) already honors
  * `TierConfig.providerOverrides` — an array of `{ provider, tier }` keyed by the
  * provider **id string**. This route manages both individual provider tier overrides
- * and global SPB-IR parameters (spbEnabled, tierWeights, cacheThreshold, fallbackTimeout).
+ * and global SPB-IR parameters (spbEnabled, tierWeights, tierModels, cacheThreshold, fallbackTimeout).
  * It persists changes in `tier_config` (and synchronizes the `SPB_ENABLED` feature flag),
  * and busts the in-process routing cache via `setTierConfig()` so changes take effect
  * on the very next request without a restart.
@@ -29,6 +30,13 @@ const tierSettingsPutSchema = z
         apex: z.number().min(0).max(1),
         resilient: z.number().min(0).max(1),
         local: z.number().min(0).max(1),
+      })
+      .optional(),
+    tierModels: z
+      .object({
+        apex: z.array(z.string().min(1)).min(1),
+        resilient: z.array(z.string().min(1)).min(1),
+        local: z.array(z.string().min(1)).min(1),
       })
       .optional(),
     cacheThreshold: z.number().min(0).optional(),
@@ -47,6 +55,7 @@ const tierSettingsPutSchema = z
       data.provider !== undefined ||
       data.spbEnabled !== undefined ||
       data.tierWeights !== undefined ||
+      data.tierModels !== undefined ||
       data.cacheThreshold !== undefined ||
       data.fallbackTimeout !== undefined ||
       data.providerOverrides !== undefined,
@@ -60,6 +69,7 @@ export async function GET(request: Request) {
   const spbFlagActive = isFeatureFlagEnabled("SPB_ENABLED");
   return NextResponse.json({
     ...config,
+    tierModels: config.tierModels ?? DEFAULT_SPB_TIER_MODELS,
     spbEnabled: config.spbEnabled || spbFlagActive,
   });
 }
@@ -81,6 +91,7 @@ export async function PUT(request: Request) {
     tier,
     spbEnabled,
     tierWeights,
+    tierModels,
     cacheThreshold,
     fallbackTimeout,
     providerOverrides,
@@ -112,6 +123,7 @@ export async function PUT(request: Request) {
     providerOverrides: nextOverrides,
     spbEnabled: spbEnabled ?? config.spbEnabled,
     tierWeights: tierWeights ?? config.tierWeights,
+    tierModels: tierModels ?? config.tierModels,
     cacheThreshold: cacheThreshold ?? config.cacheThreshold,
     fallbackTimeout: fallbackTimeout ?? config.fallbackTimeout,
   };

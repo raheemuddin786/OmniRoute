@@ -6,6 +6,7 @@
 
 import { classifyIntent, IntentProfile } from "./intentAnalyzer.ts";
 import { selectModelTier, TierAssignment } from "./tieredRegistry.ts";
+import { getTierConfig } from "../tierResolver.ts";
 import { saveCheckpoint, getCheckpoint, recordSpbTelemetry } from "../../../src/lib/db/spbState.ts";
 
 export interface SpbRoutingContext {
@@ -37,8 +38,13 @@ export async function processSmartProxyRouting(
     // 2. Classify intent with error boundary
     const intent = classifyIntent(messages, tools);
 
-    // 3. Select model tier
-    const tierAssignment = selectModelTier(intent.taskPhase, intent.complexityScore);
+    // 3. Select model tier using dynamic config
+    const tierConfig = getTierConfig();
+    const tierAssignment = selectModelTier(
+      intent.taskPhase,
+      intent.complexityScore,
+      tierConfig?.tierModels
+    );
 
     // 4. Check for existing checkpoint & state resumption with safe error handling
     let checkpointRestored = false;

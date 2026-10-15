@@ -21,6 +21,12 @@ interface TierWeights {
   local: number;
 }
 
+interface TierModels {
+  apex: string[];
+  resilient: string[];
+  local: string[];
+}
+
 const EMPTY_STATS: BridgeStats = {
   totalRouted: 0,
   activeTiers: { apex: 0, resilient: 0, local: 0 },
@@ -43,6 +49,20 @@ export function SmartProxyBridgeTab() {
     resilient: 0.5,
     local: 0.2,
   });
+  const [tierModels, setTierModels] = useState<TierModels>({
+    apex: ["claude-3-5-sonnet", "gpt-4o", "claude-opus-5-5"],
+    resilient: ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
+    local: ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
+  });
+  const [inputModels, setInputModels] = useState<{
+    apex: string;
+    resilient: string;
+    local: string;
+  }>({
+    apex: "",
+    resilient: "",
+    local: "",
+  });
   const [savingConfig, setSavingConfig] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -64,6 +84,23 @@ export function SmartProxyBridgeTab() {
             apex: tierData.tierWeights.apex ?? 0.3,
             resilient: tierData.tierWeights.resilient ?? 0.5,
             local: tierData.tierWeights.local ?? 0.2,
+          });
+        }
+        if (tierData.tierModels) {
+          setTierModels({
+            apex:
+              Array.isArray(tierData.tierModels.apex) && tierData.tierModels.apex.length > 0
+                ? tierData.tierModels.apex
+                : ["claude-3-5-sonnet", "gpt-4o", "claude-opus-5-5"],
+            resilient:
+              Array.isArray(tierData.tierModels.resilient) &&
+              tierData.tierModels.resilient.length > 0
+                ? tierData.tierModels.resilient
+                : ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
+            local:
+              Array.isArray(tierData.tierModels.local) && tierData.tierModels.local.length > 0
+                ? tierData.tierModels.local
+                : ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
           });
         }
       }
@@ -118,6 +155,23 @@ export function SmartProxyBridgeTab() {
               apex: tierData.tierWeights.apex ?? 0.3,
               resilient: tierData.tierWeights.resilient ?? 0.5,
               local: tierData.tierWeights.local ?? 0.2,
+            });
+          }
+          if (tierData.tierModels) {
+            setTierModels({
+              apex:
+                Array.isArray(tierData.tierModels.apex) && tierData.tierModels.apex.length > 0
+                  ? tierData.tierModels.apex
+                  : ["claude-3-5-sonnet", "gpt-4o", "claude-opus-5-5"],
+              resilient:
+                Array.isArray(tierData.tierModels.resilient) &&
+                tierData.tierModels.resilient.length > 0
+                  ? tierData.tierModels.resilient
+                  : ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
+              local:
+                Array.isArray(tierData.tierModels.local) && tierData.tierModels.local.length > 0
+                  ? tierData.tierModels.local
+                  : ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
             });
           }
         }
@@ -193,6 +247,34 @@ export function SmartProxyBridgeTab() {
     }
   };
 
+  const handleAddModel = (tier: keyof TierModels) => {
+    const raw = inputModels[tier].trim();
+    if (!raw) return;
+    if (tierModels[tier].includes(raw)) {
+      setStatusMessage(`Model "${raw}" is already configured in Tier ${tier}.`);
+      return;
+    }
+    setTierModels((prev) => ({
+      ...prev,
+      [tier]: [...prev[tier], raw],
+    }));
+    setInputModels((prev) => ({
+      ...prev,
+      [tier]: "",
+    }));
+  };
+
+  const handleRemoveModel = (tier: keyof TierModels, modelToRemove: string) => {
+    if (tierModels[tier].length <= 1) {
+      setStatusMessage(`Each tier must retain at least one target model.`);
+      return;
+    }
+    setTierModels((prev) => ({
+      ...prev,
+      [tier]: prev[tier].filter((m) => m !== modelToRemove),
+    }));
+  };
+
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     setStatusMessage(null);
@@ -205,11 +287,12 @@ export function SmartProxyBridgeTab() {
           cacheThreshold,
           fallbackTimeout,
           tierWeights,
+          tierModels,
         }),
       });
 
       if (res.ok) {
-        setStatusMessage("SPB parameters saved successfully.");
+        setStatusMessage("SPB parameters and target models saved successfully.");
       } else {
         const errText = await res.text();
         setStatusMessage(`Failed to save configuration: ${errText}`);
@@ -334,7 +417,7 @@ export function SmartProxyBridgeTab() {
             <div className="space-y-4">
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
-                  <span>Tier 1: Apex Reasoning (Claude 3.5 Sonnet / GPT-4o)</span>
+                  <span>Tier 1: Apex Reasoning ({tierModels.apex.join(" / ")})</span>
                   <span>
                     {stats.activeTiers.apex} requests ({apexPercent}%)
                   </span>
@@ -348,7 +431,7 @@ export function SmartProxyBridgeTab() {
               </div>
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
-                  <span>Tier 2: Resilient Execution (DeepSeek / Gemini)</span>
+                  <span>Tier 2: Resilient Execution ({tierModels.resilient.join(" / ")})</span>
                   <span>
                     {stats.activeTiers.resilient} requests ({resilientPercent}%)
                   </span>
@@ -362,7 +445,7 @@ export function SmartProxyBridgeTab() {
               </div>
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
-                  <span>Tier 3: Local Edge Inference (Ollama / Llama-3)</span>
+                  <span>Tier 3: Local Edge Inference ({tierModels.local.join(" / ")})</span>
                   <span>
                     {stats.activeTiers.local} requests ({localPercent}%)
                   </span>
@@ -372,6 +455,176 @@ export function SmartProxyBridgeTab() {
                     className="h-full bg-emerald-500 rounded-full transition-all duration-300"
                     style={{ width: `${stats.totalRouted > 0 ? localPercent : 20}%` }}
                   />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t pt-4">
+            <h4 className="text-md font-semibold text-foreground mb-1">
+              Configured Target Models by Tier
+            </h4>
+            <p className="text-xs text-muted-foreground mb-4">
+              Configure target models for each execution tier. The intent classifier routes tasks
+              dynamically to these models based on task phase and complexity.
+            </p>
+
+            <div className="space-y-4">
+              {/* Tier 1 Apex */}
+              <div className="rounded-md border p-3 bg-muted/20">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-indigo-400">
+                    Tier 1: Apex Reasoning
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Architectural Planning & Complex Reasoning
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {tierModels.apex.map((m) => (
+                    <span
+                      key={m}
+                      className="inline-flex items-center gap-1 rounded bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 text-xs font-medium text-indigo-300"
+                    >
+                      {m}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveModel("apex", m)}
+                        className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
+                        title={`Remove ${m}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Add model (e.g. claude-3-7-sonnet)"
+                    value={inputModels.apex}
+                    onChange={(e) => setInputModels((prev) => ({ ...prev, apex: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddModel("apex");
+                      }
+                    }}
+                    className="flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddModel("apex")}
+                    className="rounded-md bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Tier 2 Resilient */}
+              <div className="rounded-md border p-3 bg-muted/20">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-blue-400">
+                    Tier 2: Resilient Execution
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Code Generation, Tests & Iteration
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {tierModels.resilient.map((m) => (
+                    <span
+                      key={m}
+                      className="inline-flex items-center gap-1 rounded bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-300"
+                    >
+                      {m}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveModel("resilient", m)}
+                        className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
+                        title={`Remove ${m}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Add model (e.g. deepseek-coder)"
+                    value={inputModels.resilient}
+                    onChange={(e) =>
+                      setInputModels((prev) => ({ ...prev, resilient: e.target.value }))
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddModel("resilient");
+                      }
+                    }}
+                    className="flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddModel("resilient")}
+                    className="rounded-md bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Tier 3 Local */}
+              <div className="rounded-md border p-3 bg-muted/20">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-emerald-400">
+                    Tier 3: Local Edge Inference
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Fast Refactor, Formatting & Deterministic
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {tierModels.local.map((m) => (
+                    <span
+                      key={m}
+                      className="inline-flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300"
+                    >
+                      {m}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveModel("local", m)}
+                        className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
+                        title={`Remove ${m}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Add model (e.g. llama-3-8b-instruct)"
+                    value={inputModels.local}
+                    onChange={(e) => setInputModels((prev) => ({ ...prev, local: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddModel("local");
+                      }
+                    }}
+                    className="flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddModel("local")}
+                    className="rounded-md bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors"
+                  >
+                    Add
+                  </button>
                 </div>
               </div>
             </div>

@@ -55,6 +55,25 @@ test("SPB Tiered Registry selects correct model tiers", () => {
   assert.ok(tier3.recommendedModels.includes("llama-3-8b-instruct"));
 });
 
+test("SPB Tiered Registry uses custom configured models when provided", () => {
+  const customModels = {
+    apex: ["my-custom-apex-model"],
+    resilient: ["my-custom-resilient-model"],
+    local: ["my-custom-local-model"],
+  };
+  const tier1 = selectModelTier("ARCHITECTURAL_PLANNING", 0.9, customModels);
+  assert.equal(tier1.tier, "tier_1_apex");
+  assert.deepEqual(tier1.recommendedModels, ["my-custom-apex-model"]);
+
+  const tier2 = selectModelTier("CODE_GENERATION", 0.5, customModels);
+  assert.equal(tier2.tier, "tier_2_resilient");
+  assert.deepEqual(tier2.recommendedModels, ["my-custom-resilient-model"]);
+
+  const tier3 = selectModelTier("FAST_REFACTOR", 0.1, customModels);
+  assert.equal(tier3.tier, "tier_3_local");
+  assert.deepEqual(tier3.recommendedModels, ["my-custom-local-model"]);
+});
+
 test("SPB State Checkpoint persistence and anchor retrieval", () => {
   const sessionId = "test_session_" + Date.now();
   const anchorHash = "sha256:spb_deadbeef12345678";

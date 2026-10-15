@@ -14,7 +14,7 @@
  */
 
 import { z } from "zod";
-import type { TierConfig } from "./tierTypes";
+import { type TierConfig, DEFAULT_SPB_TIER_MODELS } from "./tierTypes";
 import { NOAUTH_PROVIDERS } from "@/shared/constants/providers";
 
 export const providerTierOverrideSchema = z.object({
@@ -45,6 +45,13 @@ export const tierConfigSchema = z.object({
       local: z.number().min(0).max(1).default(0.2),
     })
     .default({ apex: 0.3, resilient: 0.5, local: 0.2 }),
+  tierModels: z
+    .object({
+      apex: z.array(z.string().min(1)).min(1),
+      resilient: z.array(z.string().min(1)).min(1),
+      local: z.array(z.string().min(1)).min(1),
+    })
+    .optional(),
   cacheThreshold: z.number().min(0).default(5000),
   fallbackTimeout: z.number().min(0).default(5000),
 });
@@ -110,6 +117,7 @@ export const DEFAULT_TIER_CONFIG: TierConfig = {
     resilient: 0.5,
     local: 0.2,
   },
+  tierModels: DEFAULT_SPB_TIER_MODELS,
   cacheThreshold: 5000,
   fallbackTimeout: 5000,
 };
@@ -138,6 +146,19 @@ export function mergeTierConfig(userConfig?: Partial<TierConfig>): TierConfig {
     tierWeights: userConfig.tierWeights
       ? { ...DEFAULT_TIER_CONFIG.tierWeights!, ...userConfig.tierWeights }
       : DEFAULT_TIER_CONFIG.tierWeights,
+    tierModels: userConfig.tierModels
+      ? {
+          apex: userConfig.tierModels.apex?.length
+            ? userConfig.tierModels.apex
+            : DEFAULT_SPB_TIER_MODELS.apex,
+          resilient: userConfig.tierModels.resilient?.length
+            ? userConfig.tierModels.resilient
+            : DEFAULT_SPB_TIER_MODELS.resilient,
+          local: userConfig.tierModels.local?.length
+            ? userConfig.tierModels.local
+            : DEFAULT_SPB_TIER_MODELS.local,
+        }
+      : DEFAULT_SPB_TIER_MODELS,
     cacheThreshold: userConfig.cacheThreshold ?? DEFAULT_TIER_CONFIG.cacheThreshold,
     fallbackTimeout: userConfig.fallbackTimeout ?? DEFAULT_TIER_CONFIG.fallbackTimeout,
   };
