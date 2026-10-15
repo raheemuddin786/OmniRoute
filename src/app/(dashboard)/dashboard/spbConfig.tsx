@@ -36,7 +36,7 @@ export function SpbConfig() {
         const res = await fetch("/api/settings/tier-config");
         const data = await res.json();
         if (data.tierConfig?.providerOverrides) {
-          const weights = config?.tierWeights ?? { apex: 0.3, resilient: 0.5, local: 0.2 };
+          const weights = { apex: 0.3, resilient: 0.5, local: 0.2 };
           setConfig({
             enabled: data.tierConfig?.spbEnabled ?? true,
             tierWeights: weights,
