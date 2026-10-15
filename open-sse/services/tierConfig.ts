@@ -38,6 +38,7 @@ export const tierConfigSchema = z.object({
   providerOverrides: z.array(providerTierOverrideSchema).default([]),
   modelOverrides: z.array(modelTierOverrideSchema).default([]),
   freeProviders: z.array(z.string()).default([]),
+  spbEnabled: z.boolean().default(false),
 });
 
 /**
@@ -95,6 +96,7 @@ export const DEFAULT_TIER_CONFIG: TierConfig = {
   providerOverrides: [],
   modelOverrides: [],
   freeProviders: [...new Set([...LEGACY_FREE_PROVIDERS, ...NOAUTH_FREE_PROVIDERS])],
+  spbEnabled: false,
 };
 
 export function validateTierConfig(raw: unknown): TierConfig {

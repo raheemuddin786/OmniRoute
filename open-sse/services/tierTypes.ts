@@ -26,6 +26,7 @@ export interface TierConfig {
   providerOverrides: ProviderTierOverride[];
   modelOverrides: ModelTierOverride[];
   freeProviders: string[];
+  spbEnabled: boolean;
 }
 
 export interface ProviderTierOverride {

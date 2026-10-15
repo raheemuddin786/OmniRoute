@@ -17,6 +17,18 @@ export function initTierConfigTable(): void {
   `);
 }
 
+export interface TierConfig {
+  providerOverrides: Array<{ provider: string; tier: string }>;
+  tierWeights: {
+    apex: number;
+    resilient: number;
+    local: number;
+  };
+  spbEnabled: boolean;
+  cacheThreshold: number;
+  fallbackTimeout: number;
+}
+
 export function saveTierConfig(config: TierConfig): void {
   const db = getDbInstance();
   const serialized = JSON.stringify(config);
@@ -53,8 +65,7 @@ function previewCorruptedValue(value: unknown): string {
 export function loadTierConfigFromDb(): TierConfig | null {
   const db = getDbInstance();
   const row = db.prepare(`SELECT value FROM ${TABLE} WHERE key = 'tier_config'`).get() as
-    | { value: string }
-    | undefined;
+    { value: string } | undefined;
   if (!row) return null;
 
   const raw = row.value;

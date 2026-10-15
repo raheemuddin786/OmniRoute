@@ -8,6 +8,67 @@ import { TaskPhase } from "./intentAnalyzer.ts";
 
 export type ModelTier = "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 
+export interface TierConfig {
+  providerOverrides: Array<{ provider: string; tier: ModelTier }>;
+  tierWeights: Record<ModelTier, number>;
+  cacheThreshold: number;
+  fallbackTimeout: number;
+}
+
+export async function loadTierConfig(): Promise<TierConfig> {
+  const config = (await loadTierConfigFromDb()) ?? {
+    providerOverrides: [],
+    tierWeights: { tier_1_apex: 0.3, tier_2_resilient: 0.5, tier_3_local: 0.2 },
+    cacheThreshold: 5000,
+    fallbackTimeout: 5000,
+  };
+  return config;
+}
+
+export async function saveTierConfig(config: TierConfig): Promise<void> {
+  await saveTierConfig({
+    key: "tier_config",
+    value: JSON.stringify(config),
+    updatedAt: Date.now(),
+  });
+  // Bust in-process cache
+  await setTierConfig(config);
+}
+
+export async function loadTierConfigFromDb(): Promise<TierConfig | null> {
+  const row = await getDbInstance()
+    .prepare("SELECT value FROM tier_config WHERE key = 'tier_config'")
+    .get();
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.value) as TierConfig;
+    // Validate shape
+    if (
+      !parsed.providerOverrides ||
+      !parsed.tierWeights ||
+      typeof parsed.cacheThreshold !== "number" ||
+      typeof parsed.fallbackTimeout !== "number"
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveTierConfigToDb(config: TierConfig): Promise<void> {
+  await saveTierConfig({
+    key: "tier_config",
+    value: JSON.stringify(config),
+    updatedAt: Date.now(),
+  });
+}
+
+export async function getTierConfig(): Promise<TierConfig> {
+  return await loadTierConfig();
+}
+
 export interface TierAssignment {
   tier: ModelTier;
   recommendedModels: string[];
