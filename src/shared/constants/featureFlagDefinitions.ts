@@ -1342,4 +1342,42 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "caution",
   },
+  // ──────────────── Smart Proxy Bridge (SPB-IR) ────────────────
+  {
+    key: "SPB_ENABLED",
+    label: "Smart Proxy Bridge",
+    description:
+      "Enable the SPB-IR intent analyzer, tiered model registry, state checkpointing, and autonomous recovery daemon. When off, the bridge is inert and every request routes through the existing combo/policy path unchanged.",
+    descriptionI18nKey: "featureFlagSpbEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
+    key: "SPB_RECOVERY_DAEMON_ENABLED",
+    label: "SPB Recovery Daemon",
+    description:
+      "Start the autonomous SPB recovery daemon on server startup. The daemon sweeps every minute, prunes stale checkpoints older than 24h, transitions expired OPEN circuit breakers to HALF_OPEN, and clears expired provider connection cooldowns.",
+    descriptionI18nKey: "featureFlagSpbRecoveryDaemonEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: true,
+    warningLevel: "caution",
+  },
+  {
+    key: "SPB_AUTO_SELECTION_ENABLED",
+    label: "SPB Tier Auto-Selection",
+    description:
+      "Allow incoming requests carrying the X-OmniRoute-Strategy: smart-proxy-bridge header to be routed through the SPB-IR tier auto-selection engine (intent classification → complexity score → model tier). When off, the header is ignored and normal combo routing applies.",
+    descriptionI18nKey: "featureFlagSpbAutoSelectionEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  },
 ];
