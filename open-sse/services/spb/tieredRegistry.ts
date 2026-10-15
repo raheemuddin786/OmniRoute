@@ -20,7 +20,8 @@ export interface TierAssignment {
 export function selectModelTier(
   taskPhase: TaskPhase,
   complexityScore: number,
-  customModels?: TierModelsConfig
+  customModels?: TierModelsConfig,
+  requiresTools?: boolean
 ): TierAssignment {
   const models = {
     apex: customModels?.apex?.length ? customModels.apex : DEFAULT_SPB_TIER_MODELS.apex,
@@ -40,8 +41,9 @@ export function selectModelTier(
     };
   }
 
+  // Tier 3 Local is restricted to low-complexity deterministic/refactor tasks without active tool calling requirements
   if (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") {
-    if (complexityScore < 0.3) {
+    if (complexityScore < 0.3 && !requiresTools) {
       return {
         tier: "tier_3_local",
         recommendedModels: models.local,

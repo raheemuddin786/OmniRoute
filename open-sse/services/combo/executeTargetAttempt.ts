@@ -590,8 +590,13 @@ export async function executeTargetAttempt(
       // (independent of universal handoff — always fires when context_cache_protection is on)
       // #3825: write under the SAME effectiveSessionId used by the read site so a
       // sessionless conversation re-pins to this model on its next turn.
+      const isCacheProtected = Boolean(
+        deps.combo.context_cache_protection ||
+        (deps.body as Record<string, unknown>)?._spbActive ||
+        (deps.body as Record<string, unknown>)?._spbDecision
+      );
       if (
-        deps.combo.context_cache_protection &&
+        isCacheProtected &&
         deps.effectiveSessionId &&
         !(deps.body as Record<string, unknown>)?.[SKIP_UNIVERSAL_HANDOFF_FLAG]
       ) {

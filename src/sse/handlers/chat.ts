@@ -1101,6 +1101,30 @@ async function handleChatImplementation(
   // T05 — Task-Aware Smart Routing
   // Detect the semantic task type and optionally route to the optimal model
   let resolvedModelStr = modelStr;
+
+  // SPB-IR Dynamic Dispatch & Incompatible Modality Shield
+  const isSpbModel =
+    resolvedModelStr === "smart-proxy-bridge" ||
+    resolvedModelStr === "smart_proxy_bridge" ||
+    resolvedModelStr === "spb" ||
+    resolvedModelStr.startsWith("spb/");
+
+  const isIncompatibleModality =
+    resolvedModelStr.includes("transcribe") ||
+    resolvedModelStr.includes("whisper") ||
+    resolvedModelStr.includes("diffusion");
+
+  if (spbDecision?.selectedModel && (isSpbRequested || isSpbModel || isIncompatibleModality)) {
+    log.info(
+      "SPB",
+      `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → ${spbDecision.selectedModel} (tier=${spbDecision.tierAssignment.tier}, phase=${spbDecision.intent.taskPhase})`
+    );
+    resolvedModelStr = spbDecision.selectedModel;
+    body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
+  } else if (isSpbActive && body) {
+    body = { ...body, _spbActive: true, _spbDecision: spbDecision };
+  }
+
   let taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;
   if (getTaskRoutingConfig().enabled) {
     telemetry.startPhase("task-route");

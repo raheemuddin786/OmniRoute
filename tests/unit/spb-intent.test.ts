@@ -109,4 +109,34 @@ test("SPB Proxy Bridge orchestration end-to-end flow", async () => {
   assert.ok(decision.intent);
   assert.ok(decision.tierAssignment);
   assert.equal(typeof decision.checkpointRestored, "boolean");
+  assert.ok(typeof decision.selectedModel === "string" && decision.selectedModel.length > 0);
+});
+
+test("SPB Intent Analyzer ensures promptAnchorHash is invariant across conversation turns", () => {
+  const systemMsg = { role: "system", content: "You are an expert AI engineer." };
+  const firstUserMsg = { role: "user", content: "Build a zero-loss proxy router." };
+
+  const turn1 = classifyIntent([systemMsg, firstUserMsg]);
+
+  // Turn 2 adds assistant response and next user turn
+  const turn2 = classifyIntent([
+    systemMsg,
+    firstUserMsg,
+    { role: "assistant", content: "I will help you build the zero-loss router." },
+    { role: "user", content: "Now add tests for prompt anchor stability." },
+  ]);
+
+  // The anchor hash must match exactly across turns so cache checkpoints are restored
+  assert.equal(turn1.promptAnchorHash, turn2.promptAnchorHash);
+});
+
+test("SPB Tiered Registry tool-calling guard forces Tier 2 if tools are present even for simple tasks", () => {
+  // FAST_REFACTOR with 0.1 complexity would normally go to tier_3_local
+  const tierWithoutTools = selectModelTier("FAST_REFACTOR", 0.1);
+  assert.equal(tierWithoutTools.tier, "tier_3_local");
+
+  // With requiresTools = true, it must guard against local model and upgrade to tier_2_resilient
+  const tierWithTools = selectModelTier("FAST_REFACTOR", 0.1, undefined, true);
+  assert.equal(tierWithTools.tier, "tier_2_resilient");
+  assert.ok(tierWithTools.recommendedModels.length > 0);
 });

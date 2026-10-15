@@ -18,6 +18,7 @@ export interface SpbRoutingContext {
 export interface SpbRoutingDecision {
   intent: IntentProfile;
   tierAssignment: TierAssignment;
+  selectedModel: string;
   checkpointRestored: boolean;
   error?: string;
 }
@@ -38,12 +39,13 @@ export async function processSmartProxyRouting(
     // 2. Classify intent with error boundary
     const intent = classifyIntent(messages, tools);
 
-    // 3. Select model tier using dynamic config
+    // 3. Select model tier using dynamic config and tool requirements
     const tierConfig = getTierConfig();
-    const tierAssignment = selectModelTier(
+    let tierAssignment = selectModelTier(
       intent.taskPhase,
       intent.complexityScore,
-      tierConfig?.tierModels
+      tierConfig?.tierModels,
+      intent.requiresTools
     );
 
     // 4. Check for existing checkpoint & state resumption with safe error handling
@@ -53,6 +55,13 @@ export async function processSmartProxyRouting(
       existingCheckpoint = getCheckpoint(sessionId);
       if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
         checkpointRestored = true;
+        // Zero-loss prompt cache preservation: retain existing model tier to maximize upstream KV reuse
+        if (existingCheckpoint.modelTier) {
+          tierAssignment = {
+            ...tierAssignment,
+            tier: existingCheckpoint.modelTier as typeof tierAssignment.tier,
+          };
+        }
       }
     } catch (dbErr) {
       console.warn(
@@ -93,9 +102,15 @@ export async function processSmartProxyRouting(
       console.warn("[SPB Bridge] Telemetry recording warning:", telemErr);
     }
 
+    const selectedModel =
+      tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
+        ? tierAssignment.recommendedModels[0]
+        : "claude-3-5-sonnet";
+
     return {
       intent,
       tierAssignment,
+      selectedModel,
       checkpointRestored,
     };
   } catch (err) {
@@ -112,10 +127,15 @@ export async function processSmartProxyRouting(
     };
 
     const fallbackTier = selectModelTier(fallbackIntent.taskPhase, fallbackIntent.complexityScore);
+    const fallbackModel =
+      fallbackTier.recommendedModels && fallbackTier.recommendedModels.length > 0
+        ? fallbackTier.recommendedModels[0]
+        : "claude-3-5-sonnet";
 
     return {
       intent: fallbackIntent,
       tierAssignment: fallbackTier,
+      selectedModel: fallbackModel,
       checkpointRestored: false,
       error: errorMsg,
     };

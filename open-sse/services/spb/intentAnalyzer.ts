@@ -48,9 +48,17 @@ export function classifyIntent(
   const estimatedTokens = Math.ceil(totalChars / 4);
   const requiresTools = Array.isArray(tools) && tools.length > 0;
 
-  // Compute prompt anchor hash for cache preservation
-  const rawPayloadString = JSON.stringify({ messages, tools: tools?.length || 0 });
-  const promptAnchorHash = simpleHash(rawPayloadString);
+  // Compute prompt anchor hash for cache preservation.
+  // In accordance with KV cache prefix architectures, extract the invariant prompt root:
+  // system prompt(s), initial user instruction, and tool signature count.
+  const systemMessages = messages.filter((m) => m.role === "system");
+  const firstUserMessage = messages.find((m) => m.role === "user");
+  const anchorPayload = {
+    system: systemMessages.map((m) => m.content || ""),
+    rootUser: firstUserMessage?.content || "",
+    tools: Array.isArray(tools) ? tools.length : 0,
+  };
+  const promptAnchorHash = simpleHash(JSON.stringify(anchorPayload));
 
   let taskPhase: TaskPhase = "DETERMINISTIC_ROUTING";
   let complexityScore = 0.2;
