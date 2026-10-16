@@ -198,6 +198,8 @@ import { registerBailianCodingPlanQuotaFetcher } from "@omniroute/open-sse/servi
 import { registerQwenTokenPlanQuotaFetcher } from "@omniroute/open-sse/services/qwenTokenPlanQuotaFetcher.ts";
 import { registerCrofUsageFetcher } from "@omniroute/open-sse/services/crofUsageFetcher.ts";
 import { registerDeepseekQuotaFetcher } from "@omniroute/open-sse/services/deepseekQuotaFetcher.ts";
+import type { SpbRoutingDecision } from "@omniroute/open-sse/services/spb/proxyBridge";
+import { DEFAULT_SPB_TIER_MODELS } from "@omniroute/open-sse/services/tierTypes";
 import {
   registerMoonshotQuotaFetcher,
   registerMoonshotFetchersForNodes,
@@ -433,8 +435,9 @@ function logBreakerStateChange(name: string, from: string, to: string): void {
 
 export { shouldTripProviderBreakerForResult } from "./chatPredicates";
 
-function withSpbHeaders(res: Response, spbDecision: any): Response {
+function withSpbHeaders(res: Response, spbDecision: SpbRoutingDecision | null): Response {
   if (!spbDecision || !res) return res;
+
   try {
     const headers = new Headers(res.headers);
     if (spbDecision.tierAssignment?.tier) {
@@ -816,7 +819,7 @@ async function handleChatImplementation(
     strategyHeader === "spb";
   const isSpbActive = isSpbRequested || isFeatureFlagEnabled("SPB_ENABLED");
 
-  let spbDecision: any = null;
+  let spbDecision: SpbRoutingDecision | null = null;
   if (isSpbActive && Array.isArray(body?.messages)) {
     try {
       const { processSmartProxyRouting } =
@@ -1121,6 +1124,14 @@ async function handleChatImplementation(
     );
     resolvedModelStr = spbDecision.selectedModel;
     body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
+  } else if (isIncompatibleModality) {
+    const shieldModel = DEFAULT_SPB_TIER_MODELS.resilient[0];
+    log.warn(
+      "SPB",
+      `Modality Shield: Incompatible non-chat model detected (${resolvedModelStr}), safely redirecting to ${shieldModel}`
+    );
+    resolvedModelStr = shieldModel;
+    body = { ...body, model: resolvedModelStr };
   } else if (isSpbActive && body) {
     body = { ...body, _spbActive: true, _spbDecision: spbDecision };
   }
