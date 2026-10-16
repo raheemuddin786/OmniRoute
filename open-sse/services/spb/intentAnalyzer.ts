@@ -32,7 +32,7 @@ export function classifyIntent(
   const codeRegex =
     /\b(function|class|const|let|var|import|export|def|return|async|await|interface|type|code|implement|typescript|javascript)\b/i;
   const architectureRegex =
-    /\b(architecture|system|design|rfc|distributed|scaling|microservices|workflow|pipeline)\b/i;
+    /\b(architect|architecture|architectural|system|design|rfc|distributed|scaling|microservices|workflow|pipeline)\b/i;
   const testRegex = /\b(test|assert|spec|coverage|fail|pass|mock|jest|vitest|mocha)\b/i;
   const refactorRegex = /\b(refactor|clean|simplify|rename|extract|format)\b/i;
 

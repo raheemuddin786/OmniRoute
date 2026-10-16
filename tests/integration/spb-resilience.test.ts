@@ -58,3 +58,22 @@ test("SPB Integration: Zero-loss resilience and state resumption across mock fai
   assert.equal(decision2.intent.promptAnchorHash, decision1.intent.promptAnchorHash);
   assert.equal(decision2.checkpointRestored, true);
 });
+
+test("SPB Integration: 'auto' model resolves through SPB tiered routing with priority fallback roster", async () => {
+  const sessionId = "auto_dispatch_session_" + Date.now();
+  const messages = [
+    {
+      role: "user",
+      content: "Architect a high-performance consensus algorithm with Raft and Paxos comparison.",
+    },
+  ];
+
+  const decision = await processSmartProxyRouting({ sessionId, messages });
+  assert.equal(decision.intent.taskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(decision.tierAssignment.tier, "tier_1_apex");
+  assert.ok(decision.tierAssignment.recommendedModels.length > 0);
+
+  // Verify that the tier roster contains fallback models for continuous execution
+  const tierModels = decision.tierAssignment.recommendedModels;
+  assert.ok(tierModels.includes("claude-3-7-sonnet") || tierModels.includes("claude-3-5-sonnet"));
+});

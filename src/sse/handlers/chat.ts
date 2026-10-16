@@ -1110,12 +1110,19 @@ async function handleChatImplementation(
     resolvedModelStr === "smart-proxy-bridge" ||
     resolvedModelStr === "smart_proxy_bridge" ||
     resolvedModelStr === "spb" ||
-    resolvedModelStr.startsWith("spb/");
+    resolvedModelStr.startsWith("spb/") ||
+    (isSpbActive &&
+      (resolvedModelStr === "auto" ||
+        resolvedModelStr === "smart" ||
+        resolvedModelStr === "default" ||
+        resolvedModelStr.startsWith("auto/")));
 
   const isIncompatibleModality =
     resolvedModelStr.includes("transcribe") ||
     resolvedModelStr.includes("whisper") ||
     resolvedModelStr.includes("diffusion");
+
+  let spbCombo: any = null;
 
   if (spbDecision?.selectedModel && (isSpbRequested || isSpbModel || isIncompatibleModality)) {
     log.info(
@@ -1124,6 +1131,24 @@ async function handleChatImplementation(
     );
     resolvedModelStr = spbDecision.selectedModel;
     body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
+
+    // Zero-Loss Fallback: construct prioritized tier combo for continuous autonomous execution
+    const tierModels = [
+      ...spbDecision.tierAssignment.recommendedModels,
+      ...(spbDecision.tierAssignment.tier === "tier_1_apex"
+        ? DEFAULT_SPB_TIER_MODELS.resilient || []
+        : []),
+    ];
+    const uniqueTierModels = Array.from(new Set(tierModels));
+    if (uniqueTierModels.length > 0) {
+      spbCombo = {
+        id: `spb-${spbDecision.tierAssignment.tier}`,
+        name: `SPB ${spbDecision.tierAssignment.tier}`,
+        type: "spb",
+        strategy: "priority",
+        models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
+      };
+    }
   } else if (isIncompatibleModality) {
     const shieldModel = DEFAULT_SPB_TIER_MODELS.resilient[0];
     log.warn(
@@ -1195,7 +1220,7 @@ async function handleChatImplementation(
 
   // Check if model is a combo (has multiple models with fallback)
   telemetry.startPhase("resolve");
-  let combo: any = await getComboForModel(resolvedModelStr);
+  let combo: any = spbCombo || (await getComboForModel(resolvedModelStr));
   if (reasoningDecision?.targetCombo) combo = reasoningDecision.targetCombo;
 
   // "auto" prefix fuzzy matching: "auto/fast" → "auto/best-fast", etc.
