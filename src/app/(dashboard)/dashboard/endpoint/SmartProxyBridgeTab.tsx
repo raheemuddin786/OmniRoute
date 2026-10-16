@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Toggle from "@/shared/components/Toggle";
+import TierModelSelectModal from "@/shared/components/TierModelSelectModal";
 
 interface BridgeStats {
   totalRouted: number;
@@ -54,17 +55,56 @@ export function SmartProxyBridgeTab() {
     resilient: ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
     local: ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
   });
-  const [inputModels, setInputModels] = useState<{
-    apex: string;
-    resilient: string;
-    local: string;
-  }>({
-    apex: "",
-    resilient: "",
-    local: "",
-  });
+
   const [savingConfig, setSavingConfig] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const [tierModalConfig, setTierModalConfig] = useState<{
+    isOpen: boolean;
+    tier: keyof TierModels;
+    tierTitle: string;
+    tierDescription: string;
+  }>({
+    isOpen: false,
+    tier: "apex",
+    tierTitle: "Tier 1: Apex Reasoning",
+    tierDescription: "Architectural Planning & Complex Reasoning",
+  });
+
+  const openTierModal = (tier: keyof TierModels) => {
+    const meta = {
+      apex: {
+        title: "Tier 1: Apex Reasoning",
+        desc: "Architectural Planning & Complex Reasoning (Deep reasoning models)",
+      },
+      resilient: {
+        title: "Tier 2: Resilient Execution",
+        desc: "Code Generation, Tests & Iteration (High-resilience tool models)",
+      },
+      local: {
+        title: "Tier 3: Local Edge Inference",
+        desc: "Fast Refactor, Formatting & Deterministic (Local engines & open-weights)",
+      },
+    }[tier];
+
+    setTierModalConfig({
+      isOpen: true,
+      tier,
+      tierTitle: meta.title,
+      tierDescription: meta.desc,
+    });
+  };
+
+  const handleSaveTierModels = (models: string[]) => {
+    if (!models.length) {
+      setStatusMessage("Each tier must retain at least one target model.");
+      return;
+    }
+    setTierModels((prev) => ({
+      ...prev,
+      [tierModalConfig.tier]: models,
+    }));
+  };
 
   const loadData = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -245,23 +285,6 @@ export function SmartProxyBridgeTab() {
     } finally {
       setToggling(false);
     }
-  };
-
-  const handleAddModel = (tier: keyof TierModels) => {
-    const raw = inputModels[tier].trim();
-    if (!raw) return;
-    if (tierModels[tier].includes(raw)) {
-      setStatusMessage(`Model "${raw}" is already configured in Tier ${tier}.`);
-      return;
-    }
-    setTierModels((prev) => ({
-      ...prev,
-      [tier]: [...prev[tier], raw],
-    }));
-    setInputModels((prev) => ({
-      ...prev,
-      [tier]: "",
-    }));
   };
 
   const handleRemoveModel = (tier: keyof TierModels, modelToRemove: string) => {
@@ -498,27 +521,19 @@ export function SmartProxyBridgeTab() {
                     </span>
                   ))}
                 </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Add model (e.g. claude-3-7-sonnet)"
-                    value={inputModels.apex}
-                    onChange={(e) => setInputModels((prev) => ({ ...prev, apex: e.target.value }))}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddModel("apex");
-                      }
-                    }}
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
+                <div className="flex items-center justify-between pt-2 border-t border-border/50">
                   <button
                     type="button"
-                    onClick={() => handleAddModel("apex")}
-                    className="rounded-md bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors"
+                    onClick={() => openTierModal("apex")}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 text-xs font-medium transition-colors shadow-sm"
                   >
-                    Add
+                    <span className="material-symbols-outlined text-[16px]">account_tree</span>
+                    Select Models from Providers...
                   </button>
+                  <span className="text-[11px] text-muted-foreground">
+                    {tierModels.apex.length} {tierModels.apex.length === 1 ? "model" : "models"}{" "}
+                    configured
+                  </span>
                 </div>
               </div>
 
@@ -550,29 +565,19 @@ export function SmartProxyBridgeTab() {
                     </span>
                   ))}
                 </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Add model (e.g. deepseek-coder)"
-                    value={inputModels.resilient}
-                    onChange={(e) =>
-                      setInputModels((prev) => ({ ...prev, resilient: e.target.value }))
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddModel("resilient");
-                      }
-                    }}
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
+                <div className="flex items-center justify-between pt-2 border-t border-border/50">
                   <button
                     type="button"
-                    onClick={() => handleAddModel("resilient")}
-                    className="rounded-md bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors"
+                    onClick={() => openTierModal("resilient")}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 px-3 py-1.5 text-xs font-medium transition-colors shadow-sm"
                   >
-                    Add
+                    <span className="material-symbols-outlined text-[16px]">account_tree</span>
+                    Select Models from Providers...
                   </button>
+                  <span className="text-[11px] text-muted-foreground">
+                    {tierModels.resilient.length}{" "}
+                    {tierModels.resilient.length === 1 ? "model" : "models"} configured
+                  </span>
                 </div>
               </div>
 
@@ -604,27 +609,19 @@ export function SmartProxyBridgeTab() {
                     </span>
                   ))}
                 </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Add model (e.g. llama-3-8b-instruct)"
-                    value={inputModels.local}
-                    onChange={(e) => setInputModels((prev) => ({ ...prev, local: e.target.value }))}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddModel("local");
-                      }
-                    }}
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
+                <div className="flex items-center justify-between pt-2 border-t border-border/50">
                   <button
                     type="button"
-                    onClick={() => handleAddModel("local")}
-                    className="rounded-md bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors"
+                    onClick={() => openTierModal("local")}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 text-xs font-medium transition-colors shadow-sm"
                   >
-                    Add
+                    <span className="material-symbols-outlined text-[16px]">account_tree</span>
+                    Select Local & Edge Models...
                   </button>
+                  <span className="text-[11px] text-muted-foreground">
+                    {tierModels.local.length} {tierModels.local.length === 1 ? "model" : "models"}{" "}
+                    configured
+                  </span>
                 </div>
               </div>
             </div>
@@ -755,6 +752,16 @@ export function SmartProxyBridgeTab() {
           </ul>
         </div>
       </div>
+
+      <TierModelSelectModal
+        isOpen={tierModalConfig.isOpen}
+        onClose={() => setTierModalConfig((prev) => ({ ...prev, isOpen: false }))}
+        tier={tierModalConfig.tier}
+        tierTitle={tierModalConfig.tierTitle}
+        tierDescription={tierModalConfig.tierDescription}
+        selectedModels={tierModels[tierModalConfig.tier]}
+        onSave={handleSaveTierModels}
+      />
     </div>
   );
 }
