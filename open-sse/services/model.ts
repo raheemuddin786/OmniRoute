@@ -839,6 +839,20 @@ export async function getModelInfoCore(
     };
   }
 
+  // Virtual auto-routing and SPB routing directives
+  if (
+    parsed.model === "auto" ||
+    parsed.model === "smart-proxy-bridge" ||
+    parsed.model === "smart_proxy_bridge" ||
+    parsed.model === "spb"
+  ) {
+    return {
+      provider: "auto",
+      model: parsed.model === "auto" ? "" : parsed.model,
+      extendedContext,
+    };
+  }
+
   // Get aliases (from object or function)
   const aliases = typeof aliasesOrGetter === "function" ? await aliasesOrGetter() : aliasesOrGetter;
 

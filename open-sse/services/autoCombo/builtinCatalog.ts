@@ -89,7 +89,10 @@ type ResolvedAutoVariant =
   { recognized: true; variant: AutoVariant | undefined } | { recognized: false };
 
 export function resolveAutoVariant(modelStr: string, suffix: string): ResolvedAutoVariant {
-  if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, modelStr)) {
+  if (
+    modelStr === "auto" ||
+    Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, modelStr)
+  ) {
     return { recognized: true, variant: AUTO_TEMPLATE_VARIANTS[modelStr] };
   }
   if (VALID_AUTO_VARIANTS.has(suffix as AutoVariant)) {

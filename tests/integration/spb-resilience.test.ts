@@ -77,3 +77,15 @@ test("SPB Integration: 'auto' model resolves through SPB tiered routing with pri
   const tierModels = decision.tierAssignment.recommendedModels;
   assert.ok(tierModels.includes("claude-3-7-sonnet") || tierModels.includes("claude-3-5-sonnet"));
 });
+
+test("SPB Integration: 'auto' directive is protected from model aliases and resolves as virtual combo", async () => {
+  const { resolveModelAliasWithSeedFallback } = await import("../../src/lib/modelAliasResolver.ts");
+  const { getModelInfo } = await import("../../src/sse/services/model.ts");
+
+  const resolved = await resolveModelAliasWithSeedFallback("auto");
+  assert.equal(resolved, "auto");
+
+  const modelInfo = await getModelInfo("auto");
+  assert.equal(modelInfo.provider, "auto");
+  assert.notEqual((modelInfo as { errorType?: string }).errorType, "model_not_found");
+});

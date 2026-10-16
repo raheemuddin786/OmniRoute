@@ -816,7 +816,11 @@ async function handleChatImplementation(
   const isSpbRequested =
     strategyHeader === "smart-proxy-bridge" ||
     strategyHeader === "smart_proxy_bridge" ||
-    strategyHeader === "spb";
+    strategyHeader === "spb" ||
+    modelStr === "smart-proxy-bridge" ||
+    modelStr === "smart_proxy_bridge" ||
+    modelStr === "spb" ||
+    Boolean(modelStr?.startsWith("spb/"));
   const isSpbActive = isSpbRequested || isFeatureFlagEnabled("SPB_ENABLED");
 
   let spbDecision: SpbRoutingDecision | null = null;
