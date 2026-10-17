@@ -784,6 +784,42 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
           return { provider: "antigravity", model: modelId, extendedContext };
         }
       }
+      if (/^deepseek-/i.test(modelId)) {
+        if (activeProviders.has("deepseek-web")) {
+          return { provider: "deepseek-web", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("openrouter")) {
+          return { provider: "openrouter", model: `deepseek/${modelId}`, extendedContext };
+        }
+        if (activeProviders.has("nvidia")) {
+          return {
+            provider: "nvidia",
+            model:
+              modelId.includes("reasoner") || modelId.includes("r1")
+                ? "deepseek-ai/deepseek-v4-pro-0813"
+                : "deepseek-ai/deepseek-v4-flash-0731",
+            extendedContext,
+          };
+        }
+        if (activeProviders.has("cohere")) {
+          return {
+            provider: "cohere",
+            model:
+              modelId.includes("reasoner") || modelId.includes("r1")
+                ? "command-a-reasoning-08-2025"
+                : "command-r-plus-08-2024",
+            extendedContext,
+          };
+        }
+      }
+      if (/^o1/i.test(modelId) || /^o3/i.test(modelId) || /^gpt-/i.test(modelId)) {
+        if (activeProviders.has("openai")) {
+          return { provider: "openai", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("openrouter")) {
+          return { provider: "openrouter", model: `openai/${modelId}`, extendedContext };
+        }
+      }
     }
 
     const aliasesForHint = candidatesToUse.map((p) => PROVIDER_ID_TO_ALIAS[p] || p);
@@ -831,6 +867,42 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     }
     if (activeProviders?.has("antigravity")) {
       return { provider: "antigravity", model: modelId, extendedContext };
+    }
+  }
+  if (/^deepseek-/i.test(modelId)) {
+    if (activeProviders?.has("deepseek-web")) {
+      return { provider: "deepseek-web", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("openrouter")) {
+      return { provider: "openrouter", model: `deepseek/${modelId}`, extendedContext };
+    }
+    if (activeProviders?.has("nvidia")) {
+      return {
+        provider: "nvidia",
+        model:
+          modelId.includes("reasoner") || modelId.includes("r1")
+            ? "deepseek-ai/deepseek-v4-pro-0813"
+            : "deepseek-ai/deepseek-v4-flash-0731",
+        extendedContext,
+      };
+    }
+    if (activeProviders?.has("cohere")) {
+      return {
+        provider: "cohere",
+        model:
+          modelId.includes("reasoner") || modelId.includes("r1")
+            ? "command-a-reasoning-08-2025"
+            : "command-r-plus-08-2024",
+        extendedContext,
+      };
+    }
+  }
+  if (/^o1/i.test(modelId) || /^o3/i.test(modelId) || /^gpt-/i.test(modelId)) {
+    if (activeProviders?.has("openai")) {
+      return { provider: "openai", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("openrouter")) {
+      return { provider: "openrouter", model: `openai/${modelId}`, extendedContext };
     }
   }
 
