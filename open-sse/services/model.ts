@@ -764,6 +764,28 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
   }
 
   if (candidatesToUse.length > 1) {
+    if (activeCandidates.length === 0 && activeProviders && activeProviders.size > 0) {
+      if (/^claude-/i.test(modelId)) {
+        if (activeProviders.has("anthropic")) {
+          return { provider: "anthropic", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("antigravity")) {
+          return { provider: "antigravity", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("claude-web")) {
+          return { provider: "claude-web", model: modelId, extendedContext };
+        }
+      }
+      if (/^gemini-/i.test(modelId) || /^gemma-/i.test(modelId)) {
+        if (activeProviders.has("gemini")) {
+          return { provider: "gemini", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("antigravity")) {
+          return { provider: "antigravity", model: modelId, extendedContext };
+        }
+      }
+    }
+
     const aliasesForHint = candidatesToUse.map((p) => PROVIDER_ID_TO_ALIAS[p] || p);
     const hints = aliasesForHint.slice(0, 2).map((alias) => `${alias}/${modelId}`);
     const message = `Ambiguous model '${modelId}'. Use provider/model prefix (ex: ${hints.join(" or ")}).`;
@@ -795,11 +817,20 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     if (activeProviders?.has("anthropic")) {
       return { provider: "anthropic", model: modelId, extendedContext };
     }
+    if (activeProviders?.has("antigravity")) {
+      return { provider: "antigravity", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("claude-web")) {
+      return { provider: "claude-web", model: modelId, extendedContext };
+    }
   }
   if (/^gemini-/i.test(modelId) || /^gemma-/i.test(modelId)) {
     // Gemini/Gemma models → Gemini provider
     if (activeProviders?.has("gemini")) {
       return { provider: "gemini", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("antigravity")) {
+      return { provider: "antigravity", model: modelId, extendedContext };
     }
   }
 

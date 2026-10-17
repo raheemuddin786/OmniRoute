@@ -11,6 +11,18 @@ const lazyRequire = createRequire(import.meta.url);
 
 const tierCache = new Map<string, TierAssignment>();
 let currentConfig: TierConfig = DEFAULT_TIER_CONFIG;
+let configLoadedFromDb = false;
+
+function ensureConfigLoaded(): void {
+  if (configLoadedFromDb) return;
+  configLoadedFromDb = true;
+  try {
+    const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
+    currentConfig = loadTierConfig();
+  } catch {
+    currentConfig = DEFAULT_TIER_CONFIG;
+  }
+}
 
 type DbPrice = { input: number; output: number };
 const tierPricingSnapshot = new Map<string, DbPrice>();
@@ -162,6 +174,7 @@ function matchGlob(pattern: string, text: string): boolean {
 }
 
 export function classifyTier(provider: string, model: string): TierAssignment {
+  ensureConfigLoaded();
   const key = cacheKey(provider, model);
 
   if (tierCache.has(key)) {
@@ -270,18 +283,21 @@ export function classifyTier(provider: string, model: string): TierAssignment {
 export function setTierConfig(config?: Partial<TierConfig> | null): void {
   if (config === null || config === undefined) {
     try {
-      const { loadTierConfig } = require("../../src/lib/db/tierConfig");
+      const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
       currentConfig = loadTierConfig();
+      configLoadedFromDb = true;
     } catch {
       currentConfig = DEFAULT_TIER_CONFIG;
     }
   } else {
     currentConfig = mergeTierConfig(config);
+    configLoadedFromDb = true;
   }
   tierCache.clear();
 }
 
 export function getTierConfig(): TierConfig {
+  ensureConfigLoaded();
   return { ...currentConfig };
 }
 

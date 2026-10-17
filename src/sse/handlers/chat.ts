@@ -1137,11 +1137,17 @@ async function handleChatImplementation(
     body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
 
     // Zero-Loss Fallback: construct prioritized tier combo for continuous autonomous execution
+    const tier = spbDecision.tierAssignment.tier;
     const tierModels = [
       ...spbDecision.tierAssignment.recommendedModels,
-      ...(spbDecision.tierAssignment.tier === "tier_1_apex"
+      ...(tier === "tier_1_apex"
         ? DEFAULT_SPB_TIER_MODELS.resilient || []
-        : []),
+        : tier === "tier_2_resilient"
+          ? DEFAULT_SPB_TIER_MODELS.apex || []
+          : [
+              ...(DEFAULT_SPB_TIER_MODELS.resilient || []),
+              ...(DEFAULT_SPB_TIER_MODELS.apex || []),
+            ]),
     ];
     const uniqueTierModels = Array.from(new Set(tierModels));
     if (uniqueTierModels.length > 0) {
