@@ -23,6 +23,7 @@ import { parseModel } from "../model.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
 import { clampComboDepth, clampGlobalAttempts, resolveDelayMs } from "./comboPredicates.ts";
+import { comboTargetDecision } from "./statusDecisionTable.ts";
 import {
   deriveRequestCompatibilityRequirements,
   isVisionIncompatibleTarget,
@@ -252,14 +253,26 @@ async function evaluatePinnedResponse(args: {
     return null;
   }
   const pinnedStatus = pinnedResult.status || 500;
-  if (![401, 408, 429, 500, 502, 503, 504].includes(pinnedStatus)) {
-    return pinnedResult;
+  if (pinnedStatus >= 400) {
+    // If it is a 400 Bad Request, verify whether this is an unrecoverable client syntax error
+    // (such as malformed json body) or an upstream model failure (tool syntax rejection, context limit, etc.)
+    if (pinnedStatus === 400) {
+      try {
+        const errorText = await pinnedResult.clone().text();
+        if (comboTargetDecision(400, errorText) === "stop") {
+          return pinnedResult;
+        }
+      } catch {
+        // Fall through on body read errors
+      }
+    }
+    log.warn(
+      "COMBO",
+      `Pinned model ${pinnedModel} failed (${pinnedStatus}), falling through to combo retry/fallback`
+    );
+    return null;
   }
-  log.warn(
-    "COMBO",
-    `Pinned model ${pinnedModel} failed (${pinnedStatus}), falling through to combo retry/fallback`
-  );
-  return null;
+  return pinnedResult;
 }
 
 /**

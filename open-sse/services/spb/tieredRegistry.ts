@@ -35,7 +35,7 @@ export function selectModelTier(
     return {
       tier: "tier_1_apex",
       recommendedModels: models.apex,
-      maxTokens: 8192,
+      maxTokens: 16384,
       temperature: 0.2,
       cacheEnabled: true,
     };
@@ -47,7 +47,7 @@ export function selectModelTier(
       return {
         tier: "tier_3_local",
         recommendedModels: models.local,
-        maxTokens: 2048,
+        maxTokens: 4096,
         temperature: 0.1,
         cacheEnabled: false,
       };
@@ -58,7 +58,7 @@ export function selectModelTier(
   return {
     tier: "tier_2_resilient",
     recommendedModels: models.resilient,
-    maxTokens: 4096,
+    maxTokens: 8192,
     temperature: 0.2,
     cacheEnabled: true,
   };

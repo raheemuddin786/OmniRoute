@@ -10,10 +10,11 @@ export type ComboTargetDecision = "advance" | "stop";
  */
 export const COMBO_400_STOP_ROWS: ReadonlyArray<{ id: string; pattern: RegExp }> = [
   { id: "invalid-message-format", pattern: /invalid message format/i },
-  { id: "malformed-body", pattern: /\bmalformed\b/i },
-  { id: "context-shape", pattern: /\bcontext\b/i },
-  { id: "prompt-shape", pattern: /\bprompt\b/i },
-  { id: "token-shape", pattern: /\btoken\b/i },
+  {
+    id: "malformed-body",
+    pattern: /\bmalformed\s+(?:request\s+body|json)\b|\brequest\s+body\s+is\s+malformed\b/i,
+  },
+  { id: "unparseable-json", pattern: /\bunexpected\s+token\b[\s\S]{0,40}\bin\s+JSON\b/i },
 ];
 
 /**

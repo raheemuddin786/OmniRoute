@@ -51,16 +51,34 @@ export async function processSmartProxyRouting(
     // 4. Check for existing checkpoint & state resumption with safe error handling
     let checkpointRestored = false;
     let existingCheckpoint = null;
+    let restoredModel: string | null = null;
     try {
       existingCheckpoint = getCheckpoint(sessionId);
       if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
         checkpointRestored = true;
         // Zero-loss prompt cache preservation: retain existing model tier to maximize upstream KV reuse
         if (existingCheckpoint.modelTier) {
+          const restoredTier = existingCheckpoint.modelTier as typeof tierAssignment.tier;
+          const recomputed = selectModelTier(
+            restoredTier === "tier_1_apex" ? "ARCHITECTURAL_PLANNING" : "CODE_GENERATION",
+            restoredTier === "tier_1_apex" ? 0.9 : 0.5,
+            tierConfig?.tierModels,
+            intent.requiresTools
+          );
           tierAssignment = {
-            ...tierAssignment,
-            tier: existingCheckpoint.modelTier as typeof tierAssignment.tier,
+            ...recomputed,
+            tier: restoredTier,
           };
+        }
+        if (existingCheckpoint.statePayload) {
+          try {
+            const parsed = JSON.parse(existingCheckpoint.statePayload);
+            if (typeof parsed.modelName === "string" && parsed.modelName.length > 0) {
+              restoredModel = parsed.modelName;
+            }
+          } catch {
+            // Ignore corrupted payload JSON
+          }
         }
       }
     } catch (dbErr) {
@@ -70,6 +88,12 @@ export async function processSmartProxyRouting(
       );
     }
 
+    const selectedModel =
+      restoredModel ||
+      (tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
+        ? tierAssignment.recommendedModels[0]
+        : "claude-3-5-sonnet");
+
     // 5. Save new state checkpoint asynchronously / safely
     try {
       saveCheckpoint({
@@ -77,7 +101,11 @@ export async function processSmartProxyRouting(
         promptAnchorHash: intent.promptAnchorHash,
         taskPhase: intent.taskPhase,
         modelTier: tierAssignment.tier,
-        statePayload: JSON.stringify({ messagesCount: messages.length, timestamp: Date.now() }),
+        statePayload: JSON.stringify({
+          messagesCount: messages.length,
+          timestamp: Date.now(),
+          modelName: selectedModel,
+        }),
         createdAt: Date.now(),
       });
     } catch (dbSaveErr) {
@@ -101,11 +129,6 @@ export async function processSmartProxyRouting(
     } catch (telemErr) {
       console.warn("[SPB Bridge] Telemetry recording warning:", telemErr);
     }
-
-    const selectedModel =
-      tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
-        ? tierAssignment.recommendedModels[0]
-        : "claude-3-5-sonnet";
 
     return {
       intent,
@@ -143,6 +166,15 @@ export async function processSmartProxyRouting(
 }
 
 export function shouldTriggerZeroLossFallback(statusCode: number): boolean {
-  // Trigger recovery on rate limits, gateway errors, or transient upstream failures
-  return statusCode === 429 || statusCode === 502 || statusCode === 503 || statusCode === 504;
+  // Trigger recovery on rate limits, bad requests (model-scoped rejections), credits exhaustion, gateway errors, or timeouts
+  return (
+    statusCode === 400 ||
+    statusCode === 402 ||
+    statusCode === 408 ||
+    statusCode === 429 ||
+    statusCode === 500 ||
+    statusCode === 502 ||
+    statusCode === 503 ||
+    statusCode === 504
+  );
 }

@@ -94,22 +94,45 @@ test("SPB State Checkpoint persistence and anchor retrieval", () => {
 });
 
 test("SPB Zero-Loss Fallback trigger classification", () => {
+  assert.equal(shouldTriggerZeroLossFallback(400), true);
+  assert.equal(shouldTriggerZeroLossFallback(402), true);
+  assert.equal(shouldTriggerZeroLossFallback(408), true);
   assert.equal(shouldTriggerZeroLossFallback(429), true);
+  assert.equal(shouldTriggerZeroLossFallback(500), true);
   assert.equal(shouldTriggerZeroLossFallback(503), true);
   assert.equal(shouldTriggerZeroLossFallback(200), false);
   assert.equal(shouldTriggerZeroLossFallback(401), false);
 });
 
-test("SPB Proxy Bridge orchestration end-to-end flow", async () => {
-  const decision = await processSmartProxyRouting({
-    sessionId: "orchestration_test_" + Date.now(),
-    messages: [{ role: "user", content: "Refactor this typescript class and add unit tests." }],
+test("SPB Proxy Bridge orchestration end-to-end flow with model continuity", async () => {
+  const sessionId = "orchestration_test_" + Date.now();
+  const messagesTurn1 = [
+    { role: "user", content: "Refactor this typescript class and add unit tests." },
+  ];
+  const decision1 = await processSmartProxyRouting({
+    sessionId,
+    messages: messagesTurn1,
   });
 
-  assert.ok(decision.intent);
-  assert.ok(decision.tierAssignment);
-  assert.equal(typeof decision.checkpointRestored, "boolean");
-  assert.ok(typeof decision.selectedModel === "string" && decision.selectedModel.length > 0);
+  assert.ok(decision1.intent);
+  assert.ok(decision1.tierAssignment);
+  assert.equal(decision1.checkpointRestored, false);
+  assert.ok(typeof decision1.selectedModel === "string" && decision1.selectedModel.length > 0);
+
+  // Turn 2 with tool output resumption
+  const messagesTurn2 = [
+    ...messagesTurn1,
+    { role: "assistant", content: "I will refactor." },
+    { role: "user", content: "Now proceed to execute." },
+  ];
+  const decision2 = await processSmartProxyRouting({
+    sessionId,
+    messages: messagesTurn2,
+  });
+
+  assert.equal(decision2.checkpointRestored, true);
+  // Model continuity: turn 2 selectedModel must match turn 1 selectedModel
+  assert.equal(decision2.selectedModel, decision1.selectedModel);
 });
 
 test("SPB Intent Analyzer ensures promptAnchorHash is invariant across conversation turns", () => {
