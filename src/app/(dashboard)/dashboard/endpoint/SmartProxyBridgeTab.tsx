@@ -55,6 +55,7 @@ export function SmartProxyBridgeTab() {
     resilient: ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
     local: ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
   });
+  const [knownComboNames, setKnownComboNames] = useState<Set<string>>(() => new Set());
 
   const [savingConfig, setSavingConfig] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -176,9 +177,10 @@ export function SmartProxyBridgeTab() {
 
     const runFetch = async () => {
       try {
-        const [tierRes, healthRes] = await Promise.all([
+        const [tierRes, healthRes, combosRes] = await Promise.all([
           fetch("/api/settings/tier-config", { signal: controller.signal }),
           fetch("/api/monitoring/health", { signal: controller.signal }),
+          fetch("/api/combos", { signal: controller.signal }).catch(() => null),
         ]);
 
         if (!ignore && tierRes.ok) {
@@ -232,6 +234,15 @@ export function SmartProxyBridgeTab() {
               lastRoutedAt: telem.lastRoutedAt || null,
             });
           }
+        }
+
+        if (!ignore && combosRes?.ok) {
+          const combosData = await combosRes.json();
+          const names = new Set<string>();
+          (combosData.combos || []).forEach((c: { name?: string }) => {
+            if (c.name) names.add(c.name.toLowerCase());
+          });
+          setKnownComboNames(names);
         }
       } catch (err: unknown) {
         if (!controller.signal.aborted) {
@@ -296,6 +307,12 @@ export function SmartProxyBridgeTab() {
       ...prev,
       [tier]: prev[tier].filter((m) => m !== modelToRemove),
     }));
+  };
+
+  const isComboModelName = (name: string): boolean => {
+    if (!name) return false;
+    const lower = name.toLowerCase();
+    return lower.startsWith("combo/") || lower.startsWith("auto/") || knownComboNames.has(lower);
   };
 
   const handleSaveConfig = async () => {
@@ -509,6 +526,14 @@ export function SmartProxyBridgeTab() {
                       key={m}
                       className="inline-flex items-center gap-1 rounded bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 text-xs font-medium text-indigo-300"
                     >
+                      {isComboModelName(m) && (
+                        <span
+                          className="material-symbols-outlined text-[12px] text-purple-400"
+                          title="Combo Model"
+                        >
+                          layers
+                        </span>
+                      )}
                       {m}
                       <button
                         type="button"
@@ -528,7 +553,7 @@ export function SmartProxyBridgeTab() {
                     className="inline-flex items-center gap-1.5 rounded-md bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 text-xs font-medium transition-colors shadow-sm"
                   >
                     <span className="material-symbols-outlined text-[16px]">account_tree</span>
-                    Select Models from Providers...
+                    Select Models & Combos...
                   </button>
                   <span className="text-[11px] text-muted-foreground">
                     {tierModels.apex.length} {tierModels.apex.length === 1 ? "model" : "models"}{" "}
@@ -553,6 +578,14 @@ export function SmartProxyBridgeTab() {
                       key={m}
                       className="inline-flex items-center gap-1 rounded bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-300"
                     >
+                      {isComboModelName(m) && (
+                        <span
+                          className="material-symbols-outlined text-[12px] text-purple-400"
+                          title="Combo Model"
+                        >
+                          layers
+                        </span>
+                      )}
                       {m}
                       <button
                         type="button"
@@ -572,7 +605,7 @@ export function SmartProxyBridgeTab() {
                     className="inline-flex items-center gap-1.5 rounded-md bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 px-3 py-1.5 text-xs font-medium transition-colors shadow-sm"
                   >
                     <span className="material-symbols-outlined text-[16px]">account_tree</span>
-                    Select Models from Providers...
+                    Select Models & Combos...
                   </button>
                   <span className="text-[11px] text-muted-foreground">
                     {tierModels.resilient.length}{" "}
@@ -597,6 +630,14 @@ export function SmartProxyBridgeTab() {
                       key={m}
                       className="inline-flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300"
                     >
+                      {isComboModelName(m) && (
+                        <span
+                          className="material-symbols-outlined text-[12px] text-purple-400"
+                          title="Combo Model"
+                        >
+                          layers
+                        </span>
+                      )}
                       {m}
                       <button
                         type="button"
@@ -616,7 +657,7 @@ export function SmartProxyBridgeTab() {
                     className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 text-xs font-medium transition-colors shadow-sm"
                   >
                     <span className="material-symbols-outlined text-[16px]">account_tree</span>
-                    Select Local & Edge Models...
+                    Select Models & Combos...
                   </button>
                   <span className="text-[11px] text-muted-foreground">
                     {tierModels.local.length} {tierModels.local.length === 1 ? "model" : "models"}{" "}

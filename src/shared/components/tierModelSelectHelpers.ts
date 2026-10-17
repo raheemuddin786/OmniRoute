@@ -23,6 +23,10 @@ export interface TierSelectableModel {
   providerName: string;
   capabilities: ModelCapabilities;
   isConfigured: boolean;
+  isCombo?: boolean;
+  comboStrategy?: string;
+  comboModels?: string[];
+  comboDescription?: string;
 }
 
 const APEX_REASONING_REGEX =
@@ -117,6 +121,63 @@ export function detectModelCapabilities(
     hasToolCalling,
     hasVision,
     contextLength: model.contextLength,
+  };
+}
+
+export function detectComboCapabilities(combo: {
+  id?: string;
+  name?: string;
+  strategy?: string;
+  models?: Array<string | { model?: string; providerId?: string }>;
+  description?: string;
+  computed_context_length?: number;
+}): ModelCapabilities {
+  const comboName = combo.name || combo.id || "";
+  const comboDesc = combo.description || "";
+  const memberModelStrings = (Array.isArray(combo.models) ? combo.models : []).map((m) =>
+    typeof m === "string" ? m : m?.model || ""
+  );
+
+  const hasApexMember = memberModelStrings.some((m) => APEX_REASONING_REGEX.test(m));
+  const nameMatchesApex =
+    APEX_REASONING_REGEX.test(comboName) ||
+    /apex|reasoning|reasoner|thought|thinking|deep-think/i.test(comboName) ||
+    /apex|reasoning|reasoner|thought|thinking/i.test(comboDesc);
+
+  const isApexReasoning = hasApexMember || nameMatchesApex;
+
+  const hasResilientMember = memberModelStrings.some((m) => RESILIENT_EXECUTION_REGEX.test(m));
+  const isResilient = memberModelStrings.length >= 1 || hasResilientMember;
+
+  const allLocal =
+    memberModelStrings.length > 0 &&
+    memberModelStrings.every(
+      (m) =>
+        LOCAL_MODEL_FAMILY_REGEX.test(m) ||
+        m.toLowerCase().startsWith("ollama") ||
+        m.toLowerCase().startsWith("local")
+    );
+  const nameMatchesLocal =
+    LOCAL_MODEL_FAMILY_REGEX.test(comboName) || /local|edge|ollama|offline/i.test(comboName);
+
+  const isLocalEngine = allLocal || nameMatchesLocal;
+
+  const hasToolCalling = !memberModelStrings.every((m) =>
+    /(embedding|tts|rerank|diffusion|whisper)/i.test(m)
+  );
+
+  const hasVision = memberModelStrings.some((m) => isVisionModelId(m));
+
+  return {
+    isApexReasoning,
+    isResilient,
+    isLocalEngine,
+    hasToolCalling,
+    hasVision,
+    contextLength:
+      typeof combo.computed_context_length === "number" && combo.computed_context_length > 0
+        ? combo.computed_context_length
+        : undefined,
   };
 }
 

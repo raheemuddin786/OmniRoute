@@ -281,8 +281,11 @@ function expandRuntimeStep(
   if (depth > maxDepth) return [];
 
   const combos = getCombosArray(allCombos);
-  const nestedCombo = combos.find((combo) => combo.name === step.comboName);
-  if (!nestedCombo || visited.has(step.comboName)) return [];
+  const cleanStepName = step.comboName.replace(/^(combo|auto)\//i, "");
+  const nestedCombo = combos.find(
+    (combo) => combo.name === step.comboName || combo.name === cleanStepName
+  );
+  if (!nestedCombo || visited.has(step.comboName) || visited.has(cleanStepName)) return [];
 
   return resolveNestedComboTargets(
     nestedCombo,
@@ -335,7 +338,8 @@ export function getComboFromData(
   combosData: ComboCollectionLike
 ): ComboLike | null {
   const combos = getCombosArray(combosData);
-  const combo = combos.find((c) => c.name === modelStr);
+  const cleanName = modelStr.replace(/^(combo|auto)\//i, "");
+  const combo = combos.find((c) => c.name === modelStr || c.name === cleanName);
   if (combo?.models && combo.models.length > 0) {
     return combo;
   }

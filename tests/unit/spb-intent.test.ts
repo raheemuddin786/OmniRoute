@@ -12,6 +12,11 @@ import {
   __resetSpbStateInitForTests,
 } from "../../src/lib/db/spbState.ts";
 import { resetDbInstance } from "../../src/lib/db/core.ts";
+import {
+  detectComboCapabilities,
+  isModelEligibleForTier,
+} from "../../src/shared/components/tierModelSelectHelpers.ts";
+import { normalizeComboStep } from "../../src/lib/combos/steps.ts";
 
 // Close the DB handle after all tests so the native test runner does not hang.
 test.after(() => {
@@ -161,5 +166,92 @@ test("SPB Tiered Registry tool-calling guard forces Tier 2 if tools are present 
   // With requiresTools = true, it must guard against local model and upgrade to tier_2_resilient
   const tierWithTools = selectModelTier("FAST_REFACTOR", 0.1, undefined, true);
   assert.equal(tierWithTools.tier, "tier_2_resilient");
+
+  test("SPB combo capabilities detection and tier categorization", () => {
+    // 1. Apex combo with o3-mini member
+    const apexCombo = {
+      name: "deep-thinker",
+      strategy: "priority",
+      models: ["openai/o3-mini", "anthropic/claude-3-5-sonnet"],
+      description: "Deep thinking combo",
+    };
+    const apexCaps = detectComboCapabilities(apexCombo);
+    assert.equal(apexCaps.isApexReasoning, true);
+    assert.equal(isModelEligibleForTier("apex", apexCaps), true);
+
+    // 2. Resilient execution combo
+    const resilientCombo = {
+      name: "coder-swarm",
+      strategy: "weighted",
+      models: ["anthropic/claude-3-5-sonnet", "deepseek/deepseek-coder"],
+      description: "Multi-model coding team",
+    };
+    const resilientCaps = detectComboCapabilities(resilientCombo);
+    assert.equal(resilientCaps.isResilient, true);
+    assert.equal(isModelEligibleForTier("resilient", resilientCaps), true);
+
+    // 3. Local engine combo
+    const localCombo = {
+      name: "edge-inference",
+      strategy: "priority",
+      models: ["ollama/llama3:8b", "ollama/mistral:7b"],
+      description: "Offline edge inference",
+    };
+    const localCaps = detectComboCapabilities(localCombo);
+    assert.equal(localCaps.isLocalEngine, true);
+    assert.equal(isModelEligibleForTier("local", localCaps), true);
+  });
+
+  test("SPB Tiered Registry correctly assigns custom configured combo models", () => {
+    const customModels = {
+      apex: ["combo/apex-reasoning-fleet", "o1-pro"],
+      resilient: ["code-gen-fusion", "gpt-4o"],
+      local: ["combo/edge-offline"],
+    };
+
+    const apexAssignment = selectModelTier("ARCHITECTURAL_PLANNING", 0.95, customModels);
+    assert.equal(apexAssignment.tier, "tier_1_apex");
+    assert.deepEqual(apexAssignment.recommendedModels, customModels.apex);
+
+    const resilientAssignment = selectModelTier("CODE_GENERATION", 0.6, customModels);
+    assert.equal(resilientAssignment.tier, "tier_2_resilient");
+    assert.deepEqual(resilientAssignment.recommendedModels, customModels.resilient);
+
+    const localAssignment = selectModelTier("FAST_REFACTOR", 0.1, customModels, false);
+    assert.equal(localAssignment.tier, "tier_3_local");
+    assert.deepEqual(localAssignment.recommendedModels, customModels.local);
+  });
+
+  test("SPB Combo Step Normalization cleanly expands combo references and combo/ prefixes", () => {
+    const mockCombos = [
+      { name: "apex-reasoning-fleet", models: ["openai/o1", "anthropic/claude-3-7-sonnet"] },
+      {
+        name: "code-gen-fusion",
+        models: ["anthropic/claude-3-5-sonnet", "deepseek/deepseek-coder"],
+      },
+    ];
+
+    // Normalized plain combo name
+    const step1 = normalizeComboStep("code-gen-fusion", { allCombos: mockCombos });
+    assert.ok(step1);
+    assert.equal(step1.kind, "combo-ref");
+    assert.equal((step1 as { comboName: string }).comboName, "code-gen-fusion");
+
+    // Normalized combo/ prefixed reference
+    const step2 = normalizeComboStep("combo/apex-reasoning-fleet", { allCombos: mockCombos });
+    assert.ok(step2);
+    assert.equal(step2.kind, "combo-ref");
+    assert.equal((step2 as { comboName: string }).comboName, "apex-reasoning-fleet");
+
+    // Object format with model: "combo/apex-reasoning-fleet"
+    const step3 = normalizeComboStep(
+      { model: "combo/apex-reasoning-fleet" },
+      { allCombos: mockCombos }
+    );
+    assert.ok(step3);
+    assert.equal(step3.kind, "combo-ref");
+    assert.equal((step3 as { comboName: string }).comboName, "apex-reasoning-fleet");
+  });
+
   assert.ok(tierWithTools.recommendedModels.length > 0);
 });

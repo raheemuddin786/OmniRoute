@@ -8,6 +8,7 @@ import {
   type CapabilityFilterKey,
   type TierSelectableModel,
   detectModelCapabilities,
+  detectComboCapabilities,
   isModelEligibleForTier,
   matchesCapabilityFilter,
   getTierColorClass,
@@ -41,6 +42,15 @@ interface ProviderConnection {
   status?: string;
 }
 
+interface ComboItem {
+  id?: string;
+  name?: string;
+  strategy?: string;
+  models?: Array<string | { model?: string; providerId?: string }>;
+  description?: string;
+  computed_context_length?: number;
+}
+
 export default function TierModelSelectModal({
   isOpen,
   onClose,
@@ -53,6 +63,7 @@ export default function TierModelSelectModal({
   const [localSelected, setLocalSelected] = useState<Set<string>>(() => new Set(selectedModels));
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [customModels, setCustomModels] = useState<Record<string, unknown[]>>({});
+  const [combos, setCombos] = useState<ComboItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCapabilityFilter, setActiveCapabilityFilter] = useState<CapabilityFilterKey>("all");
   const [selectedProviderFilter, setSelectedProviderFilter] = useState<string>("all");
@@ -79,9 +90,10 @@ export default function TierModelSelectModal({
 
     const loadData = async () => {
       try {
-        const [connRes, customRes] = await Promise.all([
+        const [connRes, customRes, combosRes] = await Promise.all([
           fetch("/api/providers").catch(() => null),
           fetch("/api/provider-models").catch(() => null),
+          fetch("/api/combos").catch(() => null),
         ]);
 
         if (!cancelled && connRes?.ok) {
@@ -93,8 +105,13 @@ export default function TierModelSelectModal({
           const customData = await customRes.json();
           setCustomModels(customData.models || {});
         }
+
+        if (!cancelled && combosRes?.ok) {
+          const combosData = await combosRes.json();
+          setCombos(combosData.combos || []);
+        }
       } catch (err) {
-        console.error("Failed to load providers or models for tier selector:", err);
+        console.error("Failed to load providers, models, or combos for tier selector:", err);
       }
     };
 
@@ -192,8 +209,36 @@ export default function TierModelSelectModal({
       });
     });
 
+    // 3. Combos pool
+    combos.forEach((combo) => {
+      const comboName = combo.name || combo.id;
+      if (!comboName) return;
+      const fullValue = comboName;
+      const caps = detectComboCapabilities(combo);
+      if (!seenValues.has(fullValue)) {
+        seenValues.add(fullValue);
+        const memberModels = (Array.isArray(combo.models) ? combo.models : []).map((m) =>
+          typeof m === "string" ? m : m?.model || ""
+        );
+        pool.push({
+          id: comboName,
+          name: comboName,
+          fullValue,
+          providerId: "combo",
+          providerAlias: "combo",
+          providerName: "Combos",
+          capabilities: caps,
+          isConfigured: true,
+          isCombo: true,
+          comboStrategy: combo.strategy || "priority",
+          comboModels: memberModels,
+          comboDescription: combo.description || undefined,
+        });
+      }
+    });
+
     return pool;
-  }, [allProvidersMap, activeProviderIds, connections, customModels]);
+  }, [allProvidersMap, activeProviderIds, connections, customModels, combos]);
 
   // Strictly filter models for the selected tier and capability filters
   const filteredModels = useMemo(() => {
@@ -227,7 +272,18 @@ export default function TierModelSelectModal({
         const matchesProvider =
           model.providerName.toLowerCase().includes(q) ||
           model.providerAlias.toLowerCase().includes(q);
-        if (!matchesName && !matchesId && !matchesFull && !matchesProvider) {
+        const matchesDesc = model.comboDescription?.toLowerCase().includes(q);
+        const matchesStrategy = model.comboStrategy?.toLowerCase().includes(q);
+        const matchesTargets = model.comboModels?.some((m) => m.toLowerCase().includes(q));
+        if (
+          !matchesName &&
+          !matchesId &&
+          !matchesFull &&
+          !matchesProvider &&
+          !matchesDesc &&
+          !matchesStrategy &&
+          !matchesTargets
+        ) {
           return false;
         }
       }
@@ -270,6 +326,8 @@ export default function TierModelSelectModal({
     });
 
     return Array.from(map.values()).sort((a, b) => {
+      if (a.id === "combo" && b.id !== "combo") return -1;
+      if (a.id !== "combo" && b.id === "combo") return 1;
       if (a.isConfigured && !b.isConfigured) return -1;
       if (!a.isConfigured && b.isConfigured) return 1;
       return a.name.localeCompare(b.name);
@@ -282,6 +340,7 @@ export default function TierModelSelectModal({
       if (isModelChecked(model)) {
         next.delete(model.fullValue);
         next.delete(model.id);
+        next.delete(`combo/${model.id}`);
         next.delete(`${model.providerAlias}/${model.id}`);
         next.delete(`${model.providerId}/${model.id}`);
       } else {
@@ -295,6 +354,7 @@ export default function TierModelSelectModal({
     return (
       localSelected.has(model.fullValue) ||
       localSelected.has(model.id) ||
+      localSelected.has(`combo/${model.id}`) ||
       localSelected.has(`${model.providerAlias}/${model.id}`) ||
       localSelected.has(`${model.providerId}/${model.id}`)
     );
@@ -314,6 +374,7 @@ export default function TierModelSelectModal({
       filteredModels.forEach((m) => {
         next.delete(m.fullValue);
         next.delete(m.id);
+        next.delete(`combo/${m.id}`);
         next.delete(`${m.providerAlias}/${m.id}`);
         next.delete(`${m.providerId}/${m.id}`);
       });
@@ -536,7 +597,13 @@ export default function TierModelSelectModal({
               }`}
             >
               <span className="flex items-center gap-1.5 truncate min-w-0">
-                <ProviderIcon providerId={p.id} size={16} />
+                {p.id === "combo" ? (
+                  <span className="material-symbols-outlined text-[16px] text-purple-400 shrink-0">
+                    layers
+                  </span>
+                ) : (
+                  <ProviderIcon providerId={p.id} size={16} />
+                )}
                 <span className="truncate">{p.name}</span>
                 {p.isConfigured && (
                   <span
@@ -615,12 +682,39 @@ export default function TierModelSelectModal({
                         <span className="text-[10px] text-muted-foreground font-mono bg-muted/60 px-1.5 py-0.2 rounded border border-border">
                           {model.fullValue}
                         </span>
+                        {model.isCombo && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                            <span className="material-symbols-outlined text-[11px]">layers</span>
+                            Combo: {model.comboStrategy || "priority"}
+                          </span>
+                        )}
                       </div>
+
+                      {model.isCombo && model.comboModels && model.comboModels.length > 0 && (
+                        <div className="text-[11px] text-muted-foreground mt-0.5 font-mono truncate">
+                          Targets: {model.comboModels.slice(0, 4).join(", ")}
+                          {model.comboModels.length > 4
+                            ? ` +${model.comboModels.length - 4} more`
+                            : ""}
+                        </div>
+                      )}
+
+                      {model.isCombo && model.comboDescription && (
+                        <div className="text-[11px] text-muted-foreground/80 mt-0.5 line-clamp-1 italic">
+                          {model.comboDescription}
+                        </div>
+                      )}
 
                       {/* Capabilities Badges */}
                       <div className="flex items-center gap-1.5 flex-wrap mt-1">
                         <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                          <ProviderIcon providerId={model.providerId} size={12} />
+                          {model.isCombo ? (
+                            <span className="material-symbols-outlined text-[13px] text-purple-400">
+                              layers
+                            </span>
+                          ) : (
+                            <ProviderIcon providerId={model.providerId} size={12} />
+                          )}
                           {model.providerName}
                         </span>
 
