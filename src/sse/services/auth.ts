@@ -51,6 +51,7 @@ import {
   type ProviderConnectionView,
 } from "@/lib/db/providers/lazyConnectionView";
 import { buildConnectionConcurrencyFields } from "./connectionConcurrencyFields.ts"; // #13700
+import { getConnectionInFlight, acquireConnectionFlight } from "./connectionConcurrencyTracker.ts";
 import {
   DEFAULT_QUOTA_THRESHOLD_PERCENT,
   getCachedClaudeQuotaScopeDecision as readClaudeScope,
@@ -968,6 +969,18 @@ async function materializeConnection(
     options.reserveOAuthSession === true && connection.authType === "oauth" && options.sessionKey
       ? reserveOAuthSession(connection.id, options.sessionKey)
       : undefined;
+  const releaseConnectionFlight =
+    options.reserveOAuthSession === true ? acquireConnectionFlight(connection.id) : undefined;
+  const combinedRelease =
+    releaseOAuthSession || releaseConnectionFlight
+      ? () => {
+          try {
+            releaseOAuthSession?.();
+          } finally {
+            releaseConnectionFlight?.();
+          }
+        }
+      : undefined;
   return {
     apiKey: connection.apiKey,
     accessToken: connection.accessToken,
@@ -993,7 +1006,7 @@ async function materializeConnection(
     rateLimitedUntil: connection.rateLimitedUntil,
     ...buildConnectionConcurrencyFields(connection),
     quotaWindowThresholds: connection.quotaWindowThresholds ?? null,
-    ...(releaseOAuthSession ? { releaseOAuthSession } : {}),
+    ...(combinedRelease ? { releaseOAuthSession: combinedRelease, releaseConnectionFlight } : {}),
     ...buildAntigravityRoutingFields(extra.routingLease, connection.id, extra.requestedModel),
     ...extra,
   };
@@ -1814,13 +1827,18 @@ export async function getProviderCredentials(
     }
 
     const orderedConnections = [...leasePolicy.connections].sort((a, b) => {
-      if (a.authType !== "oauth" || b.authType !== "oauth") return 0;
+      const aFlight = getConnectionInFlight(a.id);
+      const bFlight = getConnectionInFlight(b.id);
+      if (aFlight !== bFlight) return aFlight - bFlight;
       const priorityDelta = (a.priority || 999) - (b.priority || 999);
       if (priorityDelta !== 0) return priorityDelta;
-      return (
-        getOAuthSessionAvailability(b.id, options.sessionKey) -
-        getOAuthSessionAvailability(a.id, options.sessionKey)
-      );
+      if (a.authType === "oauth" && b.authType === "oauth") {
+        return (
+          getOAuthSessionAvailability(b.id, options.sessionKey) -
+          getOAuthSessionAvailability(a.id, options.sessionKey)
+        );
+      }
+      return 0;
     });
 
     const providerStrategyOverrides = (settings.providerStrategies || {}) as Record<
@@ -1891,8 +1909,13 @@ export async function getProviderCredentials(
         const current = byRecency[0];
         const currentCount = current?.consecutiveUseCount || 0;
 
-        if (current && current.lastUsedAt && currentCount < stickyLimit) {
-          // Stay with current account
+        if (
+          current &&
+          current.lastUsedAt &&
+          currentCount < stickyLimit &&
+          getConnectionInFlight(current.id) === 0
+        ) {
+          // Stay with current account ONLY if it is not currently busy with an in-flight request
           connection = current;
           log.debug(
             "AUTH",
@@ -2007,11 +2030,13 @@ export async function getProviderCredentials(
       if (options.lease) commitSelectionSideEffects = commit;
       else await commit();
     } else if (strategy === "cost-optimized") {
-      // Cost Optimized: sort by priority ascending (lower = cheaper/preferred)
-      // Future: can be enhanced with actual cost data per provider
-      const sorted = [...orderedConnections].sort(
-        (a, b) => (a.priority || 999) - (b.priority || 999)
-      );
+      // Cost Optimized: sort by priority ascending, but prefer idle under concurrent load
+      const sorted = [...orderedConnections].sort((a, b) => {
+        const aFlight = getConnectionInFlight(a.id);
+        const bFlight = getConnectionInFlight(b.id);
+        if (aFlight !== bFlight) return aFlight - bFlight;
+        return (a.priority || 999) - (b.priority || 999);
+      });
       connection = sorted[0];
     } else if (strategy === "strict-random") {
       // Strict Random: shuffle deck — uses each account once before reshuffling
@@ -2026,17 +2051,21 @@ export async function getProviderCredentials(
         connection = orderedConnections.find((c) => c.id === selectedId) || orderedConnections[0];
       }
     } else {
-      // Default: fill-first (already sorted by priority in getProviderConnections)
-      connection = orderedConnections[0];
+      // Default: fill-first (already sorted by lowest in-flight + priority in orderedConnections)
+      const idleConn = orderedConnections.find((c) => getConnectionInFlight(c.id) === 0);
+      connection = idleConn ?? orderedConnections[0];
     }
 
     if (options.reserveOAuthSession === true && connection?.authType === "oauth") {
       const selectedPriority = connection.priority || 999;
       const selectedAvailability = getOAuthSessionAvailability(connection.id, options.sessionKey);
+      const selectedFlight = getConnectionInFlight(connection.id);
       const moreAvailablePeer = [...orderedConnections]
         .filter(
           (candidate) =>
-            candidate.authType === "oauth" && (candidate.priority || 999) <= selectedPriority + 1
+            candidate.authType === "oauth" &&
+            (candidate.priority || 999) <= selectedPriority + 1 &&
+            getConnectionInFlight(candidate.id) <= selectedFlight
         )
         .sort(
           (a, b) =>

@@ -2020,6 +2020,7 @@ async function handleSingleModelChat(
       preselectedCredentials = null;
 
       if (credentials && "leaseUnavailable" in credentials && credentials.leaseUnavailable) {
+        credentials.releaseOAuthSession?.();
         excludedConnectionIds.add(agyLease.trackAntigravityLeaseBusy(agy, credentials));
         if (!hasForcedConnection) continue;
         return agyLease.buildAntigravityPoolBusyResponse(agy.earliestRetryHintAtMs ?? Date.now());
@@ -2027,7 +2028,10 @@ async function handleSingleModelChat(
 
       if (runtimeOptions.managedLease && credentials) {
         const leaseError = buildManagedLeaseSelectionErrorResponse(credentials);
-        if (leaseError) return leaseError;
+        if (leaseError) {
+          credentials.releaseOAuthSession?.();
+          return leaseError;
+        }
       }
 
       // #9467: also treat the auth layer's allExpired verdict as a no-credentials
@@ -2088,12 +2092,18 @@ async function handleSingleModelChat(
           typeof lastError === "string" &&
           (lastError.includes("RATE_LIMIT_QUEUE_TIMEOUT") ||
             lastError.includes("RATE_LIMIT_QUEUE_WEDGED"));
+        const isLocalSaturation =
+          typeof lastError === "string" &&
+          (lastError.includes("antigravity_pool_busy") ||
+            lastError.includes("chat_admission_busy") ||
+            lastError.includes("all_connections_busy"));
         if (
           !forceLiveComboTest &&
           credentials?.allRateLimited &&
           isProviderBreakerFailureStatus(breakerFailureStatus) &&
           !isNetworkError &&
           !isQueueTimeout &&
+          !isLocalSaturation &&
           // Probe-origin dispatches must not degrade the provider breaker —
           // routing state untouched (#9817).
           !(await shouldIsolateProbeFailures())

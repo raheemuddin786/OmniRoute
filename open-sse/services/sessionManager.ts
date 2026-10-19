@@ -339,6 +339,12 @@ export function extractExternalSessionId(
     h.get("x_session_id") ?? // Underscore variant (direct HTTP / custom clients)
     h.get("x-omniroute-session") ?? // OmniRoute-specific form
     h.get("session-id") ?? // Bare session-id
+    h.get("x-conversation-id") ??
+    h.get("x-cline-task-id") ??
+    h.get("x-cursor-session-id") ??
+    h.get("x-agent-session-id") ??
+    h.get("x-agent-id") ??
+    h.get("x-task-id") ??
     null;
   if (!raw || !raw.trim()) return null;
   // Prefix "ext:" to ensure no collision with internal SHA-256 hash IDs
