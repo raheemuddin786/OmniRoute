@@ -24,37 +24,9 @@ export interface TierModelsConfig {
 }
 
 export const DEFAULT_SPB_TIER_MODELS: TierModelsConfig = {
-  apex: [
-    "claude-3-7-sonnet",
-    "deepseek-reasoner",
-    "gemini-3.7-flash-high",
-    "claude-opus-4-6-thinking",
-    "deepseek-ai/deepseek-v4-pro-0813",
-    "command-a-reasoning-08-2025",
-    "o1",
-    "o3-mini",
-  ],
-  resilient: [
-    "claude-3-5-sonnet",
-    "claude-sonnet-4-6",
-    "gemini-2.5-flash",
-    "gemini-pro-agent",
-    "deepseek-chat",
-    "deepseek-ai/deepseek-v4-flash-0731",
-    "moonshotai/kimi-k3",
-    "command-r-plus-08-2024",
-    "gpt-4o",
-    "gpt-4o-mini",
-  ],
-  local: [
-    "llama-3-8b-instruct",
-    "llama-3.3-70b-instruct",
-    "llama-3.1-8b-instruct",
-    "qwen2.5-coder-32b-instruct",
-    "deepseek-r1:8b",
-    "mistral-7b",
-    "ollama-local",
-  ],
+  apex: [],
+  resilient: [],
+  local: [],
 };
 
 export interface TierConfig {

@@ -10,6 +10,24 @@ import {
   __resetSpbStateInitForTests,
 } from "../../src/lib/db/spbState.ts";
 import { resetDbInstance } from "../../src/lib/db/core.ts";
+import { saveTierConfig } from "../../src/lib/db/tierConfig.ts";
+import { setTierConfig } from "../../open-sse/services/tierResolver.ts";
+import { DEFAULT_TIER_CONFIG } from "../../open-sse/services/tierConfig.ts";
+
+const testTierConfig = {
+  ...DEFAULT_TIER_CONFIG,
+  spbEnabled: true,
+  tierModels: {
+    apex: ["test-resilience-apex-1", "test-resilience-apex-2"],
+    resilient: ["test-resilience-resilient-1"],
+    local: ["test-resilience-local-1"],
+  },
+};
+
+test.before(() => {
+  saveTierConfig(testTierConfig);
+  setTierConfig(testTierConfig);
+});
 
 // Close the DB handle after all tests so the native test runner does not hang.
 test.after(() => {
@@ -73,9 +91,9 @@ test("SPB Integration: 'auto' model resolves through SPB tiered routing with pri
   assert.equal(decision.tierAssignment.tier, "tier_1_apex");
   assert.ok(decision.tierAssignment.recommendedModels.length > 0);
 
-  // Verify that the tier roster contains fallback models for continuous execution
+  // Verify that the tier roster contains the user-configured models for apex tier
   const tierModels = decision.tierAssignment.recommendedModels;
-  assert.ok(tierModels.includes("claude-3-7-sonnet") || tierModels.includes("claude-3-5-sonnet"));
+  assert.deepEqual(tierModels, ["test-resilience-apex-1", "test-resilience-apex-2"]);
 });
 
 test("SPB Integration: 'auto' directive is protected from model aliases and resolves as virtual combo", async () => {

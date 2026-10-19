@@ -51,9 +51,9 @@ export function SmartProxyBridgeTab() {
     local: 0.2,
   });
   const [tierModels, setTierModels] = useState<TierModels>({
-    apex: ["claude-3-5-sonnet", "gpt-4o", "claude-opus-5-5"],
-    resilient: ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
-    local: ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
+    apex: [],
+    resilient: [],
+    local: [],
   });
   const [knownComboNames, setKnownComboNames] = useState<Set<string>>(() => new Set());
 
@@ -97,10 +97,6 @@ export function SmartProxyBridgeTab() {
   };
 
   const handleSaveTierModels = (models: string[]) => {
-    if (!models.length) {
-      setStatusMessage("Each tier must retain at least one target model.");
-      return;
-    }
     setTierModels((prev) => ({
       ...prev,
       [tierModalConfig.tier]: models,
@@ -129,19 +125,11 @@ export function SmartProxyBridgeTab() {
         }
         if (tierData.tierModels) {
           setTierModels({
-            apex:
-              Array.isArray(tierData.tierModels.apex) && tierData.tierModels.apex.length > 0
-                ? tierData.tierModels.apex
-                : ["claude-3-5-sonnet", "gpt-4o", "claude-opus-5-5"],
-            resilient:
-              Array.isArray(tierData.tierModels.resilient) &&
-              tierData.tierModels.resilient.length > 0
-                ? tierData.tierModels.resilient
-                : ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
-            local:
-              Array.isArray(tierData.tierModels.local) && tierData.tierModels.local.length > 0
-                ? tierData.tierModels.local
-                : ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
+            apex: Array.isArray(tierData.tierModels.apex) ? tierData.tierModels.apex : [],
+            resilient: Array.isArray(tierData.tierModels.resilient)
+              ? tierData.tierModels.resilient
+              : [],
+            local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
           });
         }
       }
@@ -201,19 +189,11 @@ export function SmartProxyBridgeTab() {
           }
           if (tierData.tierModels) {
             setTierModels({
-              apex:
-                Array.isArray(tierData.tierModels.apex) && tierData.tierModels.apex.length > 0
-                  ? tierData.tierModels.apex
-                  : ["claude-3-5-sonnet", "gpt-4o", "claude-opus-5-5"],
-              resilient:
-                Array.isArray(tierData.tierModels.resilient) &&
-                tierData.tierModels.resilient.length > 0
-                  ? tierData.tierModels.resilient
-                  : ["claude-3-5-sonnet", "gpt-4o-mini", "deepseek-coder", "gemini-1-5-pro"],
-              local:
-                Array.isArray(tierData.tierModels.local) && tierData.tierModels.local.length > 0
-                  ? tierData.tierModels.local
-                  : ["llama-3-8b-instruct", "mistral-7b", "ollama-local"],
+              apex: Array.isArray(tierData.tierModels.apex) ? tierData.tierModels.apex : [],
+              resilient: Array.isArray(tierData.tierModels.resilient)
+                ? tierData.tierModels.resilient
+                : [],
+              local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
             });
           }
         }
@@ -299,10 +279,6 @@ export function SmartProxyBridgeTab() {
   };
 
   const handleRemoveModel = (tier: keyof TierModels, modelToRemove: string) => {
-    if (tierModels[tier].length <= 1) {
-      setStatusMessage(`Each tier must retain at least one target model.`);
-      return;
-    }
     setTierModels((prev) => ({
       ...prev,
       [tier]: prev[tier].filter((m) => m !== modelToRemove),
@@ -457,7 +433,10 @@ export function SmartProxyBridgeTab() {
             <div className="space-y-4">
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
-                  <span>Tier 1: Apex Reasoning ({tierModels.apex.join(" / ")})</span>
+                  <span>
+                    Tier 1: Apex Reasoning (
+                    {tierModels.apex.length > 0 ? tierModels.apex.join(" / ") : "None configured"})
+                  </span>
                   <span>
                     {stats.activeTiers.apex} requests ({apexPercent}%)
                   </span>
@@ -471,7 +450,13 @@ export function SmartProxyBridgeTab() {
               </div>
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
-                  <span>Tier 2: Resilient Execution ({tierModels.resilient.join(" / ")})</span>
+                  <span>
+                    Tier 2: Resilient Execution (
+                    {tierModels.resilient.length > 0
+                      ? tierModels.resilient.join(" / ")
+                      : "None configured"}
+                    )
+                  </span>
                   <span>
                     {stats.activeTiers.resilient} requests ({resilientPercent}%)
                   </span>
@@ -485,7 +470,11 @@ export function SmartProxyBridgeTab() {
               </div>
               <div>
                 <div className="flex justify-between text-sm font-medium mb-1">
-                  <span>Tier 3: Local Edge Inference ({tierModels.local.join(" / ")})</span>
+                  <span>
+                    Tier 3: Local Edge Inference (
+                    {tierModels.local.length > 0 ? tierModels.local.join(" / ") : "None configured"}
+                    )
+                  </span>
                   <span>
                     {stats.activeTiers.local} requests ({localPercent}%)
                   </span>
@@ -521,30 +510,36 @@ export function SmartProxyBridgeTab() {
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-2">
-                  {tierModels.apex.map((m) => (
-                    <span
-                      key={m}
-                      className="inline-flex items-center gap-1 rounded bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 text-xs font-medium text-indigo-300"
-                    >
-                      {isComboModelName(m) && (
-                        <span
-                          className="material-symbols-outlined text-[12px] text-purple-400"
-                          title="Combo Model"
-                        >
-                          layers
-                        </span>
-                      )}
-                      {m}
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveModel("apex", m)}
-                        className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
-                        title={`Remove ${m}`}
-                      >
-                        ×
-                      </button>
+                  {tierModels.apex.length === 0 ? (
+                    <span className="text-xs text-muted-foreground italic py-0.5">
+                      No models configured
                     </span>
-                  ))}
+                  ) : (
+                    tierModels.apex.map((m) => (
+                      <span
+                        key={m}
+                        className="inline-flex items-center gap-1 rounded bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 text-xs font-medium text-indigo-300"
+                      >
+                        {isComboModelName(m) && (
+                          <span
+                            className="material-symbols-outlined text-[12px] text-purple-400"
+                            title="Combo Model"
+                          >
+                            layers
+                          </span>
+                        )}
+                        {m}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveModel("apex", m)}
+                          className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
+                          title={`Remove ${m}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))
+                  )}
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border/50">
                   <button
@@ -573,30 +568,36 @@ export function SmartProxyBridgeTab() {
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-2">
-                  {tierModels.resilient.map((m) => (
-                    <span
-                      key={m}
-                      className="inline-flex items-center gap-1 rounded bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-300"
-                    >
-                      {isComboModelName(m) && (
-                        <span
-                          className="material-symbols-outlined text-[12px] text-purple-400"
-                          title="Combo Model"
-                        >
-                          layers
-                        </span>
-                      )}
-                      {m}
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveModel("resilient", m)}
-                        className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
-                        title={`Remove ${m}`}
-                      >
-                        ×
-                      </button>
+                  {tierModels.resilient.length === 0 ? (
+                    <span className="text-xs text-muted-foreground italic py-0.5">
+                      No models configured
                     </span>
-                  ))}
+                  ) : (
+                    tierModels.resilient.map((m) => (
+                      <span
+                        key={m}
+                        className="inline-flex items-center gap-1 rounded bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-300"
+                      >
+                        {isComboModelName(m) && (
+                          <span
+                            className="material-symbols-outlined text-[12px] text-purple-400"
+                            title="Combo Model"
+                          >
+                            layers
+                          </span>
+                        )}
+                        {m}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveModel("resilient", m)}
+                          className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
+                          title={`Remove ${m}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))
+                  )}
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border/50">
                   <button
@@ -625,30 +626,36 @@ export function SmartProxyBridgeTab() {
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-2">
-                  {tierModels.local.map((m) => (
-                    <span
-                      key={m}
-                      className="inline-flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300"
-                    >
-                      {isComboModelName(m) && (
-                        <span
-                          className="material-symbols-outlined text-[12px] text-purple-400"
-                          title="Combo Model"
-                        >
-                          layers
-                        </span>
-                      )}
-                      {m}
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveModel("local", m)}
-                        className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
-                        title={`Remove ${m}`}
-                      >
-                        ×
-                      </button>
+                  {tierModels.local.length === 0 ? (
+                    <span className="text-xs text-muted-foreground italic py-0.5">
+                      No models configured
                     </span>
-                  ))}
+                  ) : (
+                    tierModels.local.map((m) => (
+                      <span
+                        key={m}
+                        className="inline-flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300"
+                      >
+                        {isComboModelName(m) && (
+                          <span
+                            className="material-symbols-outlined text-[12px] text-purple-400"
+                            title="Combo Model"
+                          >
+                            layers
+                          </span>
+                        )}
+                        {m}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveModel("local", m)}
+                          className="text-muted-foreground hover:text-foreground ml-0.5 text-xs leading-none"
+                          title={`Remove ${m}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))
+                  )}
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border/50">
                   <button

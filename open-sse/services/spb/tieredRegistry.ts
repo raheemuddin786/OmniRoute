@@ -5,7 +5,7 @@
  */
 
 import { TaskPhase } from "./intentAnalyzer.ts";
-import { type TierModelsConfig, DEFAULT_SPB_TIER_MODELS } from "../tierTypes.ts";
+import { type TierModelsConfig } from "../tierTypes.ts";
 
 export type ModelTier = "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 
@@ -24,11 +24,9 @@ export function selectModelTier(
   requiresTools?: boolean
 ): TierAssignment {
   const models = {
-    apex: customModels?.apex?.length ? customModels.apex : DEFAULT_SPB_TIER_MODELS.apex,
-    resilient: customModels?.resilient?.length
-      ? customModels.resilient
-      : DEFAULT_SPB_TIER_MODELS.resilient,
-    local: customModels?.local?.length ? customModels.local : DEFAULT_SPB_TIER_MODELS.local,
+    apex: customModels?.apex ?? [],
+    resilient: customModels?.resilient ?? [],
+    local: customModels?.local ?? [],
   };
 
   // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.

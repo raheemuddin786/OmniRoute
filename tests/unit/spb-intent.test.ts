@@ -18,6 +18,25 @@ import {
 } from "../../src/shared/components/tierModelSelectHelpers.ts";
 import { normalizeComboStep } from "../../src/lib/combos/steps.ts";
 
+import { saveTierConfig } from "../../src/lib/db/tierConfig.ts";
+import { setTierConfig } from "../../open-sse/services/tierResolver.ts";
+import { DEFAULT_TIER_CONFIG } from "../../open-sse/services/tierConfig.ts";
+
+const testTierConfig = {
+  ...DEFAULT_TIER_CONFIG,
+  spbEnabled: true,
+  tierModels: {
+    apex: ["test-apex-1", "test-apex-2"],
+    resilient: ["test-resilient-1", "test-resilient-2"],
+    local: ["test-local-1", "test-local-2"],
+  },
+};
+
+test.before(() => {
+  saveTierConfig(testTierConfig);
+  setTierConfig(testTierConfig);
+});
+
 // Close the DB handle after all tests so the native test runner does not hang.
 test.after(() => {
   __resetSpbStateInitForTests();
@@ -50,14 +69,24 @@ test("SPB Intent Analyzer classifies code generation and tools correctly", () =>
   assert.equal(profile.requiresTools, true);
 });
 
-test("SPB Tiered Registry selects correct model tiers", () => {
-  const tier1 = selectModelTier("ARCHITECTURAL_PLANNING", 0.9);
+test("SPB Tiered Registry selects correct model tiers based on configuration", () => {
+  const customModels = {
+    apex: ["custom-apex"],
+    resilient: ["custom-resilient"],
+    local: ["custom-local"],
+  };
+  const tier1 = selectModelTier("ARCHITECTURAL_PLANNING", 0.9, customModels);
   assert.equal(tier1.tier, "tier_1_apex");
-  assert.ok(tier1.recommendedModels.includes("claude-3-7-sonnet"));
+  assert.deepEqual(tier1.recommendedModels, ["custom-apex"]);
 
-  const tier3 = selectModelTier("FAST_REFACTOR", 0.1);
+  const tier3 = selectModelTier("FAST_REFACTOR", 0.1, customModels);
   assert.equal(tier3.tier, "tier_3_local");
-  assert.ok(tier3.recommendedModels.includes("llama-3-8b-instruct"));
+  assert.deepEqual(tier3.recommendedModels, ["custom-local"]);
+
+  // Without configured models, recommendedModels is an empty array (no hardcoded fallback)
+  const emptyTier = selectModelTier("ARCHITECTURAL_PLANNING", 0.9);
+  assert.equal(emptyTier.tier, "tier_1_apex");
+  assert.deepEqual(emptyTier.recommendedModels, []);
 });
 
 test("SPB Tiered Registry uses custom configured models when provided", () => {
@@ -158,14 +187,20 @@ test("SPB Intent Analyzer ensures promptAnchorHash is invariant across conversat
 });
 
 test("SPB Tiered Registry tool-calling guard forces Tier 2 if tools are present even for simple tasks", () => {
+  const configuredModels = {
+    apex: ["test-apex"],
+    resilient: ["test-resilient"],
+    local: ["test-local"],
+  };
   // FAST_REFACTOR with 0.1 complexity without tools goes to tier_3_local
-  const tierWithoutTools = selectModelTier("FAST_REFACTOR", 0.1);
+  const tierWithoutTools = selectModelTier("FAST_REFACTOR", 0.1, configuredModels);
   assert.equal(tierWithoutTools.tier, "tier_3_local");
+  assert.deepEqual(tierWithoutTools.recommendedModels, ["test-local"]);
 
   // With requiresTools = true, it must guard against local model and upgrade to tier_2_resilient
-  const tierWithTools = selectModelTier("FAST_REFACTOR", 0.1, undefined, true);
+  const tierWithTools = selectModelTier("FAST_REFACTOR", 0.1, configuredModels, true);
   assert.equal(tierWithTools.tier, "tier_2_resilient");
-  assert.ok(tierWithTools.recommendedModels.length > 0);
+  assert.deepEqual(tierWithTools.recommendedModels, ["test-resilient"]);
 });
 
 test("SPB strictly adheres to tier boundaries across code gen, tests, refactor, and architecture", () => {

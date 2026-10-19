@@ -47,9 +47,9 @@ export const tierConfigSchema = z.object({
     .default({ apex: 0.3, resilient: 0.5, local: 0.2 }),
   tierModels: z
     .object({
-      apex: z.array(z.string().min(1)).min(1),
-      resilient: z.array(z.string().min(1)).min(1),
-      local: z.array(z.string().min(1)).min(1),
+      apex: z.array(z.string().min(1)).default([]),
+      resilient: z.array(z.string().min(1)).default([]),
+      local: z.array(z.string().min(1)).default([]),
     })
     .optional(),
   cacheThreshold: z.number().min(0).default(5000),
@@ -148,17 +148,17 @@ export function mergeTierConfig(userConfig?: Partial<TierConfig>): TierConfig {
       : DEFAULT_TIER_CONFIG.tierWeights,
     tierModels: userConfig.tierModels
       ? {
-          apex: userConfig.tierModels.apex?.length
-            ? userConfig.tierModels.apex
-            : DEFAULT_SPB_TIER_MODELS.apex,
-          resilient: userConfig.tierModels.resilient?.length
+          apex: Array.isArray(userConfig.tierModels.apex) ? userConfig.tierModels.apex : [],
+          resilient: Array.isArray(userConfig.tierModels.resilient)
             ? userConfig.tierModels.resilient
-            : DEFAULT_SPB_TIER_MODELS.resilient,
-          local: userConfig.tierModels.local?.length
-            ? userConfig.tierModels.local
-            : DEFAULT_SPB_TIER_MODELS.local,
+            : [],
+          local: Array.isArray(userConfig.tierModels.local) ? userConfig.tierModels.local : [],
         }
-      : DEFAULT_SPB_TIER_MODELS,
+      : {
+          apex: [],
+          resilient: [],
+          local: [],
+        },
     cacheThreshold: userConfig.cacheThreshold ?? DEFAULT_TIER_CONFIG.cacheThreshold,
     fallbackTimeout: userConfig.fallbackTimeout ?? DEFAULT_TIER_CONFIG.fallbackTimeout,
   };

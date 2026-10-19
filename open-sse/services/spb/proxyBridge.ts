@@ -18,7 +18,7 @@ export interface SpbRoutingContext {
 export interface SpbRoutingDecision {
   intent: IntentProfile;
   tierAssignment: TierAssignment;
-  selectedModel: string;
+  selectedModel: string | null;
   checkpointRestored: boolean;
   error?: string;
 }
@@ -85,7 +85,7 @@ export async function processSmartProxyRouting(
       restoredModel ||
       (tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
         ? tierAssignment.recommendedModels[0]
-        : "claude-3-5-sonnet");
+        : null);
 
     // 5. Save new state checkpoint asynchronously / safely
     try {
@@ -142,11 +142,16 @@ export async function processSmartProxyRouting(
       promptAnchorHash: "sha256:spb_fallback_" + Date.now(),
     };
 
-    const fallbackTier = selectModelTier(fallbackIntent.taskPhase, fallbackIntent.complexityScore);
+    const tierConfig = getTierConfig();
+    const fallbackTier = selectModelTier(
+      fallbackIntent.taskPhase,
+      fallbackIntent.complexityScore,
+      tierConfig?.tierModels
+    );
     const fallbackModel =
       fallbackTier.recommendedModels && fallbackTier.recommendedModels.length > 0
         ? fallbackTier.recommendedModels[0]
-        : "claude-3-5-sonnet";
+        : null;
 
     return {
       intent: fallbackIntent,

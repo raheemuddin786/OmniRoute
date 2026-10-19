@@ -201,7 +201,6 @@ import { registerQwenTokenPlanQuotaFetcher } from "@omniroute/open-sse/services/
 import { registerCrofUsageFetcher } from "@omniroute/open-sse/services/crofUsageFetcher.ts";
 import { registerDeepseekQuotaFetcher } from "@omniroute/open-sse/services/deepseekQuotaFetcher.ts";
 import type { SpbRoutingDecision } from "@omniroute/open-sse/services/spb/proxyBridge";
-import { DEFAULT_SPB_TIER_MODELS } from "@omniroute/open-sse/services/tierTypes";
 import {
   registerMoonshotQuotaFetcher,
   registerMoonshotFetchersForNodes,
@@ -1141,21 +1140,10 @@ async function handleChatImplementation(
     resolvedModelStr = spbDecision.selectedModel;
     body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
 
-    // Zero-Loss Fallback: construct prioritized tier combo for continuous autonomous execution
-    const currentTierConfig = getTierConfig();
-    const configuredTiers = currentTierConfig?.tierModels || DEFAULT_SPB_TIER_MODELS;
-    const tier = spbDecision.tierAssignment.tier;
-    const fallbackTiers =
-      tier === "tier_1_apex"
-        ? configuredTiers.resilient || DEFAULT_SPB_TIER_MODELS.resilient || []
-        : tier === "tier_2_resilient"
-          ? configuredTiers.local || DEFAULT_SPB_TIER_MODELS.local || []
-          : [
-              ...(configuredTiers.resilient || DEFAULT_SPB_TIER_MODELS.resilient || []),
-              ...(configuredTiers.apex || DEFAULT_SPB_TIER_MODELS.apex || []),
-            ];
-    const tierModels = [...spbDecision.tierAssignment.recommendedModels, ...fallbackTiers];
-    const uniqueTierModels = Array.from(new Set(tierModels));
+    // Prioritized tier combo strictly from user-configured tier models
+    const uniqueTierModels = Array.from(
+      new Set(spbDecision.tierAssignment.recommendedModels || [])
+    );
     if (uniqueTierModels.length > 0) {
       spbCombo = {
         id: `spb-${spbDecision.tierAssignment.tier}`,
@@ -1166,7 +1154,8 @@ async function handleChatImplementation(
       };
     }
   } else if (isIncompatibleModality) {
-    const shieldModel = DEFAULT_SPB_TIER_MODELS.resilient[0];
+    const currentTierConfig = getTierConfig();
+    const shieldModel = currentTierConfig?.tierModels?.resilient?.[0] || resolvedModelStr;
     log.warn(
       "SPB",
       `Modality Shield: Incompatible non-chat model detected (${resolvedModelStr}), safely redirecting to ${shieldModel}`

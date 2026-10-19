@@ -3,7 +3,6 @@ import { z } from "zod";
 import { loadTierConfig, saveTierConfig } from "@/lib/db/tierConfig";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { setTierConfig } from "@omniroute/open-sse/services/tierResolver";
-import { DEFAULT_SPB_TIER_MODELS } from "@omniroute/open-sse/services/tierTypes";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
@@ -34,9 +33,9 @@ const tierSettingsPutSchema = z
       .optional(),
     tierModels: z
       .object({
-        apex: z.array(z.string().min(1)).min(1),
-        resilient: z.array(z.string().min(1)).min(1),
-        local: z.array(z.string().min(1)).min(1),
+        apex: z.array(z.string().min(1)).default([]),
+        resilient: z.array(z.string().min(1)).default([]),
+        local: z.array(z.string().min(1)).default([]),
       })
       .optional(),
     cacheThreshold: z.number().min(0).optional(),
@@ -69,7 +68,7 @@ export async function GET(request: Request) {
   const spbFlagActive = isFeatureFlagEnabled("SPB_ENABLED");
   return NextResponse.json({
     ...config,
-    tierModels: config.tierModels ?? DEFAULT_SPB_TIER_MODELS,
+    tierModels: config.tierModels ?? { apex: [], resilient: [], local: [] },
     spbEnabled: config.spbEnabled || spbFlagActive,
   });
 }
