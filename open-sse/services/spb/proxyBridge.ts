@@ -55,29 +55,22 @@ export async function processSmartProxyRouting(
     try {
       existingCheckpoint = getCheckpoint(sessionId);
       if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
-        checkpointRestored = true;
-        // Zero-loss prompt cache preservation: retain existing model tier to maximize upstream KV reuse
-        if (existingCheckpoint.modelTier) {
-          const restoredTier = existingCheckpoint.modelTier as typeof tierAssignment.tier;
-          const recomputed = selectModelTier(
-            restoredTier === "tier_1_apex" ? "ARCHITECTURAL_PLANNING" : "CODE_GENERATION",
-            restoredTier === "tier_1_apex" ? 0.9 : 0.5,
-            tierConfig?.tierModels,
-            intent.requiresTools
-          );
-          tierAssignment = {
-            ...recomputed,
-            tier: restoredTier,
-          };
-        }
-        if (existingCheckpoint.statePayload) {
-          try {
-            const parsed = JSON.parse(existingCheckpoint.statePayload);
-            if (typeof parsed.modelName === "string" && parsed.modelName.length > 0) {
-              restoredModel = parsed.modelName;
+        // Model continuity: only preserve model continuity when the active turn is within the same tier.
+        // Never force execution, code generation, testing, or refactoring into Tier 1.
+        if (existingCheckpoint.modelTier === tierAssignment.tier) {
+          checkpointRestored = true;
+          if (existingCheckpoint.statePayload) {
+            try {
+              const parsed = JSON.parse(existingCheckpoint.statePayload);
+              if (
+                typeof parsed.modelName === "string" &&
+                tierAssignment.recommendedModels.includes(parsed.modelName)
+              ) {
+                restoredModel = parsed.modelName;
+              }
+            } catch {
+              // Ignore corrupted payload JSON
             }
-          } catch {
-            // Ignore corrupted payload JSON
           }
         }
       }

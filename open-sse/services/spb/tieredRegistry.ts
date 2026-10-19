@@ -19,7 +19,7 @@ export interface TierAssignment {
 
 export function selectModelTier(
   taskPhase: TaskPhase,
-  complexityScore: number,
+  _complexityScore: number,
   customModels?: TierModelsConfig,
   requiresTools?: boolean
 ): TierAssignment {
@@ -31,7 +31,9 @@ export function selectModelTier(
     local: customModels?.local?.length ? customModels.local : DEFAULT_SPB_TIER_MODELS.local,
   };
 
-  if (taskPhase === "ARCHITECTURAL_PLANNING" || complexityScore >= 0.85) {
+  // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.
+  // Tier 1 models are costly and must not handle execution tasks.
+  if (taskPhase === "ARCHITECTURAL_PLANNING") {
     return {
       tier: "tier_1_apex",
       recommendedModels: models.apex,
@@ -41,20 +43,20 @@ export function selectModelTier(
     };
   }
 
-  // Tier 3 Local is restricted to low-complexity deterministic/refactor tasks without active tool calling requirements
-  if (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") {
-    if (complexityScore < 0.3 && !requiresTools) {
-      return {
-        tier: "tier_3_local",
-        recommendedModels: models.local,
-        maxTokens: 4096,
-        temperature: 0.1,
-        cacheEnabled: false,
-      };
-    }
+  // 2. Tier 3: Local/edge inference, refactoring, formatting, and deterministic tasks.
+  // Restricted to tasks without active tool calling requirements.
+  if ((taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") && !requiresTools) {
+    return {
+      tier: "tier_3_local",
+      recommendedModels: models.local,
+      maxTokens: 4096,
+      temperature: 0.1,
+      cacheEnabled: false,
+    };
   }
 
-  // Default to Tier 2 Resilient Execution for Code Generation and Testing
+  // 3. Tier 2: Resilient execution, code generation, test iteration, and verification.
+  // Handles all code generation, testing, tool-calling agents, and complex execution.
   return {
     tier: "tier_2_resilient",
     recommendedModels: models.resilient,

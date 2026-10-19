@@ -1,3 +1,5 @@
+import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
+import { getTierConfig } from "@omniroute/open-sse/services/tierResolver";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -820,8 +822,11 @@ async function handleChatImplementation(
     modelStr === "smart-proxy-bridge" ||
     modelStr === "smart_proxy_bridge" ||
     modelStr === "spb" ||
-    Boolean(modelStr?.startsWith("spb/"));
-  const isSpbActive = isSpbRequested || isFeatureFlagEnabled("SPB_ENABLED");
+    Boolean(modelStr?.startsWith("spb/")) ||
+    modelStr === "auto" ||
+    Boolean(modelStr?.startsWith("auto/"));
+  const isSpbActive =
+    isSpbRequested || Boolean(getTierConfig().spbEnabled) || isFeatureFlagEnabled("SPB_ENABLED");
 
   let spbDecision: SpbRoutingDecision | null = null;
   if (isSpbActive && Array.isArray(body?.messages)) {
@@ -1137,18 +1142,19 @@ async function handleChatImplementation(
     body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
 
     // Zero-Loss Fallback: construct prioritized tier combo for continuous autonomous execution
+    const currentTierConfig = getTierConfig();
+    const configuredTiers = currentTierConfig?.tierModels || DEFAULT_SPB_TIER_MODELS;
     const tier = spbDecision.tierAssignment.tier;
-    const tierModels = [
-      ...spbDecision.tierAssignment.recommendedModels,
-      ...(tier === "tier_1_apex"
-        ? DEFAULT_SPB_TIER_MODELS.resilient || []
+    const fallbackTiers =
+      tier === "tier_1_apex"
+        ? configuredTiers.resilient || DEFAULT_SPB_TIER_MODELS.resilient || []
         : tier === "tier_2_resilient"
-          ? DEFAULT_SPB_TIER_MODELS.apex || []
+          ? configuredTiers.local || DEFAULT_SPB_TIER_MODELS.local || []
           : [
-              ...(DEFAULT_SPB_TIER_MODELS.resilient || []),
-              ...(DEFAULT_SPB_TIER_MODELS.apex || []),
-            ]),
-    ];
+              ...(configuredTiers.resilient || DEFAULT_SPB_TIER_MODELS.resilient || []),
+              ...(configuredTiers.apex || DEFAULT_SPB_TIER_MODELS.apex || []),
+            ];
+    const tierModels = [...spbDecision.tierAssignment.recommendedModels, ...fallbackTiers];
     const uniqueTierModels = Array.from(new Set(tierModels));
     if (uniqueTierModels.length > 0) {
       spbCombo = {

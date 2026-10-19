@@ -26,7 +26,6 @@ export interface TierModelsConfig {
 export const DEFAULT_SPB_TIER_MODELS: TierModelsConfig = {
   apex: [
     "claude-3-7-sonnet",
-    "claude-3-5-sonnet",
     "deepseek-reasoner",
     "gemini-3.7-flash-high",
     "claude-opus-4-6-thinking",
