@@ -69,6 +69,59 @@ test("SPB Intent Analyzer classifies code generation and tools correctly", () =>
   assert.equal(profile.requiresTools, true);
 });
 
+test("SPB Intent Analyzer extracts array content blocks and isolates system prompt from triggering Tier 1", () => {
+  const sysMsg = {
+    role: "system",
+    content:
+      "You are an assistant. Architecture guidelines: adhere to clean microservices architecture.",
+  };
+
+  // 1. Array content with formatting task should be DETERMINISTIC_ROUTING (Tier 3)
+  const formatProfile = classifyIntent([
+    sysMsg,
+    {
+      role: "user",
+      content: [{ type: "text", text: "Format this JSON into a clean markdown table" }],
+    },
+  ]);
+  assert.equal(formatProfile.taskPhase, "DETERMINISTIC_ROUTING");
+
+  // 2. Tool result with architecture keyword inside code should be CODE_GENERATION (Tier 2), NOT Tier 1
+  const toolResultProfile = classifyIntent([
+    sysMsg,
+    {
+      role: "user",
+      content: [{ type: "tool_result", content: "workflow.add_edge('intake', 'architecture')" }],
+    },
+  ]);
+  assert.equal(toolResultProfile.taskPhase, "CODE_GENERATION");
+  assert.equal(toolResultProfile.requiresTools, true);
+
+  // 3. User asking to fix architecture bug should be CODE_GENERATION (Tier 2), NOT Tier 1
+  const fixArchProfile = classifyIntent([
+    sysMsg,
+    { role: "user", content: "Fix the bug in the architecture module auth.ts" },
+  ]);
+  assert.equal(fixArchProfile.taskPhase, "CODE_GENERATION");
+
+  // 4. Refactoring request should be FAST_REFACTOR (Tier 3)
+  const refactorProfile = classifyIntent([
+    sysMsg,
+    { role: "user", content: "Refactor this function to simplify nested if-else statements" },
+  ]);
+  assert.equal(refactorProfile.taskPhase, "FAST_REFACTOR");
+
+  // 5. Explicit architecture planning should be ARCHITECTURAL_PLANNING (Tier 1)
+  const archProfile = classifyIntent([
+    sysMsg,
+    {
+      role: "user",
+      content: "Architect a high-performance consensus algorithm with Raft and Paxos comparison.",
+    },
+  ]);
+  assert.equal(archProfile.taskPhase, "ARCHITECTURAL_PLANNING");
+});
+
 test("SPB Tiered Registry selects correct model tiers based on configuration", () => {
   const customModels = {
     apex: ["custom-apex"],

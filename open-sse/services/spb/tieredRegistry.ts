@@ -31,7 +31,7 @@ export function selectModelTier(
 
   // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.
   // Tier 1 models are costly and must not handle execution tasks.
-  if (taskPhase === "ARCHITECTURAL_PLANNING") {
+  if (taskPhase === "ARCHITECTURAL_PLANNING" && !requiresTools) {
     return {
       tier: "tier_1_apex",
       recommendedModels: models.apex,
