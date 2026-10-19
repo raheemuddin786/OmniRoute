@@ -129,5 +129,6 @@ export function hasPerModelFailureScope(
   if (hasPerModelQuota(provider, model, connectionPassthroughModels)) return true;
   if (typeof connectionPassthroughModels === "boolean") return connectionPassthroughModels;
   if (!provider) return false;
-  return resolveProviderId(provider) === "claude";
+  const canonical = resolveProviderId(provider);
+  return canonical === "claude" || canonical === "claude-web";
 }

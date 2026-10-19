@@ -12,12 +12,12 @@ import { CLAUDE_WEB_FINGERPRINT } from "../config/claudeWebFingerprint.ts";
 import { FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { tlsFetchClaude } from "../services/claudeTlsClient.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
+import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
 import { currentAppliedProxySink } from "../utils/proxyFetch.ts";
 import {
   BaseExecutor,
   mergeAbortSignals,
   type ExecuteInput,
-  type ExecutorLog,
   type ProviderCredentials,
 } from "./base.ts";
 import {
@@ -341,7 +341,16 @@ async function errorResponseForTransport(
   }
   if (result.status === 429) {
     const extraHeaders: Record<string, string> = {};
-    const upstreamRetryAfter = normalizeForwardedRetryAfter(result.headers.get("retry-after"));
+    let upstreamRetryAfter = normalizeForwardedRetryAfter(result.headers.get("retry-after"));
+    if (!upstreamRetryAfter && bodyText) {
+      const hint = parseDetailedRetryHintFromJsonBody(
+        bodyText,
+        MAX_FORWARDED_RETRY_AFTER_SECONDS * 1000
+      );
+      if (hint && hint.retryAfterMs > 0) {
+        upstreamRetryAfter = String(Math.max(1, Math.ceil(hint.retryAfterMs / 1000)));
+      }
+    }
     if (upstreamRetryAfter) {
       extraHeaders["Retry-After"] = upstreamRetryAfter;
     }

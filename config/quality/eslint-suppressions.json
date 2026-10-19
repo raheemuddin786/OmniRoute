@@ -54,11 +54,6 @@
       "count": 1
     }
   },
-  "open-sse/executors/claude-web.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
   "open-sse/executors/cliproxyapi.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -1085,11 +1080,6 @@
   },
   "src/app/api/v1/messages/count_tokens/route.ts": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/api/v1/messages/route.ts": {
-    "@typescript-eslint/no-unused-vars": {
       "count": 1
     }
   },

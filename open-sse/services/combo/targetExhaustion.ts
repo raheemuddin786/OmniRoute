@@ -372,13 +372,21 @@ export function applyComboTargetExhaustion(
     ) {
       return { ...derived, providerExhausted: false };
     }
-    // #14136: For per-model-quota providers (gemini, vertex, codex, antigravity, passthrough models),
+    // #14136: For per-model-quota providers (gemini, vertex, codex, antigravity, passthrough models)
+    // or multiplexed providers with per-model failure scope (claude, claude-web),
     // a 403 is model-scoped (tier restriction or model access denial), not an invalid credential.
     // Sibling combo legs on the same connection remain eligible, unless verified as a connection-wide
     // denial (e.g. Vertex SERVICE_DISABLED or non-models IAM denial).
     if (
       result.status === 403 &&
-      hasPerModelQuota(provider, opts.rawModel) &&
+      (hasPerModelQuota(provider, opts.rawModel) ||
+        hasPerModelFailureScope(
+          provider,
+          opts.rawModel,
+          undefined,
+          result.status,
+          opts.errorText
+        )) &&
       !(provider === "vertex" && isVertexConnectionWidePermissionDenied(opts.errorText))
     ) {
       return { ...derived, providerExhausted: false };

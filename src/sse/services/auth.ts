@@ -2969,11 +2969,13 @@ export async function markAccountUnavailable(
       const reason =
         status === 404 || isNvidiaModelGone || isModelUnsupported401(status, errorText)
           ? "not_found"
-          : isQuotaExhaustedSignal(fallbackResult)
-            ? "quota_exhausted"
-            : status === 429
-              ? "rate_limited"
-              : "server_error";
+          : status === 403
+            ? "forbidden"
+            : isQuotaExhaustedSignal(fallbackResult)
+              ? "quota_exhausted"
+              : status === 429
+                ? "rate_limited"
+                : "server_error";
 
       // #5976: a bare 500 is intermittent and NOT model-specific — skip
       // lockout/cooldown ONLY for the exact 500 (the contract its own tests pin:
@@ -3020,7 +3022,7 @@ export async function markAccountUnavailable(
         model,
         reason,
         status,
-        status === 404 || isNvidiaModelGone || isModelUnsupported401(status, errorText)
+        status === 404 || isNvidiaModelGone || isModelUnsupported401(status, errorText) || status === 403
           ? (effectiveProviderProfile?.baseCooldownMs ?? COOLDOWN_MS.notFoundLocal)
           : (claudeQuotaScope.cooldownMs ??
               antigravityFamilyInferredBaseCooldownMs ??

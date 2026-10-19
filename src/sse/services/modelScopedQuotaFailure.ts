@@ -31,7 +31,8 @@ export function isModelScopedFailure(
 ): boolean {
   if (isModelUnsupported401(status, errorText)) return true;
   if (isExplicitModelCapacityFailure(status, errorText, model)) return true;
-  if (status === 404 || isNvidiaModelGone || status === 429 || status >= 500) return true;
+  if (status === 404 || isNvidiaModelGone || status === 429 || status === 403 || status >= 500)
+    return true;
   return (
     !fallbackResult.permanent &&
     status !== 402 &&
