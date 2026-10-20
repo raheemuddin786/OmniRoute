@@ -130,6 +130,23 @@ the governance artifacts into whatever the upstream format is — no new per-for
 The session key is resolved **before** the injection, so injecting the intervention does not change
 the key the next turn resolves. If it did, the loop breaker's window would reset every turn.
 
+### The governance session key excludes the tool catalog
+
+The governance session key is the repo's existing conversation fingerprint
+(`generateSessionId()` from `open-sse/services/sessionManager.ts`) computed over the request body
+**without** its `tools` / `functions` field.
+
+That exclusion is deliberate. The governance layer spans turns — a tool call is rejected on the
+egress of turn N and enforced on the ingress of turn N+1, and a loop intervention is parked on turn N
+and injected on turn N+1 — so both halves must land on the same key. A client may legitimately send a
+different tool set on a later turn (many clients declare the tools only on the first turn), and if
+the fingerprint tracked the tool list the key would change and the turn-N+1 enforcement would look
+for the rejection under a key that turn N never wrote.
+
+Everything else the fingerprint uses — the model, the provider, the system prompt, the first user
+message and the connection id — is stable across the turns of one conversation, and still separates
+one conversation from another. See `open-sse/governance/identity.ts`.
+
 ---
 
 ## The three client wire formats

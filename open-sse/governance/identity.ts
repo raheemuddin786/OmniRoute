@@ -133,6 +133,26 @@ function buildIdentity(
 }
 
 /**
+ * The request body WITHOUT its tool declarations.
+ *
+ * The tool list is excluded from the governance fingerprint because the
+ * governance layer spans turns: the tool set a client declares can change
+ * between turn N and turn N+1, and a fingerprint that changed with it would
+ * break the cross-turn delivery of a tool rejection or a loop intervention.
+ *
+ * The body is copied rather than mutated, and the copy is shallow — the
+ * fingerprint only reads the top-level `model`, the system prompt, the first
+ * user message and the message array, none of which are mutated here.
+ */
+function withoutToolCatalog(body: unknown): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const record = body as Record<string, unknown>;
+  if (!("tools" in record) && !("functions" in record)) return body;
+  const { tools: _tools, functions: _functions, ...rest } = record;
+  return rest;
+}
+
+/**
  * Resolve the governance session key + principal.
  *
  * Never throws — a resolution failure degrades to the fallback key so the
@@ -149,7 +169,7 @@ export function resolveGovernanceIdentity(
     if (external) return buildIdentity(external, "external", principalId);
 
     const fingerprint = generateSessionId(
-      (input.body ?? null) as Parameters<typeof generateSessionId>[0],
+      withoutToolCatalog(input.body ?? null) as Parameters<typeof generateSessionId>[0],
       {
         ...(input.provider ? { provider: input.provider } : {}),
         ...(input.connectionId ? { connectionId: input.connectionId } : {}),
