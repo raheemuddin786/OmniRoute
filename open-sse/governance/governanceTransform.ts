@@ -69,7 +69,7 @@ import { buildLoopInterventionMessage, fingerprintToolCall } from "./loopBreaker
 import { validateToolCall, auditToolCallRejection } from "./toolSchemaValidator.ts";
 import { recordGovernanceAudit } from "./auditBus.ts";
 import { registerLoopIntervention } from "./loopIntervention.ts";
-import { getToolRejectionLedger } from "./toolRejectionLedger.ts";
+import { buildRejectionKey, getToolRejectionLedger } from "./toolRejectionLedger.ts";
 import { ToolCallAssembler } from "./toolCallAssembler.ts";
 import type { TokenSentinelTracker, TokenSentinelBreach } from "./tokenSentinel.ts";
 import type { LoopBreaker, LoopDetection } from "./loopBreaker.ts";
@@ -298,14 +298,20 @@ class GovernanceEgressTap {
    * result. When the wire format carries no call id, a stable synthetic key is
    * derived from the tool name + the canonical arguments, so the same call is
    * still audited only once.
+   *
+   * The key is SCOPED to the session: a provider call id is unique only within
+   * one conversation, so an unscoped key would let this conversation's
+   * rejection be applied to an unrelated conversation that reuses the same
+   * call id.
    */
   private rejectToolCall(
     call: { name: string; callId: string | null; args: unknown },
     outcome: { reason: ToolCallRejectionReason; message: string },
     context: ToolCallValidationContext
   ): void {
-    const rejectionKey =
+    const wireKey =
       call.callId || `synthetic:${call.name}:${fingerprintToolCall(call.name, call.args)}`;
+    const rejectionKey = buildRejectionKey(context.sessionId, wireKey);
     const ledger = getToolRejectionLedger();
     ledger.record(rejectionKey, call.name, outcome.reason, outcome.message);
     if (ledger.markAudited(rejectionKey)) {

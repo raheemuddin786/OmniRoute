@@ -24,7 +24,7 @@ import {
   createGovernanceTransform,
   buildGovernanceTerminalFrames,
 } from "../governanceTransform.ts";
-import { getToolRejectionLedger } from "../toolRejectionLedger.ts";
+import { getToolRejectionLedger, buildRejectionKey } from "../toolRejectionLedger.ts";
 import { getLoopInterventionStore } from "../loopIntervention.ts";
 import { LoopBreaker } from "../loopBreaker.ts";
 import { TokenSentinelTracker } from "../tokenSentinel.ts";
@@ -195,7 +195,7 @@ describe("governanceTransform — pass-through", () => {
 describe("governanceTransform — tool-call rejection", () => {
   it("records an OpenAI rejection in the ledger", async () => {
     await run(OPENAI_CALL_FRAMES("nope_tool"), { body: catalog });
-    const entry = getToolRejectionLedger().get("call_1");
+    const entry = getToolRejectionLedger().get(buildRejectionKey("session-under-test", "call_1"));
     expect(entry).not.toBeNull();
     expect(entry?.name).toBe("nope_tool");
     expect(entry?.reason).toBe("unknown_tool");
@@ -207,7 +207,7 @@ describe("governanceTransform — tool-call rejection", () => {
       body: catalog,
       clientFormat: FORMATS.CLAUDE,
     });
-    const entry = getToolRejectionLedger().get("toolu_1");
+    const entry = getToolRejectionLedger().get(buildRejectionKey("session-under-test", "toolu_1"));
     expect(entry?.name).toBe("nope_tool");
     expect(entry?.reason).toBe("unknown_tool");
   });
@@ -217,7 +217,7 @@ describe("governanceTransform — tool-call rejection", () => {
       body: catalog,
       clientFormat: FORMATS.OPENAI_RESPONSES,
     });
-    const entry = getToolRejectionLedger().get("call_1");
+    const entry = getToolRejectionLedger().get(buildRejectionKey("session-under-test", "call_1"));
     expect(entry?.name).toBe("nope_tool");
     expect(entry?.reason).toBe("unknown_tool");
   });
@@ -254,7 +254,7 @@ describe("governanceTransform — tool-call rejection", () => {
       })}\n\n`,
     ];
     await run(frames, { body: catalog });
-    const entry = getToolRejectionLedger().get("call_bad");
+    const entry = getToolRejectionLedger().get(buildRejectionKey("session-under-test", "call_bad"));
     expect(entry?.reason).toBe("invalid_arguments");
   });
 
@@ -311,7 +311,10 @@ describe("governanceTransform — tool-call rejection", () => {
       ],
       { body: catalog }
     );
-    expect(getToolRejectionLedger().get("call_truncated")?.reason).toBe("unknown_tool");
+    expect(
+      getToolRejectionLedger().get(buildRejectionKey("session-under-test", "call_truncated"))
+        ?.reason
+    ).toBe("unknown_tool");
   });
 
   it("audits a rejected call exactly once even when it is seen twice", async () => {
@@ -319,7 +322,7 @@ describe("governanceTransform — tool-call rejection", () => {
     await run([...frames, ...frames], { body: catalog });
     const ledger = getToolRejectionLedger();
     expect(ledger.size).toBe(1);
-    expect(ledger.get("call_1")?.audited).toBe(true);
+    expect(ledger.get(buildRejectionKey("session-under-test", "call_1"))?.audited).toBe(true);
   });
 
   it("preserves the client's bytes — the tap never rewrites a rejected call", async () => {

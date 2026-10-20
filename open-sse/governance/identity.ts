@@ -26,6 +26,30 @@
  *  again, and the DEGRADED event is re-emitted for the new session id. Neither
  *  is a correctness problem, and neither is worked around by inventing a
  *  stronger id.
+ *
+ * WHY THE FINGERPRINT EXCLUDES THE TOOL CATALOG
+ *
+ * The governance layer's job spans TURNS: a tool call is rejected on the
+ * egress of turn N and enforced on the ingress of turn N+1, and a loop
+ * intervention is parked on turn N and injected on turn N+1. Both halves must
+ * land on the SAME session key, or the cross-turn delivery silently stops
+ * working.
+ *
+ * `generateSessionId()` includes the request's tool names in its fingerprint.
+ * That is right for the routing session (the router wants to know which
+ * tool set a session is using), but it is wrong for the governance session:
+ * a client may legitimately send a different tool set on a later turn — many
+ * clients declare the tools only on the first turn, and the model-validation
+ * proof harness declares them on the tool turn and drops them on the
+ * continuation turn. A tool-set change would then change the governance
+ * session key, and the turn-N+1 enforcement would look for the rejection
+ * under a key that turn N never wrote.
+ *
+ * So the governance fingerprint is computed from the body WITHOUT its
+ * `tools` (and `functions`) field. Everything else the fingerprint uses — the
+ * model, the provider, the system prompt, the first user message and the
+ * connection id — is stable across the turns of one conversation, and still
+ * separates one conversation from another.
  */
 
 import { extractExternalSessionId, generateSessionId } from "../services/sessionManager.ts";

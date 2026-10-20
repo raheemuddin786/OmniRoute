@@ -31,7 +31,7 @@ import {
   enforceToolCallRejections,
   OPENAI_TOOL_ERROR_MARKER,
 } from "../toolRejectionEnforcer.ts";
-import { ToolRejectionLedger } from "../toolRejectionLedger.ts";
+import { ToolRejectionLedger, buildRejectionKey } from "../toolRejectionLedger.ts";
 import { FORMATS } from "../../translator/formats.ts";
 
 const catalog = {
@@ -279,7 +279,77 @@ describe("enforceToolCallRejections", () => {
       enforceToolCallRejections(body, context, ledger);
     }
     expect(ledger.size).toBe(1);
-    expect(ledger.get("call_1")?.audited).toBe(true);
+    expect(ledger.get(buildRejectionKey(context.sessionId, "call_1"))?.audited).toBe(true);
+  });
+
+  it("does not leak a rejection into another conversation that reuses the call id", () => {
+    // A provider call id is unique only WITHIN one conversation. Two
+    // conversations served by the same proxy routinely reuse short ids like
+    // `call_1`.
+    //
+    // Conversation A declares a catalog WITHOUT `read_file`, so its call is
+    // rejected and recorded. Conversation B DOES declare `read_file`, so its
+    // call is legitimate — but with an unscoped ledger key, B finds A's
+    // rejection and rewrites B's genuine tool result with a synthetic error.
+    const body = {
+      messages: [
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "read_file", arguments: '{"path":"a.txt"}' },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: "call_1", content: "the real result" },
+      ],
+    };
+    // Conversation A: the catalog declares a DIFFERENT tool, so `read_file`
+    // is an unknown tool there.
+    const conversationA = {
+      ...context,
+      body: {
+        tools: [
+          {
+            type: "function",
+            function: { name: "write_file", parameters: { type: "object" } },
+          },
+        ],
+      },
+    };
+    const ledger = new ToolRejectionLedger();
+    const first = enforceToolCallRejections(body, conversationA, ledger);
+    expect(first.rejections).toHaveLength(1);
+
+    // Conversation B: `read_file` IS declared, so the call is legitimate.
+    const conversationB = { ...context, sessionId: "a-different-conversation" };
+    const { body: out, rejections } = enforceToolCallRejections(body, conversationB, ledger);
+    expect(rejections).toHaveLength(0);
+    expect(out).toBe(body);
+    const messages = (out as { messages: Array<{ content: string }> }).messages;
+    expect(messages[1].content).toBe("the real result");
+  });
+
+  it("still enforces the rejection inside the conversation that produced it", () => {
+    const body = {
+      messages: [
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "nope_tool", arguments: "{}" } },
+          ],
+        },
+        { role: "tool", tool_call_id: "call_1", content: "the real result" },
+      ],
+    };
+    const ledger = new ToolRejectionLedger();
+    enforceToolCallRejections(body, context, ledger);
+    const { body: out, rejections } = enforceToolCallRejections(body, context, ledger);
+    expect(rejections).toHaveLength(1);
+    const messages = (out as { messages: Array<{ content: string }> }).messages;
+    expect(messages[1].content).toContain(OPENAI_TOOL_ERROR_MARKER);
   });
 
   it("still rewrites the result on a later turn after the audit was written", () => {

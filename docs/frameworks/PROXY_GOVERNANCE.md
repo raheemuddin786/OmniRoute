@@ -89,6 +89,11 @@ The options are assembled in `open-sse/handlers/chatCore/streamingTail.ts`, whic
 per-stream `TokenSentinelTracker` and releases it on `streamController.signal` abort — so a client
 disconnect cannot leak a tracker.
 
+Internally the tap is a `GovernanceEgressTap` class rather than one long closure. The tap carries
+three independent policies (token sentinel, tool validation, loop breaking), and one function would
+hide them behind each other; splitting them into small methods keeps each policy individually
+readable and keeps the per-function complexity inside the repo's ratchet budget.
+
 ### Ingress (the enforcement)
 
 `open-sse/handlers/chatCore.ts` applies the ingress to the **client-format** body, right after
@@ -205,6 +210,24 @@ on the ingress of the next turn (when the client echoed it back). The assistant 
 client's history, so every subsequent turn re-presents it. `ToolRejectionLedger` decides which
 sighting writes the audit row, so a call that stays in the client's history produces exactly ONE
 audit row.
+
+### Session-scoped ledger keys
+
+The ledger is keyed by `sessionId` + `callId` (see `buildRejectionKey()`), NOT by the bare provider
+call id. A provider call id is unique only **within one conversation** — providers, SDKs and test
+harnesses routinely reuse short, predictable ids like `call_1` or `call_validation`. An unscoped key
+therefore lets one conversation's rejection leak into an unrelated conversation: the ingress then
+rewrites a tool result the client legitimately produced, replacing real output with a synthetic
+error and silently corrupting the model's context.
+
+This is not theoretical. The model-validation proof harness
+(`tests/unit/model-validation-service.test.ts`) reuses the call id `call_validation` for every proof
+it runs; a proof whose nonce is deliberately wrong records a rejection under that id, and the next
+proof — a different conversation with a valid nonce — then found its legitimate tool result
+rewritten and failed with `MODEL_VALIDATION_PROOF_FAILED`.
+
+A caller with no session id falls back to the bare call id, which preserves the historical behaviour
+for callers that genuinely have no conversation context.
 
 ---
 

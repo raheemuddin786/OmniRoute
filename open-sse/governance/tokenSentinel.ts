@@ -49,7 +49,7 @@
  *
  *  A tracker is created per in-flight stream and MUST be released on
  *  abnormal close / cancel / error. The sentinel keeps a registry of live
- *  trackers so a leak is observable (`getTokenSentinelStats().liveTrackers`),
+ *  trackers so a leak is observable (`liveTokenSentinelCount()`),
  *  and `releaseTracker` is idempotent so a double-release cannot corrupt the
  *  registry.
  *
@@ -374,22 +374,6 @@ export function liveTokenSentinelCount(): number {
 export function releaseAllTokenSentinelTrackers(): void {
   for (const tracker of liveTrackers) tracker.release();
   liveTrackers.clear();
-}
-
-export interface TokenSentinelStats {
-  liveTrackers: number;
-  ceiling: number;
-  velocityCeiling: number | null;
-}
-
-/** Sentinel configuration + registry stats. */
-export function getTokenSentinelStats(options: TokenSentinelOptions = {}): TokenSentinelStats {
-  return {
-    liveTrackers: liveTrackers.size,
-    ceiling: options.ceiling ?? DEFAULT_REASONING_TOKEN_CEILING,
-    velocityCeiling:
-      options.velocityCeiling === undefined ? DEFAULT_VELOCITY_CEILING : options.velocityCeiling,
-  };
 }
 
 /**
