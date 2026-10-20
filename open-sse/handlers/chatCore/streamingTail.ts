@@ -49,6 +49,15 @@ import { routingFinishReason } from "./routingFinishReason.ts";
 import { wrapReadableStreamWithFinalize } from "./streamFinalize.ts";
 import { buildStreamLedgerDetails, recordStreamingCost } from "./streamingCost.ts";
 import { assembleStreamingPipeline } from "./streamingPipeline.ts";
+import { resolveGovernanceIdentity } from "../../governance/identity.ts";
+import type { GovernanceIdentity } from "../../governance/identity.ts";
+import {
+  createTokenSentinelTracker,
+  releaseTokenSentinelTracker,
+  auditTokenBreach,
+  resolveGovernanceReasoningCeiling,
+} from "../../governance/tokenSentinel.ts";
+import { getLoopBreaker } from "../../governance/loopBreaker.ts";
 import { scheduleStreamingQuotaShareConsumption } from "./streamingQuotaShare.ts";
 import { assembleStreamingResponseHeaders } from "./streamingResponseHeaders.ts";
 import { storeStreamingSemanticCacheResponse } from "./streamingSemanticCacheStore.ts";
@@ -747,6 +756,42 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     body: deps.body,
     headers: deps.clientRawRequest?.headers,
   });
+  // ── Proxy governance layer ──
+  // Identity reuses the EXISTING session/principal resolution (external
+  // session header → sessionManager conversation fingerprint → the request's
+  // own id), so governance rows join to the same session the router sees.
+  //
+  // The identity is resolved ONCE per request in chatCore.ts (on the CLIENT
+  // body, before the governance ingress rewrites it) and threaded in here, so
+  // the egress tap and the ingress enforcement agree on the session key. When
+  // the caller did not resolve it (unit tests that call the tail directly),
+  // it is resolved here from the request body as a fallback.
+  const governanceIdentity =
+    (deps.governanceIdentity as GovernanceIdentity | undefined) ??
+    resolveGovernanceIdentity(
+      {
+        body: finalBody || translatedBody || body,
+        headers: clientRawRequest?.headers,
+        provider,
+        connectionId,
+        fallback: skillRequestId,
+      },
+      apiKeyInfo
+    );
+  const governanceTurnIndex =
+    typeof deps.governanceTurnIndex === "number" ? deps.governanceTurnIndex : 0;
+  // The token-sentinel tracker is per in-flight stream and MUST be released on
+  // an abnormal close/cancel/error — otherwise a client disconnect would leak
+  // a tracker. `streamController.signal` fires on both the client abort and
+  // the internal error path, so one listener covers both.
+  const governanceTracker = createTokenSentinelTracker({
+    ceiling: resolveGovernanceReasoningCeiling(),
+  });
+  const governanceAbortCleanup = () => {
+    releaseTokenSentinelTracker(governanceTracker);
+  };
+  streamController.signal.addEventListener("abort", governanceAbortCleanup, { once: true });
+
   const finalStream = assembleStreamingPipeline({
     providerResponse,
     transformStream,
@@ -763,6 +808,39 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     // that same patience for their first REAL content, not just their first
     // lifecycle frame. See pipeWithDisconnect's own doc comment.
     contentStallTimeoutMs: streamReadinessPolicy.timeoutMs,
+    governance: {
+      clientFormat: clientResponseFormat,
+      tokenTracker: governanceTracker,
+      loopBreaker: getLoopBreaker(),
+      sessionId: governanceIdentity.sessionId,
+      principalId: governanceIdentity.principalId,
+      requestId: traceId,
+      model,
+      provider,
+      turnIndex: governanceTurnIndex,
+      // The tool catalog is the CLIENT's catalog: the client's own `tools[]`
+      // is what the model was allowed to call, so that is what a call is
+      // validated against.
+      body: deps.governanceCatalogBody ?? finalBody ?? translatedBody ?? body,
+      onBreach: (breach) => {
+        auditTokenBreach(breach, {
+          sessionId: governanceIdentity.sessionId,
+          principalId: governanceIdentity.principalId,
+          requestId: traceId,
+          model,
+          provider,
+          turnIndex: governanceTurnIndex,
+        });
+        // Release the tracker as soon as the ceiling is hit — the stream is
+        // being terminated, so the tracker has no further work.
+        releaseTokenSentinelTracker(governanceTracker);
+      },
+      onLoopAbort: () => {
+        // The transform emits the clean terminal frames itself; the caller
+        // only has to release the per-stream tracker.
+        releaseTokenSentinelTracker(governanceTracker);
+      },
+    },
   });
   const clientFacingStream = wrapReadableStreamWithFinalize(finalStream, releaseTurnExecution);
 
