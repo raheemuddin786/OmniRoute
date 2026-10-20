@@ -129,6 +129,12 @@ import { buildExecutorClientHeaders } from "./chatCore/executorClientHeaders.ts"
 import { executeProviderRequest as executeProviderRequestLeaf } from "./chatCore/executeProviderRequest.ts";
 import { runNonStreamingResponse } from "./chatCore/nonStreamingResponse.ts";
 import {
+  applyGovernanceIngress,
+  hashPromptMessages,
+  nextGovernanceTurnIndex,
+  resolveGovernanceRequestIdentity,
+} from "./chatCore/governanceIngress.ts";
+import {
   supportsMaxTokens,
   getResolvedModelCapabilities,
   getExplicitModelOutputCap,
@@ -1132,6 +1138,43 @@ async function handleChatCoreInner({
   }
 
   body = sanitizeChatRequestBody(body, sourceFormat, targetFormat);
+  // ── Proxy governance layer (request side) ──
+  // Two artifacts are injected into the CLIENT-FORMAT body here, before the
+  // request is translated:
+  //  1. a parked loop intervention (a synthetic system directive telling the
+  //     model to halt a repeated tool call) — consumed once, on the turn
+  //     after the loop was detected on the egress;
+  //  2. the synthetic error results of the tool calls the proxy rejected on
+  //     the egress — so the model reads the rejection, not the client's own
+  //     output for a call the proxy refused.
+  //
+  // The session key is resolved from the body BEFORE the injection, so the
+  // key the NEXT turn resolves is unchanged (otherwise the loop breaker's
+  // window would reset every turn). Every step fails OPEN — a governance
+  // failure returns the body unmodified.
+  const governanceIdentity = resolveGovernanceRequestIdentity(
+    {
+      body,
+      headers: clientRawRequest?.headers,
+      provider,
+      connectionId: getCurrentConnectionId(),
+      fallback: skillRequestId,
+    },
+    apiKeyInfo
+  );
+  const governanceTurnIndex = nextGovernanceTurnIndex(governanceIdentity.sessionId);
+  const governancePromptHash = hashPromptMessages(body);
+  body = applyGovernanceIngress({
+    body,
+    sessionId: governanceIdentity.sessionId,
+    sourceFormat,
+    principalId: governanceIdentity.principalId,
+    requestId: traceId,
+    model,
+    provider,
+    turnIndex: governanceTurnIndex,
+    promptHash: governancePromptHash,
+  });
   // Per-request opt-out: clients that manage their own context send
   // `x-omniroute-no-memory: true` to skip memory+skills injection (a null owner
   // disables both branches in injectMemoryAndSkills). See PRD-2026-06-19-no-memory-header.
@@ -3283,6 +3326,9 @@ async function handleChatCoreInner({
     fallbackAttempts,
     finalBody,
     getCurrentConnectionId,
+    governanceIdentity,
+    governanceTurnIndex,
+    governanceCatalogBody: body,
     isCombo,
     isDroidCLI,
     isResponsesEndpoint,
