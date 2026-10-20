@@ -26,7 +26,7 @@
  *  5. **Overflow is counted, never silent.** The ring buffer is bounded; when it
  *     wraps, `overflowCount` and `droppedCount` increase. Dropping an audit
  *     entry is a real (if bounded) loss of observability, so it is surfaced via
- *     `getAuditBusStats()` rather than vanishing.
+ *     the bus's `stats` getter rather than vanishing.
  *
  * IDENTITY: this module does NOT invent a parallel id scheme. `sessionId` and
  * `principalId` are supplied by the caller from the EXISTING identity
@@ -332,17 +332,15 @@ export function recordGovernanceAudit(
   globalBus.record(input);
 }
 
-/** Read the process-wide bus stats. */
-export function getAuditBusStats(): AuditBusStats {
-  return globalBus.stats;
-}
-
-/** Most recent records on the process-wide bus, newest first. */
-export function getRecentGovernanceAudit(limit = 50): GovernanceAuditRecord[] {
-  return globalBus.recent(limit);
-}
-
-/** The process-wide bus (exported for tests and for sink registration). */
+/**
+ * The process-wide bus (exported for tests and for sink registration).
+ *
+ * The bus instance IS the observability surface: `bus.stats` carries the
+ * counters, `bus.recent(limit)` the newest records and `bus.clearSinks()` the
+ * sink reset. A separate module-level wrapper for each of those would be a
+ * second way to reach the same state, and the repo's dead-export gate treats
+ * an unused wrapper as dead code.
+ */
 export function getGovernanceAuditBus(): GovernanceAuditBus {
   return globalBus;
 }
@@ -366,9 +364,4 @@ export type GovernanceRoutingEventSink = GovernanceAuditSink;
  */
 export function registerGovernanceAuditSink(sink: GovernanceRoutingEventSink): () => void {
   return globalBus.registerSink(sink);
-}
-
-/** Remove every governance sink from the process-wide bus. */
-export function clearGovernanceAuditSinks(): void {
-  globalBus.clearSinks();
 }

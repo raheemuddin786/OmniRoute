@@ -321,21 +321,15 @@ export class LoopBreaker {
 /** Process-wide default breaker. */
 const globalBreaker = new LoopBreaker();
 
-/** Observe a tool call on the process-wide breaker. */
-export function observeToolCallForLoop(
-  sessionId: string,
-  toolName: string,
-  args: unknown
-): LoopDetection | null {
-  return globalBreaker.observe(sessionId, toolName, args);
-}
-
-/** Interventions delivered to a session on the process-wide breaker. */
-export function getLoopInterventionCount(sessionId: string): number {
-  return globalBreaker.getInterventionCount(sessionId);
-}
-
-/** The process-wide breaker. */
+/**
+ * The process-wide breaker.
+ *
+ * The breaker instance IS the API: `observe()` detects a loop and
+ * `getInterventionCount()` reports how many interventions a session has
+ * received. A separate module-level wrapper for either would be a second way
+ * to reach the same state, and the repo's dead-export gate treats an unused
+ * wrapper as dead code.
+ */
 export function getLoopBreaker(): LoopBreaker {
   return globalBreaker;
 }

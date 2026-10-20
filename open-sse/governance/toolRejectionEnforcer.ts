@@ -55,7 +55,6 @@
  * failure must never corrupt a user's request.
  */
 
-import { sanitizeErrorMessage } from "../utils/error.ts";
 import { logger } from "../utils/logger.ts";
 import {
   validateToolCall,
@@ -64,7 +63,11 @@ import {
   type ToolCallValidationContext,
   type ToolCallRejectionReason,
 } from "./toolSchemaValidator.ts";
-import { getToolRejectionLedger, type ToolRejectionLedger } from "./toolRejectionLedger.ts";
+import {
+  buildRejectionKey,
+  getToolRejectionLedger,
+  type ToolRejectionLedger,
+} from "./toolRejectionLedger.ts";
 
 const log = logger("GOVERNANCE");
 
@@ -288,7 +291,12 @@ function resolveRejection(
   context: ToolCallValidationContext,
   ledger: ToolRejectionLedger
 ): EnforcedRejection | null {
-  const known = ledger.get(call.callId);
+  // The ledger key is SCOPED to the conversation: a provider call id is unique
+  // only within one conversation, so an unscoped key would let one
+  // conversation's rejection rewrite an unrelated conversation's tool result.
+  const key = buildRejectionKey(context.sessionId, call.callId);
+
+  const known = ledger.get(key);
   if (known) {
     return {
       callId: call.callId,
@@ -306,8 +314,8 @@ function resolveRejection(
   const outcome = validateToolCall(descriptor, context);
   if (outcome.ok !== false) return null;
 
-  ledger.record(call.callId, call.name, outcome.reason, outcome.message);
-  if (ledger.markAudited(call.callId)) {
+  ledger.record(key, call.name, outcome.reason, outcome.message);
+  if (ledger.markAudited(key)) {
     auditToolCallRejection(descriptor, outcome.reason, context);
   }
   return {
@@ -339,6 +347,9 @@ export function enforceToolCallRejections<T>(
     if (calls.length === 0) return empty;
 
     const activeLedger = ledger ?? getToolRejectionLedger();
+    // The rewrite map is keyed by the WIRE call id (that is what the request's
+    // `tool_call_id` / `tool_use_id` / `call_id` carries), while the LEDGER is
+    // keyed by the session-scoped key. The two are kept apart deliberately.
     const rejections = new Map<string, { message: string; reason: ToolCallRejectionReason }>();
     const details: EnforcedRejection[] = [];
 
@@ -353,7 +364,7 @@ export function enforceToolCallRejections<T>(
     if (rejections.size === 0) return { body, rejections: details };
 
     for (const callId of rejections.keys()) {
-      activeLedger.markEnforced(callId);
+      activeLedger.markEnforced(buildRejectionKey(context.sessionId, callId));
     }
 
     return {
@@ -367,5 +378,3 @@ export function enforceToolCallRejections<T>(
     return empty;
   }
 }
-
-export { sanitizeErrorMessage };

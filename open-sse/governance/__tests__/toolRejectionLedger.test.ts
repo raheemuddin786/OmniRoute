@@ -20,6 +20,7 @@ import {
   MAX_LEDGER_ENTRIES,
   getToolRejectionLedger,
   recordToolRejection,
+  buildRejectionKey,
 } from "../toolRejectionLedger.ts";
 
 beforeEach(() => {
@@ -116,5 +117,43 @@ describe("process-wide ledger", () => {
     expect(recordToolRejection("call_1", "read_file", "unknown_tool", "not declared")).toBe(true);
     expect(recordToolRejection("call_1", "read_file", "unknown_tool", "not declared")).toBe(false);
     expect(getToolRejectionLedger().get("call_1")?.name).toBe("read_file");
+  });
+});
+
+describe("session-scoped keys", () => {
+  it("scopes a key to the session when a session id is present", () => {
+    const key = buildRejectionKey("session-a", "call_1");
+    expect(key).not.toBe("call_1");
+    expect(key).toContain("call_1");
+    expect(key).toContain("session-a");
+  });
+
+  it("falls back to the bare call id without a session id", () => {
+    expect(buildRejectionKey("", "call_1")).toBe("call_1");
+    expect(buildRejectionKey(null, "call_1")).toBe("call_1");
+    expect(buildRejectionKey(undefined, "call_1")).toBe("call_1");
+  });
+
+  it("gives two sessions different keys for the same call id", () => {
+    expect(buildRejectionKey("session-a", "call_1")).not.toBe(
+      buildRejectionKey("session-b", "call_1")
+    );
+  });
+
+  it("does not leak a rejection across sessions", () => {
+    const ledger = new ToolRejectionLedger();
+    ledger.record(buildRejectionKey("session-a", "call_1"), "read_file", "unknown_tool", "x");
+    expect(ledger.get(buildRejectionKey("session-a", "call_1"))).not.toBeNull();
+    // A DIFFERENT conversation that reuses the same call id must not resolve
+    // to the other conversation's rejection.
+    expect(ledger.get(buildRejectionKey("session-b", "call_1"))).toBeNull();
+  });
+
+  it("scopes the process-wide helper too", () => {
+    expect(recordToolRejection("call_1", "read_file", "unknown_tool", "x", "session-a")).toBe(true);
+    expect(getToolRejectionLedger().get(buildRejectionKey("session-a", "call_1"))?.name).toBe(
+      "read_file"
+    );
+    expect(getToolRejectionLedger().get(buildRejectionKey("session-b", "call_1"))).toBeNull();
   });
 });
