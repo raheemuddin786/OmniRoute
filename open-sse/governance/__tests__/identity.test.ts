@@ -73,6 +73,53 @@ describe("governance identity", () => {
       expect(a.sessionId).not.toBe(b.sessionId);
     });
 
+    it("stays stable when the client changes its tool catalog between turns", () => {
+      // The governance layer spans turns: a tool call is rejected on the
+      // egress of turn N and enforced on the ingress of turn N+1, and a loop
+      // intervention is parked on turn N and injected on turn N+1. Both halves
+      // must land on the SAME session key.
+      //
+      // A client may legitimately declare a different tool set on a later
+      // turn (many clients declare the tools only on the first turn). If the
+      // fingerprint tracked the tool list, the key would change and the
+      // turn-N+1 enforcement would look for the rejection under a key that
+      // turn N never wrote.
+      const messages = [{ role: "user", content: "hi" }];
+      const withTools = resolveGovernanceIdentity({
+        body: {
+          model: "gpt-4",
+          messages,
+          tools: [{ type: "function", function: { name: "read_file" } }],
+        },
+      });
+      const withoutTools = resolveGovernanceIdentity({ body: { model: "gpt-4", messages } });
+      expect(withTools.sessionId).toBe(withoutTools.sessionId);
+    });
+
+    it("stays stable when the client ADDS a tool on a later turn", () => {
+      const messages = [{ role: "user", content: "hi" }];
+      const before = resolveGovernanceIdentity({ body: { model: "gpt-4", messages } });
+      const after = resolveGovernanceIdentity({
+        body: {
+          model: "gpt-4",
+          messages,
+          tools: [{ type: "function", function: { name: "read_file" } }],
+        },
+      });
+      expect(before.sessionId).toBe(after.sessionId);
+    });
+
+    it("still separates two conversations that use the SAME tool catalog", () => {
+      const tools = [{ type: "function", function: { name: "read_file" } }];
+      const a = resolveGovernanceIdentity({
+        body: { model: "gpt-4", messages: [{ role: "user", content: "a" }], tools },
+      });
+      const b = resolveGovernanceIdentity({
+        body: { model: "gpt-4", messages: [{ role: "user", content: "b" }], tools },
+      });
+      expect(a.sessionId).not.toBe(b.sessionId);
+    });
+
     it("includes the provider in the fingerprint", () => {
       const body = { model: "gpt-4", messages: [{ role: "user", content: "hi" }] };
       const withProvider = resolveGovernanceIdentity({ body, provider: "openai" });
