@@ -325,4 +325,72 @@ describe("Claude Web strict stream protocol", () => {
       assert.equal(failures, 1);
     }
   });
+
+  it("omits redundant claude_web metadata in minimalResponse streaming mode", async () => {
+    const events = [
+      { type: "message_start" },
+      { type: "ping" },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "minimal hello" },
+      },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" } },
+      { type: "message_stop" },
+    ];
+    const response = await createClaudeWebResponse(byteStream(frames(events)), {
+      model: "claude-sonnet-5",
+      stream: true,
+      responseMetadata: { conversation_id: "conv-123" },
+      minimalResponse: true,
+      onComplete() {},
+      onFailure() {},
+    });
+
+    assert.equal(response.status, 200);
+    const output = await response.text();
+    const parsed = parseSse(output);
+    assert.doesNotMatch(output, /claude_web/);
+    assert.doesNotMatch(output, /conv-123/);
+    assert.equal(
+      parsed.json
+        .flatMap(
+          (chunk) =>
+            (chunk.choices as Array<{ delta?: { content?: string } }>)?.[0]?.delta?.content ?? ""
+        )
+        .join(""),
+      "minimal hello"
+    );
+  });
+
+  it("omits redundant claude_web metadata in minimalResponse non-streaming mode", async () => {
+    const events = [
+      { type: "message_start" },
+      { type: "ping" },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "buffered minimal" },
+      },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" } },
+      { type: "message_stop" },
+    ];
+    const response = await createClaudeWebResponse(byteStream(frames(events)), {
+      model: "claude-sonnet-5",
+      stream: false,
+      responseMetadata: { conversation_id: "conv-456" },
+      minimalResponse: true,
+      onComplete() {},
+      onFailure() {},
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.claude_web, undefined);
+    assert.equal(body.choices[0].message.content, "buffered minimal");
+  });
 });

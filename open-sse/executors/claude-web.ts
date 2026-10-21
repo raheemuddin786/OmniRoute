@@ -527,6 +527,15 @@ export class ClaudeWebExecutor extends BaseExecutor {
         );
       }
 
+      const minimalResponse =
+        Boolean(
+          credentials?.providerSpecificData &&
+          typeof credentials.providerSpecificData === "object" &&
+          (credentials.providerSpecificData as Record<string, unknown>).minimalResponse === true
+        ) ||
+        process.env.OMNIROUTE_CLAUDE_WEB_MINIMAL_RESPONSE === "1" ||
+        process.env.OMNIROUTE_CLAUDE_WEB_MINIMAL_RESPONSE === "true";
+
       const response = await createClaudeWebResponse(transportResult.body, {
         model,
         stream,
@@ -534,6 +543,7 @@ export class ClaudeWebExecutor extends BaseExecutor {
         onComplete: ({ assistantText }) => commitClaudeWebTurn(turn, assistantText),
         onFailure: () => invalidateClaudeWebTurn(turn),
         log,
+        minimalResponse,
       });
       return makeExecutionResult(response, auditBody, auditUrl, auditHeaders);
     } catch {

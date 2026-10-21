@@ -22,6 +22,11 @@ export interface ClaudeWebStreamOptions {
    * `DEFAULT_TOOL_USE_IDLE_FINISH_MS`.
    */
   toolUseIdleFinishMs?: number;
+  /**
+   * When true, omit redundant claude_web metadata blocks and internal metadata SSE
+   * chunks, returning strictly standard OpenAI-compatible response payloads.
+   */
+  minimalResponse?: boolean;
 }
 
 /** Default idle window (ms) — see `ClaudeWebStreamOptions.toolUseIdleFinishMs`. */
@@ -545,7 +550,7 @@ function makeChunk(
   finishReason: string | null,
   event?: { type: string; data: Record<string, unknown> }
 ): Record<string, unknown> {
-  return {
+  const chunk: Record<string, unknown> = {
     id,
     object: "chat.completion.chunk",
     created,
@@ -558,11 +563,14 @@ function makeChunk(
         logprobs: null,
       },
     ],
-    claude_web: {
+  };
+  if (!options.minimalResponse) {
+    chunk.claude_web = {
       ...options.responseMetadata,
       ...(event ? { event } : {}),
-    },
-  };
+    };
+  }
+  return chunk;
 }
 
 function protocolErrorBody(): Record<string, unknown> {
@@ -654,30 +662,32 @@ async function createBufferedResponse(
       }));
     }
 
-    return new Response(
-      JSON.stringify({
-        id,
-        object: "chat.completion",
-        created,
-        model: options.model,
-        choices: [
-          {
-            index: 0,
-            message,
-            finish_reason: openAiFinishReason(stopReason),
-            logprobs: null,
-          },
-        ],
-        claude_web: {
-          ...options.responseMetadata,
-          events: metadataEvents,
+    const completionPayload: Record<string, unknown> = {
+      id,
+      object: "chat.completion",
+      created,
+      model: options.model,
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: openAiFinishReason(stopReason),
+          logprobs: null,
         },
-      }),
-      {
-        status: 200,
-        headers: responseHeaders("application/json", options.responseMetadata),
-      }
-    );
+      ],
+    };
+
+    if (!options.minimalResponse) {
+      completionPayload.claude_web = {
+        ...options.responseMetadata,
+        events: metadataEvents,
+      };
+    }
+
+    return new Response(JSON.stringify(completionPayload), {
+      status: 200,
+      headers: responseHeaders("application/json", options.responseMetadata),
+    });
   } catch (error) {
     options.log?.error?.(
       "CLAUDE-WEB-STREAM",
@@ -788,6 +798,9 @@ async function queueSemanticEvent(
   }
 
   if (event.kind === "metadata") {
+    if (options.minimalResponse) {
+      return;
+    }
     state.pendingChunks.push(
       encodeStreamEvent(
         state,
