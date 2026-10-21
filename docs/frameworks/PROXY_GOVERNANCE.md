@@ -253,7 +253,7 @@ for callers that genuinely have no conversation context.
 `LoopBreaker` keeps a bounded sliding window of tool-call **fingerprints** per session — a SHA-256
 digest of the tool name and the canonicalized arguments, never the arguments themselves.
 
-- **repeat** — the same fingerprint appears at least `REPEAT_THRESHOLD` (3) times in the window.
+- **repeat** — the _current_ tool-call fingerprint at the window tail has occurred at least `REPEAT_THRESHOLD` (3) times in the window. Repeat detection is anchored to the active observation, ensuring that when a model pivots away from a loop to a new tool (e.g. writing a document), subsequent calls are not falsely blamed for past loops.
 - **pingpong** — the window's longest strictly-alternating suffix over exactly two fingerprints
   carries at least `PINGPONG_THRESHOLD` (3) transitions.
 
@@ -263,6 +263,13 @@ contains A three times, so a repeat-first order would misreport it.
 On detection the intervention message is parked for the next turn. Once the session has been
 intervened on more than `MAX_INTERVENTIONS` (2) times, the stream is aborted with a clean terminal
 frame.
+
+Operators can tune or disable loop breaking using environment variables:
+`OMNIROUTE_GOVERNANCE_LOOP_ENABLED` (`true`/`false`),
+`OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD` (default: 3),
+`OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE` (default: 10),
+`OMNIROUTE_GOVERNANCE_LOOP_PINGPONG_THRESHOLD` (default: 3), and
+`OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS` (default: 2).
 
 The intervention is a synthetic **system** directive. The carrier is chosen from the **client
 format** when it is known, because the body shapes overlap (an Anthropic Messages body carries BOTH

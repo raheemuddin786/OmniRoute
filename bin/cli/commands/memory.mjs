@@ -107,6 +107,7 @@ export async function runMemoryAdd(opts, cmd) {
   const body = {
     content,
     type: resolvedType,
+    key: opts.key || `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     ...(opts.metadata ? { metadata: JSON.parse(opts.metadata) } : {}),
     ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
   };
@@ -210,6 +211,7 @@ export function registerMemory(program) {
     .description(t("memory.add.description"))
     .option("--content <text>", t("memory.add.content"))
     .option("--file <path>", t("memory.add.file"))
+    .option("--key <key>", "Unique key for the memory entry")
     .option("--type <type>", t("memory.add.type"))
     .option("--metadata <json>", t("memory.add.metadata"))
     .option("--api-key <key>", t("memory.add.api_key"))

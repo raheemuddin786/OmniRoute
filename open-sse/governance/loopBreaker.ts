@@ -66,6 +66,64 @@ export const MAX_INTERVENTIONS = 2;
 /** Upper bound on tracked sessions (LRU eviction). */
 export const MAX_TRACKED_SESSIONS = 500;
 
+/**
+ * Resolve whether loop breaking is enabled.
+ * Override with `OMNIROUTE_GOVERNANCE_LOOP_ENABLED` ("0" or "false" disables).
+ */
+export function resolveGovernanceLoopEnabled(): boolean {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_LOOP_ENABLED;
+  if (raw === undefined || raw === "") return true;
+  return raw !== "0" && raw.toLowerCase() !== "false";
+}
+
+/**
+ * Resolve the threshold of identical fingerprints inside the sliding window that constitute a loop.
+ * Override with `OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD` (positive integers only).
+ */
+export function resolveGovernanceLoopRepeatThreshold(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD;
+  if (raw === undefined || raw === "") return REPEAT_THRESHOLD;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return REPEAT_THRESHOLD;
+  return parsed;
+}
+
+/**
+ * Resolve the sliding window size for loop breaking.
+ * Override with `OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE` (positive integers only).
+ */
+export function resolveGovernanceLoopWindowSize(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE;
+  if (raw === undefined || raw === "") return WINDOW_SIZE;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return WINDOW_SIZE;
+  return parsed;
+}
+
+/**
+ * Resolve the threshold of alternating cycles between two fingerprints that constitute a loop.
+ * Override with `OMNIROUTE_GOVERNANCE_LOOP_PINGPONG_THRESHOLD` (positive integers only).
+ */
+export function resolveGovernanceLoopPingpongThreshold(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_LOOP_PINGPONG_THRESHOLD;
+  if (raw === undefined || raw === "") return PINGPONG_THRESHOLD;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return PINGPONG_THRESHOLD;
+  return parsed;
+}
+
+/**
+ * Resolve the number of loop interventions tolerated per session before hard-aborting.
+ * Override with `OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS` (non-negative integers only).
+ */
+export function resolveGovernanceLoopMaxInterventions(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS;
+  if (raw === undefined || raw === "") return MAX_INTERVENTIONS;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return MAX_INTERVENTIONS;
+  return parsed;
+}
+
 export type LoopKind = "repeat" | "pingpong";
 
 export interface LoopDetection {
@@ -84,6 +142,7 @@ export interface LoopDetection {
 }
 
 export interface LoopBreakerOptions {
+  enabled?: boolean;
   windowSize?: number;
   repeatThreshold?: number;
   pingpongThreshold?: number;
@@ -147,6 +206,7 @@ export function fingerprintToolCall(toolName: string, args: unknown): string {
  */
 export class LoopBreaker {
   private readonly sessions = new Map<string, SessionState>();
+  private readonly enabled: boolean;
   private readonly windowSize: number;
   private readonly repeatThreshold: number;
   private readonly pingpongThreshold: number;
@@ -155,10 +215,11 @@ export class LoopBreaker {
   private readonly now: () => number;
 
   constructor(options: LoopBreakerOptions = {}) {
-    this.windowSize = options.windowSize ?? WINDOW_SIZE;
-    this.repeatThreshold = options.repeatThreshold ?? REPEAT_THRESHOLD;
-    this.pingpongThreshold = options.pingpongThreshold ?? PINGPONG_THRESHOLD;
-    this.maxInterventions = options.maxInterventions ?? MAX_INTERVENTIONS;
+    this.enabled = options.enabled ?? resolveGovernanceLoopEnabled();
+    this.windowSize = options.windowSize ?? resolveGovernanceLoopWindowSize();
+    this.repeatThreshold = options.repeatThreshold ?? resolveGovernanceLoopRepeatThreshold();
+    this.pingpongThreshold = options.pingpongThreshold ?? resolveGovernanceLoopPingpongThreshold();
+    this.maxInterventions = options.maxInterventions ?? resolveGovernanceLoopMaxInterventions();
     this.maxSessions = options.maxSessions ?? MAX_TRACKED_SESSIONS;
     this.now = options.now ?? (() => Date.now());
   }
@@ -188,7 +249,7 @@ export class LoopBreaker {
     toolName: string,
     args: unknown
   ): LoopDetection | null {
-    if (!sessionId) return null;
+    if (!this.enabled || !sessionId) return null;
     const fingerprint = fingerprintToolCall(toolName, args);
 
     let state = this.sessions.get(sessionId);
@@ -228,6 +289,8 @@ export class LoopBreaker {
   detectInWindow(
     window: readonly string[]
   ): Omit<LoopDetection, "interventions" | "shouldAbort"> | null {
+    if (window.length === 0) return null;
+
     // ── Ping-pong: a strictly alternating tail over exactly two fingerprints ──
     // A "cycle" is one transition between the two fingerprints, so >= 3 cycles
     // means >= 3 transitions, i.e. an alternating run of at least 4 calls
@@ -237,17 +300,20 @@ export class LoopBreaker {
     const pingpong = this.detectPingpong(window);
     if (pingpong) return pingpong;
 
-    // ── Repeat: the same fingerprint at least `repeatThreshold` times ──
-    // Counted across the WHOLE window (not just consecutively) — "3 identical
-    // fingerprints within the window" is the stated trigger.
-    const counts = new Map<string, number>();
+    // ── Repeat: the current fingerprint occurred at least `repeatThreshold` times ──
+    // Counted across the whole sliding window, but strictly anchored to the CURRENT
+    // action (window tail). If the model pivots to a different tool (such as writing
+    // a document or taking a new action), prior repeated calls must not falsely accuse
+    // the new action of repeating.
+    const currentFingerprint = window[window.length - 1];
+    let count = 0;
     for (const fingerprint of window) {
-      counts.set(fingerprint, (counts.get(fingerprint) ?? 0) + 1);
-    }
-    for (const [fingerprint, count] of counts) {
-      if (count >= this.repeatThreshold) {
-        return { kind: "repeat", fingerprints: [fingerprint], count };
+      if (fingerprint === currentFingerprint) {
+        count += 1;
       }
+    }
+    if (count >= this.repeatThreshold) {
+      return { kind: "repeat", fingerprints: [currentFingerprint], count };
     }
 
     return null;

@@ -213,4 +213,112 @@ describe("loop breaker", () => {
       expect(message).toContain("alternating loop");
     });
   });
+
+  describe("strategy pivot after intervention (regression: false loop on document writing)", () => {
+    it("does NOT flag subsequent different tool calls after an intervention", () => {
+      // Model calls read_file 3 times -> triggers 1st intervention
+      breaker.observe("session-1", "read_file", { path: "notes.txt" });
+      breaker.observe("session-1", "read_file", { path: "notes.txt" });
+      const firstDetection = breaker.observe("session-1", "read_file", { path: "notes.txt" });
+      expect(firstDetection).not.toBeNull();
+      expect(firstDetection?.kind).toBe("repeat");
+      expect(firstDetection?.interventions).toBe(1);
+      expect(firstDetection?.shouldAbort).toBe(false);
+
+      // Model changes strategy and writes a document:
+      const writeResult1 = breaker.observe("session-1", "write_file", {
+        path: "report.md",
+        content: "# Title\nSection 1",
+      });
+      expect(writeResult1).toBeNull();
+      expect(breaker.getInterventionCount("session-1")).toBe(1);
+
+      // Model writes another document or section:
+      const writeResult2 = breaker.observe("session-1", "write_file", {
+        path: "report.md",
+        content: "# Title\nSection 1\nSection 2",
+      });
+      expect(writeResult2).toBeNull();
+      expect(breaker.getInterventionCount("session-1")).toBe(1);
+
+      // Model writes a third document with different path:
+      const writeResult3 = breaker.observe("session-1", "write_file", {
+        path: "summary.md",
+        content: "All tasks completed.",
+      });
+      expect(writeResult3).toBeNull();
+      expect(breaker.getInterventionCount("session-1")).toBe(1);
+    });
+
+    it("detects repeat only if the model repeats the new tool call >= repeatThreshold times", () => {
+      // Repeat on tool A
+      for (let i = 0; i < REPEAT_THRESHOLD; i++) {
+        breaker.observe("session-2", "tool_a", { arg: 1 });
+      }
+      expect(breaker.getInterventionCount("session-2")).toBe(1);
+
+      // Pivot to tool B
+      expect(breaker.observe("session-2", "write_file", { doc: 1 })).toBeNull();
+      expect(breaker.observe("session-2", "write_file", { doc: 1 })).toBeNull();
+
+      // Third time calling tool B with identical args:
+      const bDetection = breaker.observe("session-2", "write_file", { doc: 1 });
+      expect(bDetection).not.toBeNull();
+      expect(bDetection?.kind).toBe("repeat");
+      expect(bDetection?.interventions).toBe(2);
+      expect(bDetection?.shouldAbort).toBe(false);
+    });
+  });
+
+  describe("environment variable configuration", () => {
+    it("honours OMNIROUTE_GOVERNANCE_LOOP_ENABLED=false", () => {
+      const original = process.env.OMNIROUTE_GOVERNANCE_LOOP_ENABLED;
+      try {
+        process.env.OMNIROUTE_GOVERNANCE_LOOP_ENABLED = "false";
+        const disabledBreaker = new LoopBreaker();
+        for (let i = 0; i < 10; i++) {
+          expect(disabledBreaker.observe("s", "t", { x: 1 })).toBeNull();
+        }
+        expect(disabledBreaker.getInterventionCount("s")).toBe(0);
+      } finally {
+        if (original === undefined) delete process.env.OMNIROUTE_GOVERNANCE_LOOP_ENABLED;
+        else process.env.OMNIROUTE_GOVERNANCE_LOOP_ENABLED = original;
+      }
+    });
+
+    it("honours custom threshold and window overrides via env", () => {
+      const origRepeat = process.env.OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD;
+      const origWindow = process.env.OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE;
+      const origInterventions = process.env.OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS;
+      try {
+        process.env.OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD = "5";
+        process.env.OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE = "20";
+        process.env.OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS = "1";
+
+        const customBreaker = new LoopBreaker();
+        // 4 calls should not trip
+        for (let i = 0; i < 4; i++) {
+          expect(customBreaker.observe("s", "t", { x: 1 })).toBeNull();
+        }
+        // 5th call trips repeat
+        const d1 = customBreaker.observe("s", "t", { x: 1 });
+        expect(d1).not.toBeNull();
+        expect(d1?.count).toBe(5);
+        expect(d1?.interventions).toBe(1);
+        expect(d1?.shouldAbort).toBe(false);
+
+        // 6th call trips second intervention, which exceeds maxInterventions (1)
+        const d2 = customBreaker.observe("s", "t", { x: 1 });
+        expect(d2?.shouldAbort).toBe(true);
+      } finally {
+        if (origRepeat === undefined) delete process.env.OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD;
+        else process.env.OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD = origRepeat;
+        if (origWindow === undefined) delete process.env.OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE;
+        else process.env.OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE = origWindow;
+        if (origInterventions === undefined)
+          delete process.env.OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS;
+        else process.env.OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS = origInterventions;
+      }
+    });
+  });
 });
