@@ -1484,61 +1484,127 @@ async function handleChatImplementation(
     }
     comboPreselectedCredentials.clear();
 
-    // ── Global Fallback Provider (#689) ────────────────────────────────────
-    // If combo exhausted all models, try the global fallback before giving up.
-    if (
-      !response.ok &&
-      [429, 500, 502, 503, 504].includes(response.status) &&
-      typeof (settings as any)?.globalFallbackModel === "string" &&
-      (settings as any).globalFallbackModel.trim()
-    ) {
-      const fallbackModel = (settings as any).globalFallbackModel.trim();
-      log.info(
-        "GLOBAL_FALLBACK",
-        `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
+    // ── SPB Tier & Global Fallback Provider (#689) ───────────────────────────
+    // If combo exhausted all models, try SPB tier fallbacks and global fallback before giving up.
+    if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+      // 1. If SPB is active or recommended alternative tier models exist, attempt tier fallback
+      const currentTierConfig = getTierConfig();
+      const candidateTierModels = [
+        ...(spbDecision?.tierAssignment?.recommendedModels || []),
+        ...(currentTierConfig?.tierModels?.resilient || []),
+      ].filter(
+        (m: string) =>
+          typeof m === "string" && m.trim() && m !== resolvedModelStr && m !== combo.name
       );
-      try {
-        const fallbackResponse = await runWithTransientBackendRetry(
-          () =>
-            handleSingleModelChat(
-              body,
-              fallbackModel,
-              clientRawRequest,
-              request,
-              combo.name,
-              apiKeyInfo,
-              telemetry,
-              {
-                sessionId,
-                sessionAffinityKey,
-                emergencyFallbackTried: true,
-                forceLiveComboTest: isComboLiveTest,
-                conversationId,
-                managedLease,
-                videoBridgeLog,
-              },
-              combo.strategy,
-              true
-            ),
-          { signal: signal ?? undefined, source: "global-fallback" }
+      const uniqueCandidates = Array.from(new Set(candidateTierModels));
+
+      for (const altModel of uniqueCandidates) {
+        log.info(
+          "SPB_FALLBACK",
+          `Combo "${combo.name}" exhausted (${response.status}) — attempting SPB tier fallback: ${altModel}`
         );
-        if (fallbackResponse.ok) {
-          log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
-          recordTelemetry(telemetry);
-          return withSpbHeaders(
-            withModalityBridgeHeader(
-              withConversationId(withSessionHeader(fallbackResponse, sessionId), conversationId),
-              modalityBridgeHeader
-            ),
-            spbDecision
+        try {
+          const altResponse = await handleSingleModelChat(
+            body,
+            altModel,
+            clientRawRequest,
+            request,
+            combo.name,
+            apiKeyInfo,
+            telemetry,
+            {
+              sessionId,
+              sessionAffinityKey,
+              forceLiveComboTest: isComboLiveTest,
+              forcedConnectionId: null,
+              correlationId: reqId,
+              conversationId,
+              routingComboId,
+              reasoningDecision,
+              reasoningIntent,
+              reasoningRequestTags: requestRoutingTags.tags,
+              managedLease,
+              videoBridgeLog,
+            },
+            combo.strategy,
+            false
+          );
+          if (altResponse.ok) {
+            log.info("SPB_FALLBACK", `SPB tier fallback "${altModel}" succeeded`);
+            recordTelemetry(telemetry);
+            return withSpbHeaders(
+              withModalityBridgeHeader(
+                withConversationId(withSessionHeader(altResponse, sessionId), conversationId),
+                modalityBridgeHeader
+              ),
+              spbDecision
+            );
+          }
+          log.warn(
+            "SPB_FALLBACK",
+            `SPB tier fallback "${altModel}" failed (${altResponse.status})`
+          );
+        } catch (err: any) {
+          log.warn(
+            "SPB_FALLBACK",
+            `SPB tier fallback error on "${altModel}": ${err?.message || "unknown"}`
           );
         }
-        log.warn(
+      }
+
+      // 2. Global fallback model
+      if (
+        typeof (settings as any)?.globalFallbackModel === "string" &&
+        (settings as any).globalFallbackModel.trim()
+      ) {
+        const fallbackModel = (settings as any).globalFallbackModel.trim();
+        log.info(
           "GLOBAL_FALLBACK",
-          `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+          `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
         );
-      } catch (err: any) {
-        log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
+        try {
+          const fallbackResponse = await runWithTransientBackendRetry(
+            () =>
+              handleSingleModelChat(
+                body,
+                fallbackModel,
+                clientRawRequest,
+                request,
+                combo.name,
+                apiKeyInfo,
+                telemetry,
+                {
+                  sessionId,
+                  sessionAffinityKey,
+                  emergencyFallbackTried: true,
+                  forceLiveComboTest: isComboLiveTest,
+                  conversationId,
+                  managedLease,
+                  videoBridgeLog,
+                },
+                combo.strategy,
+                true
+              ),
+            { signal: signal ?? undefined, source: "global-fallback" }
+          );
+          if (fallbackResponse.ok) {
+            log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+            recordTelemetry(telemetry);
+            return withSpbHeaders(
+              withModalityBridgeHeader(
+                withConversationId(withSessionHeader(fallbackResponse, sessionId), conversationId),
+                modalityBridgeHeader
+              ),
+              spbDecision
+            );
+          }
+          log.warn(
+            "GLOBAL_FALLBACK",
+            `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+          );
+        } catch (err: any) {
+          log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
+        }
       }
     }
     // ─────────────────────────────────────────────────────────────────────────

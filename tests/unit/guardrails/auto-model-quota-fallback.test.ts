@@ -117,3 +117,54 @@ test("applyComboTargetExhaustion marks exhaustedProviders on all-accounts quota 
   assert.equal(outcome.providerExhausted, true);
   assert.ok(exhaustedProviders.has("kilocode"));
 });
+
+test("isProviderQuotaExhausted keeps Antigravity provider available on model-specific quota exhaustion", () => {
+  const result = isProviderQuotaExhausted("antigravity", {
+    rawModel: "claude-opus-4-6-thinking",
+    result: { status: 429 },
+    fallbackResult: {},
+    errorText:
+      "[antigravity/claude-opus-4-6-thinking] [429]: Antigravity upstream error (429): Resource has been exhausted (e.g. check quota). (reset after 5m)",
+    allAccountsRateLimited: false,
+    requestScopedFailure: false,
+  });
+  // Since antigravity has per-model quota, a single model failure does not exhaust the whole provider
+  assert.equal(result, false);
+});
+
+test("applyComboTargetExhaustion keeps antigravity provider eligible for other models while cooling down connection", () => {
+  const exhaustedProviders = new Set<string>();
+  const exhaustedConnections = new Set<string>();
+  const transientRateLimitedProviders = new Set<string>();
+
+  const target: ResolvedComboTarget = {
+    kind: "model",
+    provider: "antigravity",
+    modelStr: "antigravity/claude-opus-4-6-thinking",
+    executionKey: "ag1",
+    connectionId: "conn-ag1",
+  };
+
+  const outcome = applyComboTargetExhaustion(target, {
+    result: { status: 429 },
+    fallbackResult: {},
+    errorText:
+      "[antigravity/claude-opus-4-6-thinking] [429]: Antigravity upstream error (429): Resource has been exhausted (e.g. check quota). (reset after 5m)",
+    rawModel: "claude-opus-4-6-thinking",
+    isTokenLimitBreach: false,
+    allAccountsRateLimited: false,
+    requestScopedFailure: false,
+    sets: {
+      exhaustedProviders,
+      exhaustedConnections,
+      transientRateLimitedProviders,
+    },
+    log: { info() {}, warn() {}, error() {}, debug() {} },
+    tag: "COMBO",
+    exhaustedLogLevel: "info",
+  });
+
+  assert.equal(outcome.providerExhausted, false);
+  assert.equal(exhaustedProviders.has("antigravity"), false);
+  assert.ok(transientRateLimitedProviders.has("antigravity"));
+});

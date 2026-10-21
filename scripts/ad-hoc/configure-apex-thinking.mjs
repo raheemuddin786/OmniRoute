@@ -13,7 +13,7 @@ for (const dbPath of uniquePaths) {
   const db = new Database(dbPath);
 
   const comboId = "c032a18e-49b8-4c6e-8ff5-6c7c427c3e10";
-  const comboName = "apex-thinking";
+  const comboName = "apex/claude-sonnet-5.5";
   const now = new Date().toISOString();
 
   const comboData = {
@@ -34,9 +34,16 @@ for (const dbPath of uniquePaths) {
         weight: 0,
       },
       {
-        id: "apex-ag-opus-thinking",
+        id: "apex-ag-gemini-3-8-flash-tiered",
         kind: "model",
-        model: "antigravity/claude-opus-4-6-thinking",
+        model: "antigravity/gemini-3.8-flash-tiered",
+        providerId: "antigravity",
+        weight: 0,
+      },
+      {
+        id: "apex-ag-gemini-3-8-flash-high",
+        kind: "model",
+        model: "antigravity/gemini-3.8-flash-high",
         providerId: "antigravity",
         weight: 0,
       },
@@ -52,6 +59,12 @@ for (const dbPath of uniquePaths) {
         kind: "model",
         model: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         providerId: "openrouter",
+        weight: 0,
+      },
+      {
+        id: "apex-resilient-ref-opus-4-9",
+        kind: "combo-ref",
+        comboName: "claude-opus-4-9",
         weight: 0,
       },
     ],
@@ -71,11 +84,11 @@ for (const dbPath of uniquePaths) {
     createdAt: now,
     updatedAt: now,
     version: 2,
+    context_cache_protection: true,
   };
 
-  const systemMessage =
-    "You are Apex Thinking Engine, an autonomous reasoning and architectural planning agent. Focus strictly on deep analytical reasoning, structural problem solving, and concise deterministic synthesis. Tools are disabled for pure cognitive planning.";
-  const toolFilterRegex = "^$"; // Strictly strip all tool schemas from being transmitted
+  const systemMessage = null;
+  const toolFilterRegex = null;
 
   db.transaction(() => {
     // 1. Insert or Replace the combo
@@ -94,7 +107,7 @@ for (const dbPath of uniquePaths) {
     ).run(comboId, comboName, JSON.stringify(comboData), now, now, systemMessage, toolFilterRegex);
     console.log(`✓ Combo "${comboName}" configured with priority fallback and tool filter.`);
 
-    // 2. Assign default compression combo (session-dedup + lite) to apex-thinking
+    // 2. Assign default compression combo (session-dedup + lite) to apex/claude-sonnet-5.5
     db.prepare(
       `
     INSERT INTO compression_combo_assignments (id, compression_combo_id, routing_combo_id, created_at)
@@ -105,16 +118,18 @@ for (const dbPath of uniquePaths) {
     ).run(`cca-${comboId}`, comboId, now);
     console.log(`✓ Assigned compression pipeline (session-dedup + lite) to "${comboName}".`);
 
-    // 3. Update tier_config so Apex routes exclusively to apex-thinking
+    // 3. Update tier_config so Apex routes to apex/claude-sonnet-5.5
     const tierRow = db.prepare("SELECT value FROM tier_config WHERE key = 'tier_config'").get();
     if (tierRow) {
       const tierConfig = JSON.parse(tierRow.value);
       tierConfig.tierModels = tierConfig.tierModels || {};
-      tierConfig.tierModels.apex = [comboName];
+      tierConfig.tierModels.apex = [comboName, "apex-thinking"];
       db.prepare(
         "UPDATE tier_config SET value = ?, updated_at = datetime('now') WHERE key = 'tier_config'"
       ).run(JSON.stringify(tierConfig));
-      console.log(`✓ Updated tier_config: apex tier dedicated exclusively to ["${comboName}"].`);
+      console.log(
+        `✓ Updated tier_config: apex tier dedicated exclusively to ["${comboName}", "apex-thinking"].`
+      );
     }
 
     // 4. Update provider_connections for claude-web:
