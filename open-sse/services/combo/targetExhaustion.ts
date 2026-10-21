@@ -430,7 +430,7 @@ export function applyComboTargetExhaustion(
  * models behind one connection, so a quota 429 for one model must NOT skip fallback targets for
  * another model on the same provider.
  */
-function isProviderQuotaExhausted(
+export function isProviderQuotaExhausted(
   provider: string | null | undefined,
   opts: Pick<
     ApplyComboTargetExhaustionOptions,
@@ -458,15 +458,31 @@ function isProviderQuotaExhausted(
   // fallbackResult derived from it). Ours is a local, transient cooldown — never a
   // provider quota signal — so it must not skip the remaining same-provider targets.
   const isLocalCooldown = Boolean(result?.headers?.get?.(LOCAL_MODEL_COOLDOWN_HEADER));
+  if (!provider || provider === "unknown" || isLocalCooldown) {
+    return false;
+  }
+  if (requestScopedFailure || isRequestScopedUpstreamFailure(structuredError)) {
+    return false;
+  }
+  if (canonicalProvider === "claude" && isClaudeMinuteRateLimitText(errorText)) {
+    return false;
+  }
+
+  // All accounts exhausted means the entire provider cannot serve any model right now,
+  // regardless of whether the provider is declared as passthrough/per-model-quota.
+  const isAllAccountsExhausted =
+    Boolean(allAccountsRateLimited) ||
+    /all .* accounts have exhausted their quota/i.test(errorText || "") ||
+    /all accounts have exhausted their quota/i.test(errorText || "");
+
+  if (isAllAccountsExhausted) {
+    return true;
+  }
+
   return (
-    Boolean(provider && provider !== "unknown") &&
-    !isLocalCooldown &&
-    !(requestScopedFailure || isRequestScopedUpstreamFailure(structuredError)) &&
     !hasPerModelQuota(provider as string, rawModel) &&
-    !(canonicalProvider === "claude" && isClaudeMinuteRateLimitText(errorText)) &&
     (isProviderExhaustedReason(fallbackResult) ||
-      classifyErrorText(structuredError?.code || errorText) === RateLimitReason.QUOTA_EXHAUSTED ||
-      allAccountsRateLimited)
+      classifyErrorText(structuredError?.code || errorText) === RateLimitReason.QUOTA_EXHAUSTED)
   );
 }
 

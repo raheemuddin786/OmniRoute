@@ -371,11 +371,11 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
         ? "process"
         : this.deps.resolveComboVisionDecision
           ? await this.deps.resolveComboVisionDecision(model)
-        : this.deps.checkModelHasComboMapping
-          ? (await this.deps.checkModelHasComboMapping(model))
-            ? "process"
-            : "skip"
-          : await getComboVisionBridgeDecision(model);
+          : this.deps.checkModelHasComboMapping
+            ? (await this.deps.checkModelHasComboMapping(model))
+              ? "process"
+              : "skip"
+            : await getComboVisionBridgeDecision(model);
 
       if (comboVisionBridgeDecision === "skip") {
         return { block: false };
@@ -393,9 +393,35 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
         // Combo mapping found — fall through to process images
       }
     }
-    // For auto models (isAuto=true), force remains false and combo decision
-    // remains undefined, which makes the reroute check on line ~189 treat it
-    // like a non-combo model — exactly what we want: reroute to a vision model.
+
+    if (isAuto) {
+      // Check whether configured tier models (e.g. SPB resilient or apex tier) define vision support
+      try {
+        const { getTierConfig } = await import("@omniroute/open-sse/services/tierResolver.ts");
+        const tierConfig = getTierConfig();
+        const tierCandidates = [
+          ...(tierConfig?.tierModels?.resilient || []),
+          ...(tierConfig?.tierModels?.apex || []),
+        ];
+        for (const candidate of tierCandidates) {
+          const decision = await getComboVisionBridgeDecision(candidate);
+          if (decision === "skip" || decision === "process") {
+            comboVisionBridgeDecision = decision;
+            break;
+          }
+          const caps = getResolvedModelCapabilities(candidate);
+          if (caps?.supportsVision === true) {
+            comboVisionBridgeDecision = "skip";
+            break;
+          }
+        }
+      } catch {}
+
+      if (comboVisionBridgeDecision === "skip") {
+        context.log?.debug?.("VISION_BRIDGE", "Skipping: auto tier models support vision natively");
+        return { block: false };
+      }
+    }
 
     // 5. Get body and normalize Chat Completions `messages` vs Responses `input`.
     // Both containers carry role/content items and are supported by the shared
@@ -520,7 +546,7 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
       (!bareIdUnknownVision &&
         (comboVisionBridgeDecision === "not-combo" ||
           comboVisionBridgeDecision === "no-vision" ||
-          isAuto) &&
+          (isAuto && !comboVisionBridgeDecision)) &&
         !forceVisionBridge);
     // Forced modes short-circuit BEFORE the auto heuristic (#6640/#7204 untouched):
     // - "describe" skips the whole reroute block → straight to the describe path.
@@ -772,12 +798,11 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
       (allNull && comboVisionBridgeDecision === "process")
     ) {
       const totalImagesToReplace =
-        confirmedTextOnlyDirectTarget || noVisionCombo
-          ? imageParts.length
-          : descriptions.length;
+        confirmedTextOnlyDirectTarget || noVisionCombo ? imageParts.length : descriptions.length;
       for (let i = 0; i < totalImagesToReplace; i++) {
         if (descriptions[i] == null) {
-          descriptions[i] = `[Image ${i + 1}]: (unavailable — no vision-capable provider connected)`;
+          descriptions[i] =
+            `[Image ${i + 1}]: (unavailable — no vision-capable provider connected)`;
         }
       }
     }

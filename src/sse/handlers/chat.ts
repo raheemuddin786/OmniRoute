@@ -1166,7 +1166,7 @@ async function handleChatImplementation(
     body = { ...body, _spbActive: true, _spbDecision: spbDecision };
   }
 
-  let taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;
+  let _taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;
   if (getTaskRoutingConfig().enabled) {
     telemetry.startPhase("task-route");
     const tr = applyTaskAwareRouting(modelStr, body);
@@ -1180,7 +1180,7 @@ async function handleChatImplementation(
     } else if (tr.taskType !== "chat") {
       log.debug("T05", `Task-Aware: detected="${tr.taskType}" (no override configured)`);
     }
-    taskRouteInfo = { taskType: tr.taskType, wasRouted: tr.wasRouted };
+    _taskRouteInfo = { taskType: tr.taskType, wasRouted: tr.wasRouted };
     telemetry.endPhase();
   }
 
@@ -1488,7 +1488,7 @@ async function handleChatImplementation(
     // If combo exhausted all models, try the global fallback before giving up.
     if (
       !response.ok &&
-      [502, 503].includes(response.status) &&
+      [429, 500, 502, 503, 504].includes(response.status) &&
       typeof (settings as any)?.globalFallbackModel === "string" &&
       (settings as any).globalFallbackModel.trim()
     ) {
@@ -1597,7 +1597,7 @@ async function handleChatImplementation(
       } catch {}
     }
   }
-  const response = await handleSingleModelChat(
+  let response = await handleSingleModelChat(
     body,
     resolvedModelStr,
     clientRawRequest,
@@ -1625,6 +1625,98 @@ async function handleChatImplementation(
     null,
     false
   );
+
+  // If a single model attempt failed with 429 (quota/rate-limit) or 5xx, try fallback:
+  if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+    // 1. If SPB recommended alternative tier models, attempt fallback across remaining models
+    if (spbDecision?.tierAssignment?.recommendedModels?.length) {
+      const candidates = spbDecision.tierAssignment.recommendedModels.filter(
+        (m: string) => m !== resolvedModelStr
+      );
+      for (const altModel of candidates) {
+        log.info(
+          "SPB_FALLBACK",
+          `Single model "${resolvedModelStr}" failed (${response.status}) — attempting SPB tier fallback: ${altModel}`
+        );
+        const altResponse = await handleSingleModelChat(
+          body,
+          altModel,
+          clientRawRequest,
+          request,
+          null,
+          apiKeyInfo,
+          telemetry,
+          {
+            sessionId,
+            sessionAffinityKey,
+            forceLiveComboTest: isComboLiveTest,
+            forcedConnectionId: null,
+            correlationId: reqId,
+            conversationId,
+            routingComboId,
+            reasoningDecision,
+            reasoningIntent,
+            reasoningRequestTags: requestRoutingTags.tags,
+            managedLease,
+            videoBridgeLog,
+          },
+          null,
+          false
+        );
+        if (altResponse.ok) {
+          log.info("SPB_FALLBACK", `SPB tier fallback "${altModel}" succeeded`);
+          response = altResponse;
+          break;
+        }
+      }
+    }
+
+    // 2. If still not ok, try globalFallbackModel if configured
+    if (!response.ok) {
+      const fallbackSettings = await getCachedSettings().catch(
+        () => ({}) as Record<string, unknown>
+      );
+      const fallbackModel =
+        typeof (fallbackSettings as any)?.globalFallbackModel === "string"
+          ? (fallbackSettings as any).globalFallbackModel.trim()
+          : null;
+      if (fallbackModel && fallbackModel !== resolvedModelStr) {
+        log.info(
+          "GLOBAL_FALLBACK",
+          `Single model "${resolvedModelStr}" failed (${response.status}) — attempting global fallback: ${fallbackModel}`
+        );
+        try {
+          const fallbackResponse = await handleSingleModelChat(
+            body,
+            fallbackModel,
+            clientRawRequest,
+            request,
+            null,
+            apiKeyInfo,
+            telemetry,
+            {
+              sessionId,
+              sessionAffinityKey,
+              forceLiveComboTest: isComboLiveTest,
+              forcedConnectionId: null,
+              correlationId: reqId,
+              conversationId,
+              managedLease,
+              videoBridgeLog,
+            },
+            null,
+            false
+          );
+          if (fallbackResponse.ok) {
+            log.info("GLOBAL_FALLBACK", `Global fallback "${fallbackModel}" succeeded`);
+            response = fallbackResponse;
+          }
+        } catch (err: any) {
+          log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
+        }
+      }
+    }
+  }
   recordTelemetry(telemetry);
   return withSpbHeaders(
     withModalityBridgeHeader(

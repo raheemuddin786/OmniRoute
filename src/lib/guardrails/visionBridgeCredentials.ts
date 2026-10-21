@@ -8,6 +8,13 @@
 import { resolveProviderId } from "@/shared/constants/providers";
 import { isNoAuthProviderKey } from "@/shared/utils/noAuthProviders";
 import { SYNTHETIC_NOAUTH_CONNECTION_ID } from "@omniroute/open-sse/services/autoCombo/resilienceCandidateFilter.ts";
+import {
+  isAccountUnavailable,
+  isProviderInCooldown,
+  isModelLocked,
+} from "@omniroute/open-sse/services/accountFallback.ts";
+import { isQuotaExhaustedForRequest } from "@/domain/quotaCache";
+import { getCircuitBreaker } from "@/shared/utils/circuitBreaker";
 
 /**
  * True when a provider connection can actually authenticate upstream.
@@ -21,6 +28,9 @@ export type ProviderConnectionLike = {
   refreshToken?: string | null;
   idToken?: string | null;
   testStatus?: string | null;
+  id?: string | number | null;
+  rateLimitedUntil?: string | number | Date | null;
+  providerSpecificData?: unknown;
 };
 
 const TERMINAL_CONNECTION_STATUSES = new Set(["disabled", "banned", "expired"]);
@@ -46,9 +56,36 @@ export function hasTerminalConnectionStatus(connection: ProviderConnectionLike):
   return TERMINAL_CONNECTION_STATUSES.has(status);
 }
 
-export function isProviderConnectionUsable(connection: ProviderConnectionLike): boolean {
+export function isProviderConnectionUsable(
+  connection: ProviderConnectionLike,
+  provider?: string,
+  model?: string
+): boolean {
   if (hasTerminalConnectionStatus(connection)) {
     return false;
+  }
+
+  if (connection.rateLimitedUntil && isAccountUnavailable(connection.rateLimitedUntil)) {
+    return false;
+  }
+
+  if (connection.id && provider) {
+    if (
+      isQuotaExhaustedForRequest(
+        String(connection.id),
+        provider,
+        model,
+        connection.providerSpecificData
+      )
+    ) {
+      return false;
+    }
+  }
+
+  if (connection.id && provider && model) {
+    if (isModelLocked(provider, String(connection.id), model)) {
+      return false;
+    }
   }
 
   const auth = String(connection.authType || "").toLowerCase();
@@ -182,6 +219,20 @@ export async function hasUsableCredentialsForModel(
   const provider = resolveProviderId(rawProvider);
   const allowed = toAllowedConnectionSet(options.allowedConnectionIds);
   const isNoAuth = isNoAuthProviderKey(rawProvider, provider);
+
+  try {
+    const breaker = getCircuitBreaker(provider);
+    if (breaker?.getStatus?.()?.state === "OPEN") {
+      return false;
+    }
+  } catch {}
+
+  try {
+    if (isProviderInCooldown(provider)) {
+      return false;
+    }
+  } catch {}
+
   try {
     const { getProviderConnections } = await loadProvidersModule();
     const prefixToNode = await getPrefixToNode();
@@ -198,8 +249,12 @@ export async function hasUsableCredentialsForModel(
       // No-auth rows store no API key (authType "noauth" + empty apiKey would
       // fail the generic key check) — only a terminal status blocks them.
       const usable = isNoAuth
-        ? !connections.some((c: any) => hasTerminalConnectionStatus(c))
-        : connections.some((c: any) => isProviderConnectionUsable(c));
+        ? !connections.some(
+            (c: any) =>
+              hasTerminalConnectionStatus(c) ||
+              (c.rateLimitedUntil && isAccountUnavailable(c.rateLimitedUntil))
+          )
+        : connections.some((c: any) => isProviderConnectionUsable(c, providerId, model));
       if (usable) return true;
     }
     // No candidate has a stored row: keyed providers are definitively
@@ -252,8 +307,12 @@ export async function getUsableConnectionsForModel(
       return isNoAuth ? [{ id: SYNTHETIC_NOAUTH_CONNECTION_ID }] : [];
     }
     const usable = isNoAuth
-      ? connections.filter((c: any) => !hasTerminalConnectionStatus(c))
-      : connections.filter((c: any) => isProviderConnectionUsable(c));
+      ? connections.filter(
+          (c: any) =>
+            !hasTerminalConnectionStatus(c) &&
+            (!c.rateLimitedUntil || !isAccountUnavailable(c.rateLimitedUntil))
+        )
+      : connections.filter((c: any) => isProviderConnectionUsable(c, provider, model));
     return usable.map((c: any) => ({ id: String(c.id) }));
   } catch {
     return null;

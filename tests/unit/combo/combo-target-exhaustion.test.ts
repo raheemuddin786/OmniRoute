@@ -1213,3 +1213,38 @@ test("OmniRoute's own local model_cooldown 429 never exhausts the provider (#173
   assert.equal(upstreamResult.providerExhausted, true);
   assert.ok(upstream.exhaustedProviders.has("test-dedup-provider"));
 });
+
+test("allAccountsRateLimited marks per-model-quota provider (like kilocode) exhausted", () => {
+  const s = sets();
+  const { providerExhausted: exhausted } = applyComboTargetExhaustion(
+    target({ provider: "kilocode", modelStr: "kilocode/openrouter/free" }),
+    {
+      ...baseOpts,
+      rawModel: "openrouter/free",
+      result: { status: 429 },
+      fallbackResult: { reason: "rate_limit_exceeded" },
+      allAccountsRateLimited: true,
+      sets: s,
+    }
+  );
+  assert.equal(exhausted, true);
+  assert.ok(s.exhaustedProviders.has("kilocode"));
+});
+
+test("error text 'All kilocode accounts have exhausted their quota' marks provider exhausted", () => {
+  const s = sets();
+  const { providerExhausted: exhausted } = applyComboTargetExhaustion(
+    target({ provider: "kilocode", modelStr: "kilocode/openrouter/free" }),
+    {
+      ...baseOpts,
+      rawModel: "openrouter/free",
+      result: { status: 429 },
+      fallbackResult: {},
+      errorText:
+        "All kilocode accounts have exhausted their quota (cached quota state, no upstream attempt; earliest reset after 5m) (reset after 5m)",
+      sets: s,
+    }
+  );
+  assert.equal(exhausted, true);
+  assert.ok(s.exhaustedProviders.has("kilocode"));
+});
