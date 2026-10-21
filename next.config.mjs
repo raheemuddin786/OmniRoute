@@ -286,6 +286,10 @@ const nextConfig = {
       "**/.tmp/**",
       "**/electron/**",
       "**/docs/**",
+      "**/*.tgz",
+      "**/_artifacts/**",
+      "**/.artifacts/**",
+      "**/.sandbox/**",
     ],
   },
   serverExternalPackages: [
