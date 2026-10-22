@@ -70,6 +70,7 @@ import { extractFacts } from "@/lib/memory/extraction";
 import { calculateCost } from "@/lib/usage/costCalculator";
 import { appendRequestLog, trackPendingRequest } from "@/lib/usageDb";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags.ts";
+import { deleteSessionPinsForSession } from "@/lib/db/contextHandoffs";
 import { isEmptyStreamSiblingRecoveryEnabled } from "../../services/streamRecovery.ts";
 import { getProviderCredentials } from "@/sse/services/auth";
 import { resolveCredentialGate } from "@/lib/streamingCredentialTransform";
@@ -831,11 +832,25 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
           provider,
           turnIndex: governanceTurnIndex,
         });
+        if (breach.kind === "repetition" && governanceIdentity.sessionId) {
+          try {
+            deleteSessionPinsForSession(governanceIdentity.sessionId);
+          } catch {
+            // fail-open
+          }
+        }
         // Release the tracker as soon as the ceiling is hit — the stream is
         // being terminated, so the tracker has no further work.
         releaseTokenSentinelTracker(governanceTracker);
       },
       onLoopAbort: () => {
+        if (governanceIdentity.sessionId) {
+          try {
+            deleteSessionPinsForSession(governanceIdentity.sessionId);
+          } catch {
+            // fail-open
+          }
+        }
         // The transform emits the clean terminal frames itself; the caller
         // only has to release the per-stream tracker.
         releaseTokenSentinelTracker(governanceTracker);

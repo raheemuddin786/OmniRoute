@@ -112,7 +112,7 @@ export interface TokenSentinelOptions {
 }
 
 export interface TokenSentinelBreach {
-  kind: "ceiling" | "velocity";
+  kind: "ceiling" | "velocity" | "repetition";
   /** Cumulative reasoning tokens at breach time. */
   cumulativeTokens: number;
   /** Tokens/second over the velocity window (velocity breaches only). */
@@ -129,6 +129,70 @@ interface VelocitySample {
   tokens: number;
 }
 
+/**
+ * Detect degenerate token / phrase repetition loops in model text (stuttering, runaway loops).
+ */
+export function detectDegenerateRepetition(text: string): { detected: boolean; reason?: string } {
+  if (!text || text.length < 35) return { detected: false };
+
+  const words = text.trim().split(/\s+/).slice(-80);
+  if (words.length < 5) return { detected: false };
+
+  // 1. Runaway single-word repetition (e.g. "wait wait wait wait wait wait")
+  if (words.length >= 6) {
+    const lastWord = words[words.length - 1].toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (lastWord.length >= 2) {
+      let run = 0;
+      for (let i = words.length - 1; i >= 0; i--) {
+        const w = words[i].toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (w === lastWord) run++;
+        else break;
+      }
+      if (run >= 6) {
+        return { detected: true, reason: `runaway_word_repeat ("${lastWord}" x ${run})` };
+      }
+    }
+  }
+
+  // 2. Word-level stuttering (consecutive identical words in stream)
+  let stutterCount = 0;
+  for (let i = 1; i < words.length; i++) {
+    const w1 = words[i - 1].toLowerCase().replace(/[^a-z0-9]/g, "");
+    const w2 = words[i].toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (w1.length >= 2 && w1 === w2) {
+      stutterCount++;
+    }
+  }
+  if (stutterCount >= 4) {
+    return { detected: true, reason: `word_stuttering (${stutterCount} stutter pairs)` };
+  }
+
+  // 3. Multi-word phrase repetition cycle (k words repeated 3+ times consecutively)
+  for (let k = 3; k <= 25; k++) {
+    if (words.length < k * 3) break;
+    const g1 = words.slice(-k).join(" ").toLowerCase();
+    const g2 = words
+      .slice(-k * 2, -k)
+      .join(" ")
+      .toLowerCase();
+    const g3 = words
+      .slice(-k * 3, -k * 2)
+      .join(" ")
+      .toLowerCase();
+    if (g1 === g2 && g2 === g3) {
+      const clean = g1.replace(/[^a-z0-9]/g, "");
+      if (clean.length >= 8) {
+        return {
+          detected: true,
+          reason: `phrase_repetition_cycle ("${words.slice(-k).join(" ").slice(0, 35)}...")`,
+        };
+      }
+    }
+  }
+
+  return { detected: false };
+}
+
 export class TokenSentinelTracker {
   private cumulativeTokens = 0;
   private readonly samples: VelocitySample[] = [];
@@ -136,6 +200,7 @@ export class TokenSentinelTracker {
   private readonly velocityCeiling: number | null;
   private readonly velocityWindowMs: number;
   private readonly now: () => number;
+  private recentTextTail = "";
   private released = false;
   private breached = false;
 
@@ -163,59 +228,80 @@ export class TokenSentinelTracker {
   }
 
   /**
-   * Account for one reasoning delta.
-   *
-   * Returns a breach descriptor the first time a limit is crossed, and null
-   * afterwards (a stream reports at most one breach).
-   *
-   * A RELEASED tracker is inert: the stream it belonged to is over (the client
-   * disconnected, or the breach already terminated it), so late-arriving
-   * deltas must not resurrect a breach for a stream nobody is reading.
+   * Observe stream text (content or reasoning) for degenerate repetition and accounting.
    */
-  observeReasoningText(text: string): TokenSentinelBreach | null {
+  observeText(text: string, isReasoning = false): TokenSentinelBreach | null {
     if (this.released) return null;
     if (this.breached) return null;
     if (typeof text !== "string" || text.length === 0) return null;
 
-    const tokens = Math.ceil(text.length / CHARS_PER_TOKEN);
-    if (tokens <= 0) return null;
-
-    this.cumulativeTokens += tokens;
-    const now = this.now();
-    this.samples.push({ at: now, tokens });
-    this.pruneSamples(now);
-
-    if (this.cumulativeTokens >= this.ceiling) {
+    // Check for degenerate repetition across accumulated stream text
+    this.recentTextTail = (this.recentTextTail + text).slice(-1500);
+    const rep = detectDegenerateRepetition(this.recentTextTail);
+    if (rep.detected) {
       this.breached = true;
       return {
-        kind: "ceiling",
+        kind: "repetition",
         cumulativeTokens: this.cumulativeTokens,
         velocity: this.computeVelocity(),
-        limit: this.ceiling,
+        limit: 0,
         message:
-          `Reasoning token ceiling reached (${this.cumulativeTokens} of ${this.ceiling}). ` +
-          `The stream was stopped to bound the request cost.`,
+          `Degenerate repetition loop detected in model output (${rep.reason}). ` +
+          `The stream was stopped to bound token waste.`,
       };
     }
 
-    if (this.velocityCeiling !== null) {
-      const velocity = this.computeVelocity();
-      if (velocity >= this.velocityCeiling) {
+    if (isReasoning) {
+      const tokens = Math.ceil(text.length / CHARS_PER_TOKEN);
+      if (tokens <= 0) return null;
+
+      this.cumulativeTokens += tokens;
+      const now = this.now();
+      this.samples.push({ at: now, tokens });
+      this.pruneSamples(now);
+
+      if (this.cumulativeTokens >= this.ceiling) {
         this.breached = true;
         return {
-          kind: "velocity",
+          kind: "ceiling",
           cumulativeTokens: this.cumulativeTokens,
-          velocity,
-          limit: this.velocityCeiling,
+          velocity: this.computeVelocity(),
+          limit: this.ceiling,
           message:
-            `Reasoning token emission rate exceeded the configured limit ` +
-            `(${velocity.toFixed(1)} tokens/s of ${this.velocityCeiling}). ` +
+            `Reasoning token ceiling reached (${this.cumulativeTokens} of ${this.ceiling}). ` +
             `The stream was stopped to bound the request cost.`,
         };
+      }
+
+      if (this.velocityCeiling !== null) {
+        const velocity = this.computeVelocity();
+        if (velocity >= this.velocityCeiling) {
+          this.breached = true;
+          return {
+            kind: "velocity",
+            cumulativeTokens: this.cumulativeTokens,
+            velocity,
+            limit: this.velocityCeiling,
+            message:
+              `Reasoning token emission rate exceeded the configured limit ` +
+              `(${velocity.toFixed(1)} tokens/s of ${this.velocityCeiling}). ` +
+              `The stream was stopped to bound the request cost.`,
+          };
+        }
       }
     }
 
     return null;
+  }
+
+  /**
+   * Account for one reasoning delta.
+   *
+   * Returns a breach descriptor the first time a limit is crossed, and null
+   * afterwards (a stream reports at most one breach).
+   */
+  observeReasoningText(text: string): TokenSentinelBreach | null {
+    return this.observeText(text, true);
   }
 
   /** Drop samples older than the velocity window. */
@@ -330,6 +416,55 @@ export function extractReasoningText(chunk: unknown): string[] {
   // Responses: {type:"response.reasoning_content_text.delta", delta:"text"}
   if (typeof record.delta === "string" && typeof record.type === "string") {
     if (record.type.includes("reasoning")) pushText(out, record.delta);
+  }
+
+  return out;
+}
+
+/**
+ * Extract stream text deltas (both reasoning text and output content text).
+ */
+export function extractStreamTexts(chunk: unknown): { text: string; isReasoning: boolean }[] {
+  const out: { text: string; isReasoning: boolean }[] = [];
+  if (!chunk || typeof chunk !== "object") return out;
+  const record = chunk as Record<string, unknown>;
+
+  // Reasoning text
+  const reasoningTexts = extractReasoningText(chunk);
+  for (const t of reasoningTexts) {
+    out.push({ text: t, isReasoning: true });
+  }
+
+  // Anthropic content delta: {type:"content_block_delta", delta:{type:"text_delta", text}}
+  const delta = record.delta as Record<string, unknown> | undefined;
+  if (
+    delta &&
+    typeof delta === "object" &&
+    typeof delta.text === "string" &&
+    delta.type === "text_delta"
+  ) {
+    out.push({ text: delta.text, isReasoning: false });
+  }
+
+  // OpenAI Chat content: choices[].delta.content
+  const choices = record.choices;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      if (!choice || typeof choice !== "object") continue;
+      const d = (choice as Record<string, unknown>).delta as Record<string, unknown> | undefined;
+      if (d && typeof d.content === "string") {
+        out.push({ text: d.content, isReasoning: false });
+      }
+    }
+  }
+
+  // Responses: {type:"response.output_text.delta", delta:"text"}
+  if (
+    typeof record.delta === "string" &&
+    typeof record.type === "string" &&
+    record.type.includes("output_text")
+  ) {
+    out.push({ text: record.delta, isReasoning: false });
   }
 
   return out;

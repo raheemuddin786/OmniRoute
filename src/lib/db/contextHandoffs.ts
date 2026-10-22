@@ -254,3 +254,19 @@ export function deleteSessionModelHistory(sessionId: string, comboName: string):
     .run(sessionId, comboName);
   return result.changes ?? 0;
 }
+
+/**
+ * Clear all session model history pins for a session across any combo.
+ * Used when a session encounters a runaway loop or catastrophic failure so
+ * subsequent requests can cleanly re-resolve models.
+ *
+ * @param sessionId - The session identifier whose pins should be cleared.
+ * @returns The number of deleted entries.
+ */
+export function deleteSessionPinsForSession(sessionId: string): number {
+  const db = getDbInstance() as unknown as DbLike;
+  const result = db
+    .prepare("DELETE FROM session_model_history WHERE session_id = ?")
+    .run(sessionId);
+  return result.changes ?? 0;
+}

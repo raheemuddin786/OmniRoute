@@ -766,6 +766,7 @@ async function handleComboChatInner({
       handleSingleModelWithTimeout,
       log,
       hiddenModelsByProvider,
+      sessionId: effectiveSessionId,
     });
     if (pinnedDispatch) return pinnedDispatch;
   }

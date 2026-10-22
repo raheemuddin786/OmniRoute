@@ -27,7 +27,7 @@ import {
 import { getToolRejectionLedger, buildRejectionKey } from "../toolRejectionLedger.ts";
 import { getLoopInterventionStore } from "../loopIntervention.ts";
 import { LoopBreaker } from "../loopBreaker.ts";
-import { TokenSentinelTracker } from "../tokenSentinel.ts";
+import { TokenSentinelTracker, type TokenSentinelBreach } from "../tokenSentinel.ts";
 import { FORMATS } from "../../translator/formats.ts";
 
 const encoder = new TextEncoder();
@@ -594,6 +594,52 @@ describe("governanceTransform — fail open", () => {
     );
     // The terminal frames are still emitted — the callback failure must not
     // leave the stream without a clean finish.
+    expect(out).toContain("[DONE]");
+  });
+
+  it("aborts when rejected/malformed tool calls are repeatedly emitted", async () => {
+    const breaker = new LoopBreaker({ repeatThreshold: 2, maxInterventions: 1 });
+    const loopBreaker = { observe: breaker.observe.bind(breaker) } as never;
+    const aborted: unknown[] = [];
+
+    // Emit an unknown tool call twice (which fails schema validation / rejection)
+    let out = "";
+    for (let i = 0; i < 3; i++) {
+      out = await run(OPENAI_CALL_FRAMES("unknown_hallucinated_tool", '{"bad":1}'), {
+        body: catalog,
+        loopBreaker,
+        clientFormat: FORMATS.OPENAI,
+        onLoopAbort: (detection: unknown) => aborted.push(detection),
+      });
+    }
+
+    expect(aborted.length).toBeGreaterThan(0);
+    expect(out).toContain("governance");
+    expect(out).toContain("finish_reason");
+  });
+
+  it("terminates stream with loop finish reason on degenerate repetitive generation", async () => {
+    const tracker = new TokenSentinelTracker({ ceiling: 10000 });
+    const breaches: TokenSentinelBreach[] = [];
+    const stutterText =
+      "Google's Google's recommended recommended snippet snippet is is always always ";
+    const out = await run(
+      [
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: stutterText } }],
+        })}\n\n`,
+      ],
+      {
+        body: catalog,
+        clientFormat: FORMATS.OPENAI,
+        tokenTracker: tracker,
+        onBreach: (b: TokenSentinelBreach) => breaches.push(b),
+      }
+    );
+
+    expect(breaches.length).toBe(1);
+    expect(breaches[0].kind).toBe("repetition");
+    expect(out).toContain("governance");
     expect(out).toContain("[DONE]");
   });
 });

@@ -64,7 +64,7 @@ import { FORMATS } from "../translator/formats.ts";
 import { logger } from "../utils/logger.ts";
 import { buildErrorBody } from "../utils/error.ts";
 import { SYNTHETIC_RESPONSES_SEQUENCE_NUMBER } from "../utils/responsesSequence.ts";
-import { extractReasoningText } from "./tokenSentinel.ts";
+import { extractStreamTexts } from "./tokenSentinel.ts";
 import { buildLoopInterventionMessage, fingerprintToolCall } from "./loopBreaker.ts";
 import { validateToolCall, auditToolCallRejection } from "./toolSchemaValidator.ts";
 import { recordGovernanceAudit } from "./auditBus.ts";
@@ -418,7 +418,6 @@ class GovernanceEgressTap {
     const outcome = validateToolCall(descriptor, context);
     if (outcome.ok === false) {
       this.rejectToolCall({ name: call.name, callId: call.callId, args }, outcome, context);
-      return;
     }
 
     if (!this.options.loopBreaker) return;
@@ -428,7 +427,8 @@ class GovernanceEgressTap {
   }
 
   /**
-   * Account the payload's reasoning text against the token sentinel.
+   * Account the payload's reasoning and content stream text against the token sentinel
+   * and degenerate repetition detector.
    *
    * Returns true when the stream was terminated.
    */
@@ -439,12 +439,12 @@ class GovernanceEgressTap {
     const tracker = this.options.tokenTracker;
     if (!tracker) return false;
 
-    const texts = extractReasoningText(payload);
-    if (texts.length === 0) return false;
+    const streamTexts = extractStreamTexts(payload);
+    if (streamTexts.length === 0) return false;
 
     let breach: TokenSentinelBreach | null = null;
-    for (const text of texts) {
-      breach = tracker.observeReasoningText(text);
+    for (const item of streamTexts) {
+      breach = tracker.observeText(item.text, item.isReasoning);
       if (breach) break;
     }
     if (!breach) return false;
@@ -457,11 +457,14 @@ class GovernanceEgressTap {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    this.flushTerminal(
-      controller,
-      "Request stopped by the proxy governance layer: the reasoning budget was exhausted.",
-      "ceiling"
-    );
+
+    const message =
+      breach.kind === "repetition"
+        ? "Request stopped by the proxy governance layer: model entered degenerate repetitive generation loop."
+        : "Request stopped by the proxy governance layer: the reasoning budget was exhausted.";
+    const finishReason = breach.kind === "repetition" ? "loop" : "ceiling";
+
+    this.flushTerminal(controller, message, finishReason);
     return true;
   }
 
