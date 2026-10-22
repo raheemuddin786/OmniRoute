@@ -4,6 +4,8 @@ import {
   LoopBreaker,
   fingerprintToolCall,
   buildLoopInterventionMessage,
+  buildLoopSteeringDirective,
+  resolveGovernanceLoopSteeringEnabled,
   WINDOW_SIZE,
   REPEAT_THRESHOLD,
   PINGPONG_THRESHOLD,
@@ -319,6 +321,59 @@ describe("loop breaker", () => {
           delete process.env.OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS;
         else process.env.OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS = origInterventions;
       }
+    });
+
+    it("resolves loop steering enabled by default and honours env overrides", () => {
+      const origSteering = process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING;
+      try {
+        delete process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING;
+        expect(resolveGovernanceLoopSteeringEnabled()).toBe(true);
+
+        process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING = "false";
+        expect(resolveGovernanceLoopSteeringEnabled()).toBe(false);
+
+        process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING = "0";
+        expect(resolveGovernanceLoopSteeringEnabled()).toBe(false);
+
+        process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING = "true";
+        expect(resolveGovernanceLoopSteeringEnabled()).toBe(true);
+      } finally {
+        if (origSteering === undefined) delete process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING;
+        else process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING = origSteering;
+      }
+    });
+  });
+
+  describe("buildLoopSteeringDirective", () => {
+    it("builds a directive for repeat loops with tool name", () => {
+      const directive = buildLoopSteeringDirective(
+        {
+          kind: "repeat",
+          fingerprints: ["hash1"],
+          count: 3,
+          interventions: 2,
+          shouldAbort: true,
+        },
+        "read_file"
+      );
+      expect(directive).toContain("Governance Steering Directive");
+      expect(directive).toContain('"read_file"');
+      expect(directive).toContain("3 times");
+      expect(directive).toContain("Immediately change strategy");
+    });
+
+    it("builds a directive for pingpong loops", () => {
+      const directive = buildLoopSteeringDirective({
+        kind: "pingpong",
+        fingerprints: ["hash1", "hash2"],
+        count: 4,
+        interventions: 2,
+        shouldAbort: true,
+      });
+      expect(directive).toContain("Governance Steering Directive");
+      expect(directive).toContain("alternating action loop");
+      expect(directive).toContain("4 cycles");
+      expect(directive).toContain("Immediately change strategy");
     });
   });
 });

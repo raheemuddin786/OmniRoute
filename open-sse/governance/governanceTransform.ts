@@ -65,7 +65,12 @@ import { logger } from "../utils/logger.ts";
 import { buildErrorBody } from "../utils/error.ts";
 import { SYNTHETIC_RESPONSES_SEQUENCE_NUMBER } from "../utils/responsesSequence.ts";
 import { extractStreamTexts } from "./tokenSentinel.ts";
-import { buildLoopInterventionMessage, fingerprintToolCall } from "./loopBreaker.ts";
+import {
+  buildLoopInterventionMessage,
+  buildLoopSteeringDirective,
+  resolveGovernanceLoopSteeringEnabled,
+  fingerprintToolCall,
+} from "./loopBreaker.ts";
 import { validateToolCall, auditToolCallRejection } from "./toolSchemaValidator.ts";
 import { recordGovernanceAudit } from "./auditBus.ts";
 import { registerLoopIntervention } from "./loopIntervention.ts";
@@ -84,6 +89,11 @@ export interface GovernanceTransformOptions {
   tokenTracker?: TokenSentinelTracker | null;
   /** The loop breaker (process-wide or injected). */
   loopBreaker?: LoopBreaker | null;
+  /**
+   * Whether to steer the agent in-stream upon loop detection instead of emitting
+   * a fatal error frame. Defaults to resolving from `OMNIROUTE_GOVERNANCE_LOOP_STEERING`.
+   */
+  enableSteering?: boolean;
   /** Existing session identity. */
   sessionId: string;
   /** API-key id when known. */
@@ -215,6 +225,200 @@ export function buildGovernanceTerminalFrames(
   ];
 }
 
+export interface GovernanceSteeringOptions {
+  /** The block index currently open (if any) in Anthropic format to close. */
+  openAnthropicBlockIndex?: number | null;
+  /** The highest block index seen so far in Anthropic format. */
+  highestAnthropicBlockIndex?: number;
+  /** Whether message_start was already emitted. */
+  hasSeenMessageStart?: boolean;
+}
+
+/**
+ * Build active steering completion frames for a client format.
+ *
+ * Emits a valid, protocol-compliant assistant completion turn containing the
+ * steering directive and clean normal finish reasons (`stop` / `end_turn` / `completed`)
+ * instead of error frames (`event: error` or `{ error: ... }`).
+ *
+ * This allows the client agent harness (Antigravity IDE, Claude Code, Cline, etc.)
+ * to receive the directive as assistant output and autonomously pivot into recovery,
+ * avoiding fatal API error crashes.
+ */
+export function buildGovernanceSteeringFrames(
+  clientFormat: string | null | undefined,
+  directive: string,
+  options: GovernanceSteeringOptions = {}
+): Uint8Array[] {
+  if (clientFormat === FORMATS.CLAUDE) {
+    const frames: Uint8Array[] = [];
+    if (!options.hasSeenMessageStart) {
+      frames.push(
+        encoder.encode(
+          `event: message_start\ndata: ${JSON.stringify({
+            type: "message_start",
+            message: {
+              id: "msg_governance",
+              type: "message",
+              role: "assistant",
+              content: [],
+              model: "governance",
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 0, output_tokens: 0 },
+            },
+          })}\n\n`
+        )
+      );
+    }
+    if (options.openAnthropicBlockIndex !== null && options.openAnthropicBlockIndex !== undefined) {
+      frames.push(
+        encoder.encode(
+          `event: content_block_stop\ndata: ${JSON.stringify({
+            type: "content_block_stop",
+            index: options.openAnthropicBlockIndex,
+          })}\n\n`
+        )
+      );
+    }
+
+    const nextIndex =
+      typeof options.highestAnthropicBlockIndex === "number" &&
+      options.highestAnthropicBlockIndex >= 0
+        ? options.highestAnthropicBlockIndex + 1
+        : typeof options.openAnthropicBlockIndex === "number"
+          ? options.openAnthropicBlockIndex + 1
+          : 0;
+
+    frames.push(
+      encoder.encode(
+        `event: content_block_start\ndata: ${JSON.stringify({
+          type: "content_block_start",
+          index: nextIndex,
+          content_block: { type: "text", text: "" },
+        })}\n\n`
+      ),
+      encoder.encode(
+        `event: content_block_delta\ndata: ${JSON.stringify({
+          type: "content_block_delta",
+          index: nextIndex,
+          delta: { type: "text_delta", text: directive },
+        })}\n\n`
+      ),
+      encoder.encode(
+        `event: content_block_stop\ndata: ${JSON.stringify({
+          type: "content_block_stop",
+          index: nextIndex,
+        })}\n\n`
+      ),
+      encoder.encode(
+        `event: message_delta\ndata: ${JSON.stringify({
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        })}\n\n`
+      ),
+      encoder.encode(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`)
+    );
+    return frames;
+  }
+
+  if (clientFormat === FORMATS.OPENAI_RESPONSES) {
+    return [
+      encoder.encode(
+        `event: response.output_item.added\ndata: ${JSON.stringify({
+          type: "response.output_item.added",
+          sequence_number: SYNTHETIC_RESPONSES_SEQUENCE_NUMBER,
+          output_index: 0,
+          item: {
+            id: "item_governance",
+            type: "message",
+            status: "in_progress",
+            role: "assistant",
+            content: [{ type: "text", text: "" }],
+          },
+        })}\n\n`
+      ),
+      encoder.encode(
+        `event: response.text.delta\ndata: ${JSON.stringify({
+          type: "response.text.delta",
+          sequence_number: SYNTHETIC_RESPONSES_SEQUENCE_NUMBER + 1,
+          item_id: "item_governance",
+          output_index: 0,
+          content_index: 0,
+          delta: directive,
+        })}\n\n`
+      ),
+      encoder.encode(
+        `event: response.output_item.done\ndata: ${JSON.stringify({
+          type: "response.output_item.done",
+          sequence_number: SYNTHETIC_RESPONSES_SEQUENCE_NUMBER + 2,
+          output_index: 0,
+          item: {
+            id: "item_governance",
+            type: "message",
+            status: "completed",
+            role: "assistant",
+            content: [{ type: "text", text: directive }],
+          },
+        })}\n\n`
+      ),
+      encoder.encode(
+        `event: response.completed\ndata: ${JSON.stringify({
+          type: "response.completed",
+          sequence_number: SYNTHETIC_RESPONSES_SEQUENCE_NUMBER + 3,
+          response: {
+            id: "resp_governance",
+            object: "response",
+            created_at: Math.floor(Date.now() / 1000),
+            status: "completed",
+            output: [
+              {
+                id: "item_governance",
+                type: "message",
+                status: "completed",
+                role: "assistant",
+                content: [{ type: "text", text: directive }],
+              },
+            ],
+            usage: null,
+          },
+        })}\n\n`
+      ),
+      encoder.encode("data: [DONE]\n\n"),
+    ];
+  }
+
+  // OpenAI Chat Completions.
+  return [
+    encoder.encode(
+      `data: ${JSON.stringify({
+        id: "chatcmpl-governance",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: "governance",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: directive },
+            finish_reason: null,
+          },
+        ],
+      })}\n\n`
+    ),
+    encoder.encode(
+      `data: ${JSON.stringify({
+        id: "chatcmpl-governance",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: "governance",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      })}\n\n`
+    ),
+    encoder.encode("data: [DONE]\n\n"),
+  ];
+}
+
 /**
  * The SSE frame separator — a blank line.
  *
@@ -262,6 +466,9 @@ class GovernanceEgressTap {
   private readonly assembler = new ToolCallAssembler();
   private buffer = "";
   private terminated = false;
+  private openAnthropicBlockIndex: number | null = null;
+  private highestAnthropicBlockIndex = -1;
+  private hasSeenMessageStart = false;
 
   constructor(private readonly options: GovernanceTransformOptions) {}
 
@@ -280,12 +487,25 @@ class GovernanceEgressTap {
     };
   }
 
-  /** Emit the clean terminal frames for the client format. */
+  /** Emit the clean terminal frames or active steering frames for the client format. */
   private flushTerminal(
     controller: TransformStreamDefaultController<Uint8Array>,
     message: string,
-    reason: "ceiling" | "loop"
+    reason: "ceiling" | "loop",
+    steeringDirective?: string
   ): void {
+    const isSteeringEnabled = this.options.enableSteering ?? resolveGovernanceLoopSteeringEnabled();
+
+    if (isSteeringEnabled && steeringDirective) {
+      const frames = buildGovernanceSteeringFrames(this.options.clientFormat, steeringDirective, {
+        openAnthropicBlockIndex: this.openAnthropicBlockIndex,
+        highestAnthropicBlockIndex: this.highestAnthropicBlockIndex,
+        hasSeenMessageStart: this.hasSeenMessageStart,
+      });
+      for (const frame of frames) controller.enqueue(frame);
+      return;
+    }
+
     const frames = buildGovernanceTerminalFrames(this.options.clientFormat, message, reason);
     for (const frame of frames) controller.enqueue(frame);
   }
@@ -371,17 +591,20 @@ class GovernanceEgressTap {
     });
     this.auditLoop(detection, call.name);
 
+    // Always register the next-turn system prompt intervention so the model receives
+    // context reflection on the subsequent request.
+    registerLoopIntervention(
+      this.options.sessionId,
+      buildLoopInterventionMessage(detection, call.name)
+    );
+
     if (!detection.shouldAbort) {
-      // Park the intervention for the next turn of this session.
-      registerLoopIntervention(
-        this.options.sessionId,
-        buildLoopInterventionMessage(detection, call.name)
-      );
       return;
     }
 
-    // The loop persisted past the intervention budget — hard-abort the stream
-    // with a CLEAN finish reason (not a raw connection drop).
+    // The loop persisted past the intervention budget.
+    // Instead of halting execution with an unrecoverable protocol error that crashes
+    // the agent client, steer the agent with an in-stream assistant directive and clean finish reason!
     this.terminated = true;
     try {
       this.options.onLoopAbort?.({
@@ -394,10 +617,13 @@ class GovernanceEgressTap {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+
+    const steeringDirective = buildLoopSteeringDirective(detection, call.name);
     this.flushTerminal(
       controller,
       "Request stopped by the proxy governance layer: the model repeated the same action.",
-      "loop"
+      "loop",
+      steeringDirective
     );
   }
 
@@ -463,8 +689,12 @@ class GovernanceEgressTap {
         ? "Request stopped by the proxy governance layer: model entered degenerate repetitive generation loop."
         : "Request stopped by the proxy governance layer: the reasoning budget was exhausted.";
     const finishReason = breach.kind === "repetition" ? "loop" : "ceiling";
+    const steeringDirective =
+      breach.kind === "repetition"
+        ? "[Governance Steering Directive: Degenerate repetitive generation detected. Halting generation. Change strategy immediately: review current findings, avoid repeating identical text, and conclude your work with a clear summary.]"
+        : undefined;
 
-    this.flushTerminal(controller, message, finishReason);
+    this.flushTerminal(controller, message, finishReason, steeringDirective);
     return true;
   }
 
@@ -473,6 +703,29 @@ class GovernanceEgressTap {
     payload: unknown,
     controller: TransformStreamDefaultController<Uint8Array>
   ): void {
+    const rec =
+      payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+    if (rec) {
+      if (rec.type === "message_start") {
+        this.hasSeenMessageStart = true;
+      } else if (rec.type === "content_block_start") {
+        const idx = typeof rec.index === "number" ? rec.index : null;
+        if (idx !== null) {
+          this.openAnthropicBlockIndex = idx;
+          this.highestAnthropicBlockIndex = Math.max(this.highestAnthropicBlockIndex, idx);
+        }
+      } else if (rec.type === "content_block_delta") {
+        const idx = typeof rec.index === "number" ? rec.index : null;
+        if (idx !== null) {
+          this.highestAnthropicBlockIndex = Math.max(this.highestAnthropicBlockIndex, idx);
+        }
+      } else if (rec.type === "content_block_stop") {
+        this.openAnthropicBlockIndex = null;
+      } else if (rec.type === "message_stop") {
+        this.openAnthropicBlockIndex = null;
+      }
+    }
+
     if (this.checkTokenSentinel(payload, controller)) return;
 
     // The assembler completes a call only on the format's own TERMINAL marker

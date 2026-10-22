@@ -124,6 +124,19 @@ export function resolveGovernanceLoopMaxInterventions(): number {
   return parsed;
 }
 
+/**
+ * Resolve whether loop steering (in-stream recovery rather than fatal error abort) is enabled.
+ * Override with `OMNIROUTE_GOVERNANCE_LOOP_STEERING` or `OMNIROUTE_GOVERNANCE_STEERING_ENABLED` ("0" or "false" disables).
+ * Defaults to true.
+ */
+export function resolveGovernanceLoopSteeringEnabled(): boolean {
+  const raw =
+    process.env.OMNIROUTE_GOVERNANCE_LOOP_STEERING ??
+    process.env.OMNIROUTE_GOVERNANCE_STEERING_ENABLED;
+  if (raw === undefined || raw === "") return true;
+  return raw !== "0" && raw.toLowerCase() !== "false";
+}
+
 export type LoopKind = "repeat" | "pingpong";
 
 export interface LoopDetection {
@@ -188,6 +201,29 @@ export function buildLoopInterventionMessage(detection: LoopDetection, toolName?
     `Halt this approach. Do not invoke it again with the same arguments. ` +
     `Change strategy: use the information you already have, try a materially different ` +
     `action, or finish the task and report your findings.`
+  );
+}
+
+/**
+ * The in-stream steering directive emitted to the client when a loop is detected.
+ *
+ * Formatted as an authoritative assistant steering directive with a clean normal finish reason
+ * (e.g. `end_turn` for Claude or `stop` for OpenAI), allowing autonomous agents to immediately
+ * recover and pivot without crashing with an unrecoverable API Error.
+ */
+export function buildLoopSteeringDirective(detection: LoopDetection, toolName?: string): string {
+  const named = toolName ? `("${toolName}") ` : "";
+  if (detection.kind === "pingpong") {
+    return (
+      `[Governance Steering Directive: An alternating action loop was detected between tools over ${detection.count} cycles with identical results. ` +
+      `Halting repetitive execution. Do not repeat this sequence. ` +
+      `Immediately change strategy: summarize your progress so far, use the data already acquired, try a fundamentally different approach, or report your final response.]`
+    );
+  }
+  return (
+    `[Governance Steering Directive: A repetitive loop was detected: the action ${named}was repeated ${detection.count} times with identical arguments and results. ` +
+    `Halting repetitive execution. Do not invoke this action again with the same parameters. ` +
+    `Immediately change strategy: analyze previous outputs, try a fundamentally different approach, or conclude your work and report the final outcome.]`
   );
 }
 

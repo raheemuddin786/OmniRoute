@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   createGovernanceTransform,
   buildGovernanceTerminalFrames,
+  buildGovernanceSteeringFrames,
 } from "../governanceTransform.ts";
 import { getToolRejectionLedger, buildRejectionKey } from "../toolRejectionLedger.ts";
 import { getLoopInterventionStore } from "../loopIntervention.ts";
@@ -349,24 +350,48 @@ describe("governanceTransform — loop breaker", () => {
     expect(parked).toContain("read_file");
   });
 
-  it("aborts with a CLEAN terminal frame once the intervention budget is spent", async () => {
+  it("steers the agent in-stream with clean finish reason for Anthropic client without error frames", async () => {
     const breaker = new LoopBreaker({ repeatThreshold: 1, maxInterventions: 1 });
     const aborted: unknown[] = [];
     const loopBreaker = { observe: breaker.observe.bind(breaker) } as never;
 
     let out = "";
     for (let i = 0; i < 3; i++) {
-      out = await run(OPENAI_CALL_FRAMES("read_file"), {
+      out = await run(ANTHROPIC_CALL_FRAMES("read_file"), {
         body: catalog,
         loopBreaker,
-        clientFormat: FORMATS.OPENAI,
+        clientFormat: FORMATS.CLAUDE,
         onLoopAbort: (detection: unknown) => aborted.push(detection),
       });
     }
 
     expect(aborted.length).toBeGreaterThan(0);
-    expect(out).toContain("finish_reason");
-    expect(out).toContain("governance");
+    expect(out).toContain("content_block_delta");
+    expect(out).toContain("Governance Steering Directive");
+    expect(out).toContain("end_turn");
+    expect(out).toContain("message_stop");
+    expect(out).not.toContain("event: error");
+  });
+
+  it("falls back to legacy error frames when steering is explicitly disabled", async () => {
+    const breaker = new LoopBreaker({ repeatThreshold: 1, maxInterventions: 1 });
+    const aborted: unknown[] = [];
+    const loopBreaker = { observe: breaker.observe.bind(breaker) } as never;
+
+    let out = "";
+    for (let i = 0; i < 3; i++) {
+      out = await run(ANTHROPIC_CALL_FRAMES("read_file"), {
+        body: catalog,
+        loopBreaker,
+        clientFormat: FORMATS.CLAUDE,
+        enableSteering: false,
+        onLoopAbort: (detection: unknown) => aborted.push(detection),
+      });
+    }
+
+    expect(aborted.length).toBeGreaterThan(0);
+    expect(out).toContain("event: error");
+    expect(out).toContain("governance_loop_aborted");
   });
 
   it("does not park an intervention when the loop breaker sees no loop", async () => {
@@ -460,6 +485,66 @@ describe("buildGovernanceTerminalFrames", () => {
     );
     const text = frames.map((f) => decoder.decode(f)).join("");
     expect(text).not.toContain("at /secret/path.ts");
+  });
+});
+
+describe("buildGovernanceSteeringFrames", () => {
+  it("emits Anthropic steering frames with end_turn and text content block", () => {
+    const frames = buildGovernanceSteeringFrames(
+      FORMATS.CLAUDE,
+      "[Governance Steering Directive: Change strategy]",
+      { hasSeenMessageStart: true, openAnthropicBlockIndex: 0, highestAnthropicBlockIndex: 0 }
+    );
+    const text = frames.map((f) => decoder.decode(f)).join("");
+    expect(text).toContain("content_block_stop");
+    expect(text).toContain("content_block_start");
+    expect(text).toContain("content_block_delta");
+    expect(text).toContain("[Governance Steering Directive: Change strategy]");
+    expect(text).toContain("end_turn");
+    expect(text).toContain("message_stop");
+    expect(text).not.toContain("event: error");
+  });
+
+  it("emits Anthropic steering frames starting with message_start when not yet seen", () => {
+    const frames = buildGovernanceSteeringFrames(
+      FORMATS.CLAUDE,
+      "[Governance Steering Directive: Change strategy]",
+      { hasSeenMessageStart: false }
+    );
+    const text = frames.map((f) => decoder.decode(f)).join("");
+    expect(text).toContain("event: message_start");
+    expect(text).toContain("end_turn");
+    expect(text).not.toContain("event: error");
+  });
+
+  it("emits OpenAI Chat steering frames with assistant delta and normal stop finish_reason", () => {
+    const frames = buildGovernanceSteeringFrames(
+      FORMATS.OPENAI,
+      "[Governance Steering Directive: Change strategy]"
+    );
+    const text = frames.map((f) => decoder.decode(f)).join("");
+    expect(text).toContain("chat.completion.chunk");
+    expect(text).toContain("assistant");
+    expect(text).toContain("[Governance Steering Directive: Change strategy]");
+    expect(text).toContain('"finish_reason":"stop"');
+    expect(text).toContain("[DONE]");
+    expect(text).not.toContain('"error":');
+  });
+
+  it("emits Responses steering frames with completed status and output text", () => {
+    const frames = buildGovernanceSteeringFrames(
+      FORMATS.OPENAI_RESPONSES,
+      "[Governance Steering Directive: Change strategy]"
+    );
+    const text = frames.map((f) => decoder.decode(f)).join("");
+    expect(text).toContain("response.output_item.added");
+    expect(text).toContain("response.text.delta");
+    expect(text).toContain("[Governance Steering Directive: Change strategy]");
+    expect(text).toContain("response.output_item.done");
+    expect(text).toContain("response.completed");
+    expect(text).toContain('"status":"completed"');
+    expect(text).toContain("[DONE]");
+    expect(text).not.toContain("response.failed");
   });
 });
 
