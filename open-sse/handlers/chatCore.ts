@@ -46,6 +46,7 @@ import { isReasoningContinuationIncompatible } from "./chatCore/reasoningInputGa
 import {
   getHeaderValueCaseInsensitive,
   isNoMemoryRequested,
+  isNoCompactionRequested,
   resolveCompressionHeader,
 } from "./chatCore/headers.ts";
 
@@ -469,6 +470,15 @@ async function handleChatCoreInner({
   const { assertManagedLeaseFence, getManagedLeaseFenceErrorCode, managedLeaseFenceErrorResult } =
     createManagedLeaseFence(managedLease);
   let tokensCompressed: number | null = null;
+  let compactionMeta: {
+    compressed: boolean;
+    type?: "proactive" | "last-resort" | "both";
+    tokensOriginal?: number;
+    tokensFinal?: number;
+    layers?: string[];
+    toolsTruncated?: number;
+  } | null = null;
+  let toolsTruncated = 0;
   // ── Per-endpoint custom system prompt (port of upstream #2063) ──
   // Extracted to chatCore/customSystemPrompt.ts (chatCore slice 2); reads cachedSettings when the
   // combo/chat layer passed it in, so the hot path does no extra DB read.
@@ -1276,6 +1286,13 @@ async function handleChatCoreInner({
     let promptCompressionEnabled =
       compressionSettingsResult.enabled && !compressionExcluded && apiKeyCompressionEnabled;
     reactiveContextCompactionEnabled = compressionSettingsResult.enabled && !compressionExcluded;
+    if (isNoCompactionRequested(clientRawRequest?.headers ?? null)) {
+      log?.info?.(
+        "CONTEXT",
+        "Reactive and last-resort context compaction disabled by request header (fail-loud policy active)"
+      );
+      reactiveContextCompactionEnabled = false;
+    }
     contextEditingEnabled = compressionSettingsResult.contextEditingEnabled;
     if (!apiKeyCompressionEnabled) {
       log?.debug?.("COMPRESSION", "Prompt compression disabled for this API key");
@@ -1892,6 +1909,17 @@ async function handleChatCoreInner({
           : compressionResult.body;
         const stats = compressionResult.stats;
         tokensCompressed = Math.max(0, (stats?.original ?? 0) - (stats?.final ?? 0));
+        const layersList =
+          stats && "layers" in stats && Array.isArray(stats.layers)
+            ? stats.layers.map((l: { name: string }) => l.name)
+            : undefined;
+        compactionMeta = {
+          compressed: true,
+          type: "proactive",
+          tokensOriginal: stats?.original,
+          tokensFinal: stats?.final,
+          layers: layersList,
+        };
         const layersInfo =
           stats && "layers" in stats && Array.isArray(stats.layers)
             ? ` (layers: ${stats.layers.map((l: { name: string }) => l.name).join(", ")})`
@@ -1989,6 +2017,36 @@ async function handleChatCoreInner({
           `tools=${finalInputBreakdown.tools}, system=${finalInputBreakdown.system}, ` +
           `instructions=${finalInputBreakdown.instructions}; limit ${finalContextLimit})`
       );
+
+      const lastResortLayers =
+        lastResortResult.stats &&
+        "layers" in lastResortResult.stats &&
+        Array.isArray(lastResortResult.stats.layers)
+          ? lastResortResult.stats.layers.map((l: { name: string }) => l.name)
+          : undefined;
+      compactionMeta = {
+        compressed: true,
+        type: compactionMeta?.compressed ? "both" : "last-resort",
+        tokensOriginal: compactionMeta?.tokensOriginal ?? lastResortResult.stats?.original,
+        tokensFinal: lastResortResult.stats?.final,
+        layers: Array.from(
+          new Set([...(compactionMeta?.layers ?? []), ...(lastResortLayers ?? [])])
+        ),
+      };
+
+      logAuditEvent({
+        action: "context.last_resort_compression",
+        actor: apiKeyInfo?.name || "system",
+        target: connectionId || provider || "chat",
+        details: {
+          provider,
+          model: effectiveModel,
+          original_tokens: lastResortResult.stats?.original,
+          final_tokens: lastResortResult.stats?.final,
+          layers:
+            "layers" in lastResortResult.stats ? lastResortResult.stats.layers : undefined,
+        },
+      });
     }
   }
 
@@ -2519,6 +2577,9 @@ async function handleChatCoreInner({
     traceId,
     translatedBody,
     trustedEffortContext,
+    onToolsTruncated: (count: number) => {
+      toolsTruncated += count;
+    },
     upstreamStream,
     userAgent,
   };
@@ -3094,6 +3155,8 @@ async function handleChatCoreInner({
       body,
       clientRawRequest,
       comboStrategy,
+      compactionMeta,
+      toolsTruncated,
       connectionId,
       contextEditingEnabled,
       credentials,
@@ -3176,6 +3239,8 @@ async function handleChatCoreInner({
       clientRequestedResponsesStream,
       clientResponseFormat,
       comboStrategy,
+      compactionMeta,
+      toolsTruncated,
       compressionResponseMeta,
       connectionId,
       contextEditingEnabled,
@@ -3308,6 +3373,8 @@ async function handleChatCoreInner({
     clientRawRequest,
     clientResponseFormat,
     comboStrategy,
+    compactionMeta,
+    toolsTruncated,
     compressionResponseMeta,
     connectionId,
     contextEditingEnabled,

@@ -176,7 +176,8 @@ function truncateToolList(
   bodyToSend: Body,
   provider: string | null | undefined,
   bypassDefaultToolLimit: boolean,
-  log?: LoggerLike
+  log?: LoggerLike,
+  onToolsTruncated?: (count: number) => void
 ): Body {
   if (!Array.isArray(bodyToSend.tools)) return bodyToSend;
 
@@ -185,11 +186,15 @@ function truncateToolList(
     if (bodyToSend.tools.length > knownLimit) {
       const originalCount = bodyToSend.tools.length;
       const truncatedTools = capToolList(bodyToSend.tools, knownLimit);
+      const truncatedCount = originalCount - truncatedTools.length;
       bodyToSend = { ...bodyToSend, tools: truncatedTools };
-      log?.debug?.(
+      log?.info?.(
         "TOOL_LIMIT",
-        `Truncated ${originalCount} tools to ${knownLimit} for ${provider}`
+        `Truncated ${originalCount} tools to ${knownLimit} (${truncatedCount} removed) for ${provider}`
       );
+      if (truncatedCount > 0 && onToolsTruncated) {
+        onToolsTruncated(truncatedCount);
+      }
     }
     return bodyToSend;
   }
@@ -200,11 +205,15 @@ function truncateToolList(
   if (bodyToSend.tools.length > effectiveToolLimit) {
     const originalCount = bodyToSend.tools.length;
     const truncatedTools = capToolList(bodyToSend.tools, effectiveToolLimit);
+    const truncatedCount = originalCount - truncatedTools.length;
     bodyToSend = { ...bodyToSend, tools: truncatedTools };
-    log?.debug?.(
+    log?.info?.(
       "TOOL_LIMIT",
-      `Truncated ${originalCount} tools to ${effectiveToolLimit} for ${provider}`
+      `Truncated ${originalCount} tools to ${effectiveToolLimit} (${truncatedCount} removed) for ${provider}`
     );
+    if (truncatedCount > 0 && onToolsTruncated) {
+      onToolsTruncated(truncatedCount);
+    }
   }
   return bodyToSend;
 }
@@ -318,6 +327,8 @@ type PrepareUpstreamBodyOptions = {
   /** Incoming client request — read for the x-omniroute-effort header (#13448). */
   clientRawRequest?: { headers?: unknown } | undefined;
   log?: LoggerLike;
+  /** Callback fired when tools list is truncated to fit provider or platform limits. */
+  onToolsTruncated?: (count: number) => void;
 };
 
 function normalizeAttemptBody(opts: PrepareUpstreamBodyOptions): Body {
@@ -461,7 +472,13 @@ export async function prepareUpstreamBody(opts: PrepareUpstreamBodyOptions): Pro
     }
   }
   bodyToSend = defaultImageDetail(bodyToSend, isOpencodeClient);
-  bodyToSend = truncateToolList(bodyToSend, provider, bypassDefaultToolLimit ?? false, log);
+  bodyToSend = truncateToolList(
+    bodyToSend,
+    provider,
+    bypassDefaultToolLimit ?? false,
+    log,
+    opts.onToolsTruncated
+  );
   const connectionCacheOverride = resolveConnectionCacheOverride(credentials?.providerSpecificData);
   bodyToSend = await injectPromptCacheKey(
     bodyToSend,

@@ -211,6 +211,7 @@ export async function executeProviderRequest(
       isOpencodeClient,
       rawBody: body,
       clientRawRequest,
+      onToolsTruncated: (deps as { onToolsTruncated?: (count: number) => void }).onToolsTruncated,
     });
 
     // Global System Prompt — SINGLE injection point (post-translation) for

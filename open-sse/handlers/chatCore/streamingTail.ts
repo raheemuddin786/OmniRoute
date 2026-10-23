@@ -339,6 +339,8 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     isCombo, // #14116: foreign-account quota-header strip (only meaningful when true)
     requestedConnectionId: forcedConnectionId || null,
     selectedConnectionId: credentials?.connectionId ?? null,
+    compactionMeta: deps.compactionMeta,
+    toolsTruncated: deps.toolsTruncated,
   });
 
   // The streaming headers (turn-state included, when present) are committed to
