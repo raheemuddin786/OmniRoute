@@ -153,6 +153,71 @@ function withoutToolCatalog(body: unknown): unknown {
 }
 
 /**
+ * Extract an external or subagent session ID from request body metadata if present.
+ * Multi-agent frameworks pass session/subagent identifiers in body.metadata.
+ */
+function extractBodySessionId(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const b = body as Record<string, unknown>;
+
+  const metadata =
+    b.metadata && typeof b.metadata === "object" && !Array.isArray(b.metadata)
+      ? (b.metadata as Record<string, unknown>)
+      : null;
+
+  const sessionFromMeta =
+    typeof metadata?.session_id === "string"
+      ? metadata.session_id
+      : typeof metadata?.conversation_id === "string"
+        ? metadata.conversation_id
+        : typeof b.user === "string" && b.user.startsWith("session_")
+          ? b.user
+          : null;
+
+  const subagentFromMeta =
+    typeof metadata?.subagent_id === "string"
+      ? metadata.subagent_id
+      : typeof metadata?.agent_id === "string"
+        ? metadata.agent_id
+        : typeof metadata?.thread_id === "string"
+          ? metadata.thread_id
+          : typeof metadata?.task_id === "string"
+            ? metadata.task_id
+            : null;
+
+  const sTrimmed = sessionFromMeta?.trim();
+  const subTrimmed = subagentFromMeta?.trim();
+
+  if (sTrimmed && subTrimmed) {
+    if (sTrimmed.includes(subTrimmed)) return `ext:${sTrimmed.slice(0, 64)}`;
+    return `ext:${sTrimmed.slice(0, 32)}:sub:${subTrimmed.slice(0, 30)}`;
+  }
+  if (sTrimmed) return `ext:${sTrimmed.slice(0, 64)}`;
+  if (subTrimmed) return `ext:sub:${subTrimmed.slice(0, 60)}`;
+  return null;
+}
+
+/**
+ * Check if the request explicitly belongs to a subagent execution.
+ * Subagents declare handback or subagent-specific tools (e.g. SubagentHandback).
+ */
+function extractSubagentTag(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const b = body as Record<string, unknown>;
+  const tools = Array.isArray(b.tools) ? b.tools : [];
+  for (const t of tools) {
+    if (!t || typeof t !== "object") continue;
+    const name =
+      (t as { name?: string; function?: { name?: string } }).name ||
+      (t as { function?: { name?: string } }).function?.name;
+    if (name === "SubagentHandback" || name === "subagent_finish") {
+      return "subagent";
+    }
+  }
+  return null;
+}
+
+/**
  * Resolve the governance session key + principal.
  *
  * Never throws — a resolution failure degrades to the fallback key so the
@@ -168,6 +233,9 @@ export function resolveGovernanceIdentity(
     const external = extractExternalSessionId(toHeaderReader(input.headers));
     if (external) return buildIdentity(external, "external", principalId);
 
+    const fromBody = extractBodySessionId(input.body);
+    if (fromBody) return buildIdentity(fromBody, "external", principalId);
+
     const fingerprint = generateSessionId(
       withoutToolCatalog(input.body ?? null) as Parameters<typeof generateSessionId>[0],
       {
@@ -175,7 +243,11 @@ export function resolveGovernanceIdentity(
         ...(input.connectionId ? { connectionId: input.connectionId } : {}),
       }
     );
-    if (fingerprint) return buildIdentity(fingerprint, "fingerprint", principalId);
+    if (fingerprint) {
+      const subagentTag = extractSubagentTag(input.body);
+      const sessionKey = subagentTag ? `${fingerprint}:${subagentTag}` : fingerprint;
+      return buildIdentity(sessionKey, "fingerprint", principalId);
+    }
 
     if (input.fallback) return buildIdentity(input.fallback, "fallback", principalId);
 

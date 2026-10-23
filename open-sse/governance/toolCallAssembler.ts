@@ -213,7 +213,7 @@ export class ToolCallAssembler {
         key,
         name: pending.name,
         callId: pending.callId,
-        arguments: pending.args,
+        arguments: pending.args && pending.args.trim() !== "" ? pending.args : "{}",
         format: pending.format,
         index: pending.index,
       });
@@ -529,7 +529,7 @@ export class ToolCallAssembler {
       key: pending.key,
       name: pending.name,
       callId: pending.callId,
-      arguments: pending.args,
+      arguments: pending.args && pending.args.trim() !== "" ? pending.args : "{}",
       format: pending.format,
       index: pending.index,
     });

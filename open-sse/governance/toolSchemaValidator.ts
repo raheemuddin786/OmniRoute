@@ -180,12 +180,24 @@ function parseArguments(
   raw: unknown
 ): { ok: true; value: unknown } | { ok: false; message: string } {
   if (typeof raw !== "string") return { ok: true, value: raw };
-  const trimmed = raw.trim();
+  let trimmed = raw.trim();
   if (trimmed === "") return { ok: true, value: {} };
+  if (trimmed.startsWith("```")) {
+    trimmed = trimmed
+      .replace(/^```(?:json)?\s*\n?/, "")
+      .replace(/\n?```\s*$/, "")
+      .trim();
+  }
   try {
     return { ok: true, value: JSON.parse(trimmed) };
   } catch {
-    return { ok: false, message: "Tool arguments are not valid JSON." };
+    // Attempt trailing comma cleanup before rejecting
+    try {
+      const sanitized = trimmed.replace(/,\s*([}\]])/g, "$1");
+      return { ok: true, value: JSON.parse(sanitized) };
+    } catch {
+      return { ok: false, message: "Tool arguments are not valid JSON." };
+    }
   }
 }
 

@@ -340,15 +340,44 @@ export function extractExternalSessionId(
     h.get("x-omniroute-session") ?? // OmniRoute-specific form
     h.get("session-id") ?? // Bare session-id
     h.get("x-conversation-id") ??
+    h.get("x-antigravity-conversation-id") ??
+    h.get("x-antigravity-session-id") ??
+    h.get("x-claude-conversation-id") ??
+    h.get("x-claude-session-id") ??
+    h.get("x-parent-session-id") ??
     h.get("x-cline-task-id") ??
     h.get("x-cursor-session-id") ??
     h.get("x-agent-session-id") ??
     h.get("x-agent-id") ??
     h.get("x-task-id") ??
     null;
-  if (!raw || !raw.trim()) return null;
-  // Prefix "ext:" to ensure no collision with internal SHA-256 hash IDs
-  return `ext:${raw.trim().slice(0, 64)}`; // max 64 chars to avoid abuse
+
+  const subagent =
+    h.get("x-subagent-id") ??
+    h.get("x_subagent_id") ??
+    h.get("x-subagent-session-id") ??
+    h.get("x-antigravity-subagent") ??
+    h.get("x-antigravity-subagent-id") ??
+    h.get("x-thread-id") ??
+    h.get("x-roo-task-id") ??
+    null;
+
+  const rawTrimmed = raw?.trim();
+  const subagentTrimmed = subagent?.trim();
+
+  if (rawTrimmed && subagentTrimmed) {
+    if (rawTrimmed.includes(subagentTrimmed)) {
+      return `ext:${rawTrimmed.slice(0, 64)}`;
+    }
+    return `ext:${rawTrimmed.slice(0, 32)}:sub:${subagentTrimmed.slice(0, 30)}`;
+  }
+  if (rawTrimmed) {
+    return `ext:${rawTrimmed.slice(0, 64)}`;
+  }
+  if (subagentTrimmed) {
+    return `ext:sub:${subagentTrimmed.slice(0, 60)}`;
+  }
+  return null;
 }
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────

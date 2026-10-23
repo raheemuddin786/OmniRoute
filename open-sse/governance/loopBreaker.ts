@@ -390,6 +390,22 @@ export class LoopBreaker {
     return this.sessions.get(sessionId)?.interventions ?? 0;
   }
 
+  /** Clear sliding window for a session (e.g. upon active steering or intervention). */
+  clearWindow(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.window = [];
+    }
+  }
+
+  /** Reset interventions count for a session. */
+  resetInterventions(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.interventions = 0;
+    }
+  }
+
   /** Forget a session (e.g. on explicit teardown). */
   reset(sessionId: string): void {
     this.sessions.delete(sessionId);

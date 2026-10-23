@@ -51,6 +51,66 @@ describe("governance identity", () => {
       });
       expect(identity.source).toBe("fingerprint");
     });
+
+    it("isolates subagents using composite session id when subagent header is present", () => {
+      const identity = resolveGovernanceIdentity({
+        headers: new Headers({
+          "x-session-id": "parent-sess-123",
+          "x-subagent-id": "browser-verifier-1",
+        }),
+        body: { model: "gpt-4" },
+      });
+      expect(identity.sessionId).toBe("ext:parent-sess-123:sub:browser-verifier-1");
+      expect(identity.source).toBe("external");
+    });
+
+    it("isolates subagents using x-antigravity-subagent header alone", () => {
+      const identity = resolveGovernanceIdentity({
+        headers: new Headers({
+          "x-antigravity-subagent": "worker-subagent-42",
+        }),
+        body: { model: "gpt-4" },
+      });
+      expect(identity.sessionId).toBe("ext:sub:worker-subagent-42");
+      expect(identity.source).toBe("external");
+    });
+
+    it("extracts session and subagent identity from body metadata", () => {
+      const identity = resolveGovernanceIdentity({
+        body: {
+          model: "gpt-4",
+          metadata: {
+            session_id: "meta-sess-99",
+            subagent_id: "meta-sub-7",
+          },
+        },
+      });
+      expect(identity.sessionId).toBe("ext:meta-sess-99:sub:meta-sub-7");
+      expect(identity.source).toBe("external");
+    });
+
+    it("isolates subagent declaring SubagentHandback from parent without headers", () => {
+      const messages = [{ role: "user", content: "perform browser test" }];
+      const parent = resolveGovernanceIdentity({
+        body: {
+          model: "gpt-4",
+          messages,
+          tools: [{ type: "function", function: { name: "browser_action" } }],
+        },
+      });
+      const subagent = resolveGovernanceIdentity({
+        body: {
+          model: "gpt-4",
+          messages,
+          tools: [
+            { type: "function", function: { name: "browser_action" } },
+            { type: "function", function: { name: "SubagentHandback" } },
+          ],
+        },
+      });
+      expect(parent.sessionId).not.toBe(subagent.sessionId);
+      expect(subagent.sessionId).toContain(":subagent");
+    });
   });
 
   describe("conversation fingerprint", () => {
