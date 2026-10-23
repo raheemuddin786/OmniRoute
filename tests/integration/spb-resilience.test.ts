@@ -132,3 +132,53 @@ test("SPB Integration: bare 'spb' is not exposed as a valid model name", async (
   const modelInfo = await getModelInfo("spb");
   assert.equal((modelInfo as { errorType?: string }).errorType, "model_not_found");
 });
+
+test("SPB Integration: SPB dynamic combo is isolated from generic context cache pinning", async () => {
+  const { phaseComboSetup } = await import("../../open-sse/services/combo/comboSetup.ts");
+  const { createComboContext } = await import("../../open-sse/services/combo/context.ts");
+  const { recordSessionModelUsage } = await import("../../src/lib/db/contextHandoffs.ts");
+
+  const sessionId = "spb_isolation_session_" + Date.now();
+  const spbCombo = {
+    id: "spb-tier_2_resilient",
+    name: "SPB tier_2_resilient",
+    type: "spb" as const,
+    strategy: "priority" as const,
+    models: [{ model: "resilient-primary" }, { model: "resilient-secondary" }],
+  };
+
+  // 1. Simulate a previous leaf model recording in session_model_history
+  recordSessionModelUsage(sessionId, spbCombo.name, "pinned-leaf-model", "test-provider");
+
+  // 2. Initialize combo setup with SPB active payload
+  const mockLogger = {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  };
+
+  const ctx = createComboContext({
+    body: {
+      model: "auto/spb",
+      messages: [{ role: "user", content: "Implement a feature" }],
+      _spbActive: true,
+      _spbDecision: {
+        selectedModel: "resilient-primary",
+        tierAssignment: { tier: "tier_2_resilient" },
+      },
+    },
+    combo: spbCombo,
+    settings: null,
+    relayOptions: { sessionId },
+    log: mockLogger,
+  });
+
+  const setup = phaseComboSetup(ctx);
+
+  // 3. Verify that SPB dynamic combos do NOT engage generic context cache pinning
+  assert.equal(setup.pinnedModel, null);
+  assert.equal(setup.effectiveSessionId, null);
+  // Request body model remains unchanged by generic combo pin
+  assert.equal(ctx.body.model, "auto/spb");
+});

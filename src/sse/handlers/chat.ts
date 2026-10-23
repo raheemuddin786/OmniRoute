@@ -1145,7 +1145,6 @@ async function handleChatImplementation(
         name: `SPB ${spbDecision.tierAssignment.tier}`,
         type: "spb",
         strategy: "priority",
-        context_cache_protection: true,
         models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
       };
     }

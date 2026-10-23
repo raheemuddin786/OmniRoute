@@ -56,12 +56,7 @@ function resolveContextCachePin(ctx: ComboContext): {
   pinnedModel: string | null;
 } {
   const { combo, relayOptions, log } = ctx;
-  const isCacheProtected = Boolean(
-    combo.context_cache_protection ||
-    combo.type === "spb" ||
-    (ctx.body as Record<string, unknown>)?._spbActive ||
-    (ctx.body as Record<string, unknown>)?._spbDecision
-  );
+  const isCacheProtected = Boolean(combo.context_cache_protection);
   const effectiveSessionId: string | null = isCacheProtected
     ? (relayOptions?.sessionId ?? deriveComboSessionKey(ctx.body))
     : null;
