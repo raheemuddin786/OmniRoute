@@ -194,6 +194,29 @@ describe("applyToolCallRejections", () => {
     expect(blocks[0].content).toBe("not declared");
   });
 
+  it("does not rewrite Anthropic tool_result if already marked is_error", () => {
+    const body = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_1",
+              content: "original error",
+              is_error: true,
+            },
+          ],
+        },
+      ],
+    };
+    const rejections = new Map([
+      ["toolu_1", { message: "new rejection message", reason: "unknown_tool" as const }],
+    ]);
+    const out = applyToolCallRejections(body, rejections);
+    expect(out).toBe(body);
+  });
+
   it("rewrites a Responses function_call_output", () => {
     const body = {
       input: [

@@ -223,6 +223,7 @@ export function applyToolCallRejections<T>(
         const nextBlocks = blocks.map((rawBlock) => {
           const block = asRecord(rawBlock);
           if (!block || block.type !== "tool_result") return rawBlock;
+          if (block.is_error === true) return rawBlock;
           const callId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
           const rejection = rejections.get(callId);
           if (!rejection) return rawBlock;

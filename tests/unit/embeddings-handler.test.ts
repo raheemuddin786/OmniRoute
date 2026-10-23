@@ -325,3 +325,38 @@ test("handleEmbedding clamps over-limit string input before it reaches the upstr
     globalThis.fetch = originalFetch;
   }
 });
+
+test("handleEmbedding defaults truncate: true for jina-ai embeddings requests", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+
+  globalThis.fetch = async (url, options = {}) => {
+    captured = {
+      url: String(url),
+      body: JSON.parse(String(options.body || "{}")),
+    };
+    return new Response(
+      JSON.stringify({
+        data: [{ object: "embedding", embedding: [0.1, 0.2], index: 0 }],
+        usage: { prompt_tokens: 1, total_tokens: 1 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  try {
+    const result = await handleEmbedding({
+      body: {
+        model: "jina-ai/jina-embeddings-v3",
+        input: "long document test",
+      },
+      credentials: { apiKey: "jina-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(captured.body.truncate, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -290,6 +290,13 @@ function buildUpstreamBody(runtime: EmbeddingRuntime): Record<string, unknown> {
       upstreamBody.outputDimensionality = outputDimensionality;
     }
   }
+  if (
+    (runtime.provider === "jina-ai" ||
+      runtime.providerConfig?.structuredInputProtocol === "jina-v1") &&
+    upstreamBody.truncate === undefined
+  ) {
+    upstreamBody.truncate = true;
+  }
   const defaultParams = getEmbeddingModelDefaultParams(runtime.providerConfig, runtime.model);
   for (const [key, value] of Object.entries(defaultParams ?? {})) {
     if (upstreamBody[key] === undefined) upstreamBody[key] = value;

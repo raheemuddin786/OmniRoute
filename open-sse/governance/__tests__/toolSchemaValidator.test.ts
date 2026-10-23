@@ -6,6 +6,8 @@ import {
   resetDegradedSessionLog,
   degradedSessionCount,
   MAX_DEGRADED_SESSIONS,
+  repairJsonString,
+  parseArguments,
   type ToolCallValidationContext,
 } from "../toolSchemaValidator.ts";
 import { getGovernanceAuditBus } from "../auditBus.ts";
@@ -229,6 +231,75 @@ describe("tool schema validator", () => {
       expect(outcome.ok).toBe(true);
       if (outcome.ok !== true) return;
       expect(outcome.degraded).toBe(false);
+    });
+
+    it("auto-defaults SubagentHandback message when arguments omit it or provide empty string", () => {
+      const handbackSchema = {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "SubagentHandback",
+              parameters: {
+                type: "object",
+                properties: { message: { type: "string" } },
+                required: ["message"],
+              },
+            },
+          },
+        ],
+      };
+      const outcomeEmpty = validateToolCall(
+        { name: "SubagentHandback", arguments: {} },
+        context({ body: handbackSchema })
+      );
+      expect(outcomeEmpty.ok).toBe(true);
+
+      const outcomeBlank = validateToolCall(
+        { name: "SubagentHandback", arguments: '{"message":"   "}' },
+        context({ body: handbackSchema })
+      );
+      expect(outcomeBlank.ok).toBe(true);
+    });
+  });
+
+  describe("repairJsonString", () => {
+    it("repairs trailing commas", () => {
+      expect(repairJsonString('{"a": 1, "b": 2,}')).toEqual({ a: 1, b: 2 });
+    });
+
+    it("escapes literal control characters inside string literals", () => {
+      const input = '{"text": "line1\nline2\ttab"}';
+      expect(repairJsonString(input)).toEqual({ text: "line1\nline2\ttab" });
+    });
+
+    it("repairs truncated JSON strings and objects", () => {
+      const truncated = '{"report": "Heading:\n- Item 1\n- Item 2';
+      expect(repairJsonString(truncated)).toEqual({
+        report: "Heading:\n- Item 1\n- Item 2",
+      });
+    });
+
+    it("returns null on completely unparseable input", () => {
+      expect(repairJsonString("not a json at all :::")).toBeNull();
+    });
+  });
+
+  describe("parseArguments", () => {
+    it("unpacks Claude Code __unparsedToolInput wrapper", () => {
+      const wrapped = {
+        __unparsedToolInput: {
+          raw: '{"path":"src/index.ts"}',
+        },
+      };
+      const parsed = parseArguments(wrapped);
+      expect(parsed).toEqual({ ok: true, value: { path: "src/index.ts" } });
+    });
+
+    it("strips markdown code fences from JSON arguments", () => {
+      const fenced = '```json\n{"path":"foo.txt"}\n```';
+      const parsed = parseArguments(fenced);
+      expect(parsed).toEqual({ ok: true, value: { path: "foo.txt" } });
     });
   });
 

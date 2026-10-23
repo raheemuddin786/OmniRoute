@@ -57,7 +57,15 @@ export function resolveCallLogArtifactWorker(context: WorkerResolutionContext = 
   execArgv: string[];
 } {
   const moduleDir = context.moduleDir ?? path.dirname(fileURLToPath(import.meta.url));
-  const cwd = context.cwd ?? process.cwd();
+  const fallbackCwd = path.resolve(moduleDir, "../../..");
+  let cwd = context.cwd;
+  if (!cwd) {
+    try {
+      cwd = process.cwd();
+    } catch {
+      cwd = fallbackCwd;
+    }
+  }
   const entryFile = context.entryFile === undefined ? process.argv[1] : context.entryFile;
   const exists = context.fileExists ?? fileExistsAtRuntime;
 

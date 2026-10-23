@@ -178,15 +178,95 @@ export function degradedSessionCount(): number {
 }
 
 /**
+ * Resilient JSON repair for tool arguments emitted by LLMs.
+ * Handles trailing commas, literal unescaped newlines/tabs in string literals,
+ * and truncated JSON objects with unclosed quotes or brackets.
+ */
+export function repairJsonString(str: string): unknown | null {
+  try {
+    let result = "";
+    let inString = false;
+    let escaped = false;
+    const stack: string[] = [];
+
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (inString) {
+        if (escaped) {
+          result += ch;
+          escaped = false;
+        } else if (ch === "\\") {
+          result += ch;
+          escaped = true;
+        } else if (ch === '"') {
+          result += ch;
+          inString = false;
+        } else if (ch === "\n") {
+          result += "\\n";
+        } else if (ch === "\r") {
+          result += "\\r";
+        } else if (ch === "\t") {
+          result += "\\t";
+        } else if (ch.charCodeAt(0) < 32) {
+          result += "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0");
+        } else {
+          result += ch;
+        }
+      } else {
+        if (ch === '"') {
+          inString = true;
+        } else if (ch === "{" || ch === "[") {
+          stack.push(ch === "{" ? "}" : "]");
+        } else if (ch === "}" || ch === "]") {
+          if (stack.length > 0 && stack[stack.length - 1] === ch) {
+            stack.pop();
+          }
+        }
+        result += ch;
+      }
+    }
+
+    if (inString) {
+      result += '"';
+    }
+
+    // Strip trailing commas before closing braces/brackets
+    result = result.replace(/,\s*$/, "");
+
+    while (stack.length > 0) {
+      result += stack.pop();
+    }
+
+    // Also clean any trailing commas before existing closing brackets/braces
+    result = result.replace(/,\s*([}\]])/g, "$1");
+
+    return JSON.parse(result);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse the tool arguments.
  *
  * Model output arrives either as an already-parsed object or as a JSON string.
- * A malformed JSON string is a REJECTION (the model emitted broken arguments),
- * not an internal error.
+ * A malformed JSON string is repaired when possible (e.g. unescaped newlines or truncated
+ * strings) before falling back to a rejection.
  */
-function parseArguments(
+export function parseArguments(
   raw: unknown
 ): { ok: true; value: unknown } | { ok: false; message: string } {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const rec = raw as Record<string, unknown>;
+    // Claude Code / Anthropic client wraps unparsed tool arguments in __unparsedToolInput
+    if (rec.__unparsedToolInput && typeof rec.__unparsedToolInput === "object") {
+      const inner = (rec.__unparsedToolInput as Record<string, unknown>).raw;
+      if (typeof inner === "string") {
+        return parseArguments(inner);
+      }
+    }
+    return { ok: true, value: raw };
+  }
   if (typeof raw !== "string") return { ok: true, value: raw };
   let trimmed = raw.trim();
   if (trimmed === "") return { ok: true, value: {} };
@@ -199,13 +279,11 @@ function parseArguments(
   try {
     return { ok: true, value: JSON.parse(trimmed) };
   } catch {
-    // Attempt trailing comma cleanup before rejecting
-    try {
-      const sanitized = trimmed.replace(/,\s*([}\]])/g, "$1");
-      return { ok: true, value: JSON.parse(sanitized) };
-    } catch {
-      return { ok: false, message: "Tool arguments are not valid JSON." };
+    const repaired = repairJsonString(trimmed);
+    if (repaired !== null) {
+      return { ok: true, value: repaired };
     }
+    return { ok: false, message: "Tool arguments are not valid JSON." };
   }
 }
 
@@ -376,9 +454,25 @@ function validateAgainstSchema(
   const validate = validatorFor(schema);
   if (!validate) return null;
 
+  let valueToValidate = parsed.value;
+  // SubagentHandback and subagent_finish are terminal signals. If the model emitted empty arguments
+  // or omitted the required message parameter, auto-populate a default completion message rather than
+  // rejecting the handback and permanently locking the agent in an unrecoverable handback-send-enforce loop.
+  if (
+    (toolName === "SubagentHandback" || toolName === "subagent_finish") &&
+    valueToValidate &&
+    typeof valueToValidate === "object" &&
+    !Array.isArray(valueToValidate)
+  ) {
+    const obj = valueToValidate as Record<string, unknown>;
+    if (!obj.message || typeof obj.message !== "string" || obj.message.trim() === "") {
+      valueToValidate = { ...obj, message: "Subagent completed task successfully." };
+    }
+  }
+
   let valid = false;
   try {
-    valid = validate(parsed.value) === true;
+    valid = validate(valueToValidate) === true;
   } catch (err) {
     // A throwing validator is an internal failure — fail OPEN.
     log.error("tool schema validator threw; skipping validation (fail-open)", {

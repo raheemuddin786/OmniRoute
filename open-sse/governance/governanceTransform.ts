@@ -71,7 +71,11 @@ import {
   resolveGovernanceLoopSteeringEnabled,
   fingerprintToolCall,
 } from "./loopBreaker.ts";
-import { validateToolCall, auditToolCallRejection } from "./toolSchemaValidator.ts";
+import {
+  validateToolCall,
+  auditToolCallRejection,
+  repairJsonString,
+} from "./toolSchemaValidator.ts";
 import { recordGovernanceAudit } from "./auditBus.ts";
 import { registerLoopIntervention } from "./loopIntervention.ts";
 import { buildRejectionKey, getToolRejectionLedger } from "./toolRejectionLedger.ts";
@@ -146,7 +150,8 @@ function parseArgumentText(raw: unknown): unknown {
   try {
     return JSON.parse(trimmed);
   } catch {
-    return raw;
+    const repaired = repairJsonString(trimmed);
+    return repaired !== null ? repaired : raw;
   }
 }
 
