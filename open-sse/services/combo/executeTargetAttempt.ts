@@ -592,6 +592,7 @@ export async function executeTargetAttempt(
       // sessionless conversation re-pins to this model on its next turn.
       const isCacheProtected = Boolean(
         deps.combo.context_cache_protection ||
+        deps.combo.type === "spb" ||
         (deps.body as Record<string, unknown>)?._spbActive ||
         (deps.body as Record<string, unknown>)?._spbDecision
       );

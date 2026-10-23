@@ -107,3 +107,28 @@ test("SPB Integration: 'auto' directive is protected from model aliases and reso
   assert.equal(modelInfo.provider, "auto");
   assert.notEqual((modelInfo as { errorType?: string }).errorType, "model_not_found");
 });
+
+test("SPB Integration: 'auto/spb' and 'auto/smart-proxy-bridge' are recognized transparent auto combos", async () => {
+  const { AUTO_TEMPLATE_VARIANTS, isRecognizedBuiltinAuto } =
+    await import("../../open-sse/services/autoCombo/builtinCatalog.ts");
+
+  assert.equal(Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, "auto/spb"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, "auto/smart-proxy-bridge"),
+    true
+  );
+  assert.equal(isRecognizedBuiltinAuto("auto/spb", "spb"), true);
+  assert.equal(isRecognizedBuiltinAuto("auto/smart-proxy-bridge", "smart-proxy-bridge"), true);
+});
+
+test("SPB Integration: bare 'spb' is not exposed as a valid model name", async () => {
+  const { AUTO_TEMPLATE_VARIANTS, isRecognizedBuiltinAuto } =
+    await import("../../open-sse/services/autoCombo/builtinCatalog.ts");
+  const { getModelInfo } = await import("../../src/sse/services/model.ts");
+
+  assert.equal(Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, "spb"), false);
+  assert.equal(isRecognizedBuiltinAuto("spb", "spb"), false);
+
+  const modelInfo = await getModelInfo("spb");
+  assert.equal((modelInfo as { errorType?: string }).errorType, "model_not_found");
+});

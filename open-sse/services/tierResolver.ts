@@ -20,7 +20,19 @@ function ensureConfigLoaded(): void {
     const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
     currentConfig = loadTierConfig();
   } catch {
-    currentConfig = DEFAULT_TIER_CONFIG;
+    try {
+      const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+      const db = getDbInstance();
+      const row = db.prepare("SELECT value FROM tier_config WHERE key = 'tier_config'").get() as
+        { value: string } | undefined;
+      if (row?.value) {
+        currentConfig = mergeTierConfig(JSON.parse(row.value));
+      } else {
+        currentConfig = DEFAULT_TIER_CONFIG;
+      }
+    } catch {
+      currentConfig = DEFAULT_TIER_CONFIG;
+    }
   }
 }
 
@@ -287,7 +299,20 @@ export function setTierConfig(config?: Partial<TierConfig> | null): void {
       currentConfig = loadTierConfig();
       configLoadedFromDb = true;
     } catch {
-      currentConfig = DEFAULT_TIER_CONFIG;
+      try {
+        const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+        const db = getDbInstance();
+        const row = db.prepare("SELECT value FROM tier_config WHERE key = 'tier_config'").get() as
+          { value: string } | undefined;
+        if (row?.value) {
+          currentConfig = mergeTierConfig(JSON.parse(row.value));
+        } else {
+          currentConfig = DEFAULT_TIER_CONFIG;
+        }
+      } catch {
+        currentConfig = DEFAULT_TIER_CONFIG;
+      }
+      configLoadedFromDb = true;
     }
   } else {
     currentConfig = mergeTierConfig(config);

@@ -814,18 +814,18 @@ async function handleChatImplementation(
   // SPB-IR: Intelligent Routing, Intent Classification & Zero-Loss State Checkpointing
   const strategyHeader =
     request.headers.get("x-omniroute-strategy") || request.headers.get("X-OmniRoute-Strategy");
-  const isSpbRequested =
-    strategyHeader === "smart-proxy-bridge" ||
-    strategyHeader === "smart_proxy_bridge" ||
-    strategyHeader === "spb" ||
-    modelStr === "smart-proxy-bridge" ||
-    modelStr === "smart_proxy_bridge" ||
-    modelStr === "spb" ||
-    Boolean(modelStr?.startsWith("spb/")) ||
-    modelStr === "auto" ||
-    Boolean(modelStr?.startsWith("auto/"));
+  const isSpbTarget =
+    modelStr === "auto/spb" ||
+    modelStr === "auto/smart-proxy-bridge" ||
+    ((strategyHeader === "smart-proxy-bridge" || strategyHeader === "spb") &&
+      (!modelStr ||
+        modelStr === "auto" ||
+        modelStr === "default" ||
+        modelStr === "auto/spb" ||
+        modelStr === "auto/smart-proxy-bridge"));
   const isSpbActive =
-    isSpbRequested || Boolean(getTierConfig().spbEnabled) || isFeatureFlagEnabled("SPB_ENABLED");
+    Boolean(isSpbTarget) &&
+    (getTierConfig().spbEnabled !== false || isFeatureFlagEnabled("SPB_ENABLED"));
 
   let spbDecision: SpbRoutingDecision | null = null;
   if (isSpbActive && Array.isArray(body?.messages)) {
@@ -1115,30 +1115,25 @@ async function handleChatImplementation(
 
   // SPB-IR Dynamic Dispatch & Incompatible Modality Shield
   const isSpbModel =
-    resolvedModelStr === "smart-proxy-bridge" ||
-    resolvedModelStr === "smart_proxy_bridge" ||
-    resolvedModelStr === "spb" ||
-    resolvedModelStr.startsWith("spb/") ||
-    (isSpbActive &&
-      (resolvedModelStr === "auto" ||
-        resolvedModelStr === "smart" ||
-        resolvedModelStr === "default" ||
-        resolvedModelStr.startsWith("auto/")));
+    resolvedModelStr === "auto/spb" ||
+    resolvedModelStr === "auto/smart-proxy-bridge" ||
+    (isSpbActive && (resolvedModelStr === "auto" || resolvedModelStr === "default"));
 
   const isIncompatibleModality =
-    resolvedModelStr.includes("transcribe") ||
-    resolvedModelStr.includes("whisper") ||
-    resolvedModelStr.includes("diffusion");
+    isSpbActive &&
+    (resolvedModelStr.includes("transcribe") ||
+      resolvedModelStr.includes("whisper") ||
+      resolvedModelStr.includes("diffusion"));
 
   let spbCombo: any = null;
 
-  if (spbDecision?.selectedModel && (isSpbRequested || isSpbModel || isIncompatibleModality)) {
+  if (isSpbActive && spbDecision?.selectedModel && (isSpbModel || isIncompatibleModality)) {
     log.info(
       "SPB",
       `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → ${spbDecision.selectedModel} (tier=${spbDecision.tierAssignment.tier}, phase=${spbDecision.intent.taskPhase})`
     );
     resolvedModelStr = spbDecision.selectedModel;
-    body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
+    body = { ...body, model: resolvedModelStr };
 
     // Prioritized tier combo strictly from user-configured tier models
     const uniqueTierModels = Array.from(
@@ -1150,10 +1145,11 @@ async function handleChatImplementation(
         name: `SPB ${spbDecision.tierAssignment.tier}`,
         type: "spb",
         strategy: "priority",
+        context_cache_protection: true,
         models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
       };
     }
-  } else if (isIncompatibleModality) {
+  } else if (isIncompatibleModality && isSpbActive) {
     const currentTierConfig = getTierConfig();
     const shieldModel = currentTierConfig?.tierModels?.resilient?.[0] || resolvedModelStr;
     log.warn(
@@ -1162,8 +1158,6 @@ async function handleChatImplementation(
     );
     resolvedModelStr = shieldModel;
     body = { ...body, model: resolvedModelStr };
-  } else if (isSpbActive && body) {
-    body = { ...body, _spbActive: true, _spbDecision: spbDecision };
   }
 
   let _taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;

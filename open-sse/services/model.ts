@@ -942,16 +942,11 @@ export async function getModelInfoCore(
     };
   }
 
-  // Virtual auto-routing and SPB routing directives
-  if (
-    parsed.model === "auto" ||
-    parsed.model === "smart-proxy-bridge" ||
-    parsed.model === "smart_proxy_bridge" ||
-    parsed.model === "spb"
-  ) {
+  // Virtual auto-routing directives
+  if (parsed.model === "auto") {
     return {
       provider: "auto",
-      model: parsed.model === "auto" ? "" : parsed.model,
+      model: "",
       extendedContext,
     };
   }

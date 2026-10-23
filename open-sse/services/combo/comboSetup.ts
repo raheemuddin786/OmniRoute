@@ -58,6 +58,7 @@ function resolveContextCachePin(ctx: ComboContext): {
   const { combo, relayOptions, log } = ctx;
   const isCacheProtected = Boolean(
     combo.context_cache_protection ||
+    combo.type === "spb" ||
     (ctx.body as Record<string, unknown>)?._spbActive ||
     (ctx.body as Record<string, unknown>)?._spbDecision
   );
