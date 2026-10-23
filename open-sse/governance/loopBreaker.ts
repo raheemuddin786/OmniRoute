@@ -165,15 +165,22 @@ export interface LoopBreakerOptions {
   now?: () => number;
 }
 
+export interface WindowEntry {
+  fingerprint: string;
+  toolName?: string;
+  requestId?: string;
+}
+
 export interface RejectionRecord {
   toolName: string;
   reason: string;
   at: number;
+  requestId?: string;
 }
 
 interface SessionState {
-  /** Rolling window of fingerprints, oldest first. */
-  window: string[];
+  /** Rolling window of tool calls. */
+  window: WindowEntry[];
   /** Rolling window of recent tool rejections. */
   rejections: RejectionRecord[];
   /** Number of interventions already delivered to this session. */
@@ -309,13 +316,17 @@ export class LoopBreaker {
    * Observe one tool call for a session.
    *
    * Returns a `LoopDetection` when a loop is detected, otherwise null. On
-   * detection the session's intervention counter is incremented — the caller is
-   * expected to inject the intervention message (or abort, per
+   * detection the session's intervention counter is incremented     * expected to inject the intervention message (or abort, per
    * `shouldAbort`) so the counter tracks interventions DELIVERED.
    */
-  observe(sessionId: string, toolName: string, args: unknown): LoopDetection | null {
+  observe(
+    sessionId: string,
+    toolName: string,
+    args: unknown,
+    requestId?: string
+  ): LoopDetection | null {
     try {
-      return this.observeInternal(sessionId, toolName, args);
+      return this.observeInternal(sessionId, toolName, args, requestId);
     } catch (err) {
       // Fail OPEN: a governance internal error must never break the request.
       log.error("loop breaker observe failed; passing through (fail-open)", {
@@ -328,7 +339,8 @@ export class LoopBreaker {
   private observeInternal(
     sessionId: string,
     toolName: string,
-    args: unknown
+    args: unknown,
+    requestId?: string
   ): LoopDetection | null {
     if (!this.enabled || !sessionId) return null;
     const fingerprint = fingerprintToolCall(toolName, args);
@@ -336,12 +348,12 @@ export class LoopBreaker {
     let state = this.sessions.get(sessionId);
     if (!state) {
       this.evictIfNeeded();
-      state = { window: [], interventions: 0, lastActive: this.now() };
+      state = { window: [], rejections: [], interventions: 0, lastActive: this.now() };
       this.sessions.set(sessionId, state);
     }
     state.lastActive = this.now();
 
-    state.window.push(fingerprint);
+    state.window.push({ fingerprint, toolName, requestId });
     if (state.window.length > this.windowSize) {
       state.window.splice(0, state.window.length - this.windowSize);
     }
@@ -368,9 +380,13 @@ export class LoopBreaker {
    * ping-pong classification.
    */
   detectInWindow(
-    window: readonly string[]
+    window: readonly (string | WindowEntry)[]
   ): Omit<LoopDetection, "interventions" | "shouldAbort"> | null {
     if (window.length === 0) return null;
+
+    const normalized: WindowEntry[] = window.map((e) =>
+      typeof e === "string" ? { fingerprint: e } : e
+    );
 
     // ── Ping-pong: a strictly alternating tail over exactly two fingerprints ──
     // A "cycle" is one transition between the two fingerprints, so >= 3 cycles
@@ -378,7 +394,7 @@ export class LoopBreaker {
     // (A,B,A,B). The run is the longest STRICTLY alternating suffix of the
     // window — a session may legitimately have made other calls earlier and
     // only then fallen into a ping-pong.
-    const pingpong = this.detectPingpong(window);
+    const pingpong = this.detectPingpong(normalized);
     if (pingpong) return pingpong;
 
     // ── Repeat: the current fingerprint occurred at least `repeatThreshold` times ──
@@ -386,10 +402,11 @@ export class LoopBreaker {
     // action (window tail). If the model pivots to a different tool (such as writing
     // a document or taking a new action), prior repeated calls must not falsely accuse
     // the new action of repeating.
-    const currentFingerprint = window[window.length - 1];
+    const currentEntry = normalized[normalized.length - 1];
+    const currentFingerprint = currentEntry.fingerprint;
     let count = 0;
-    for (const fingerprint of window) {
-      if (fingerprint === currentFingerprint) {
+    for (const item of normalized) {
+      if (item.fingerprint === currentFingerprint) {
         count += 1;
       }
     }
@@ -405,23 +422,49 @@ export class LoopBreaker {
    * fingerprints, if it carries at least `pingpongThreshold` transitions.
    */
   private detectPingpong(
-    window: readonly string[]
+    window: readonly WindowEntry[]
   ): { kind: "pingpong"; fingerprints: string[]; count: number } | null {
     if (window.length < this.pingpongThreshold + 1) return null;
 
     // Walk backwards while the run stays strictly alternating AND keeps
     // covering exactly two distinct fingerprints.
-    const run: string[] = [window[window.length - 1]];
+    const run: WindowEntry[] = [window[window.length - 1]];
     for (let i = window.length - 2; i >= 0; i--) {
-      if (window[i] === window[i - 1]) break; // adjacent duplicates end the run
+      if (window[i].fingerprint === window[i + 1]?.fingerprint) break; // adjacent duplicates end the run
       run.push(window[i]);
-      const distinct = new Set(run);
+      const distinct = new Set(run.map((e) => e.fingerprint));
       if (distinct.size > 2) break; // a third fingerprint ends the ping-pong
     }
     if (run.length < 2) return null;
 
-    const distinct = Array.from(new Set(run));
+    const distinct = Array.from(new Set(run.map((e) => e.fingerprint)));
     if (distinct.length !== 2) return null;
+
+    const [fpA, fpB] = distinct;
+
+    // Concurrency Guard: An alternating loop requires the conversation to transition between A and B.
+    // If all calls to fpA came exclusively from one requestId, and all calls to fpB came exclusively
+    // from a different concurrent requestId (disjoint sets), this is two independent parallel streams
+    // interleaving their distinct tools, NOT a single conversation caught in an alternating loop.
+    const reqsA = new Set(
+      run.filter((e) => e.fingerprint === fpA && e.requestId).map((e) => e.requestId)
+    );
+    const reqsB = new Set(
+      run.filter((e) => e.fingerprint === fpB && e.requestId).map((e) => e.requestId)
+    );
+
+    if (reqsA.size > 0 && reqsB.size > 0) {
+      let sharesAnyRequest = false;
+      for (const r of reqsA) {
+        if (reqsB.has(r)) {
+          sharesAnyRequest = true;
+          break;
+        }
+      }
+      if (!sharesAnyRequest && reqsA.size + reqsB.size >= 2) {
+        return null;
+      }
+    }
 
     // `run.length - 1` transitions = cycles.
     const cycles = run.length - 1;
@@ -436,9 +479,14 @@ export class LoopBreaker {
    * Catches polymorphic repeat loops (e.g. repeated rejections of the same tool
    * despite varying arguments) and unknown-tool floods across the window.
    */
-  observeRejection(sessionId: string, toolName: string, reason: string): LoopDetection | null {
+  observeRejection(
+    sessionId: string,
+    toolName: string,
+    reason: string,
+    requestId?: string
+  ): LoopDetection | null {
     try {
-      return this.observeRejectionInternal(sessionId, toolName, reason);
+      return this.observeRejectionInternal(sessionId, toolName, reason, requestId);
     } catch (err) {
       log.error("loop breaker observeRejection failed; passing through (fail-open)", {
         error: err instanceof Error ? err.message : String(err),
@@ -450,7 +498,8 @@ export class LoopBreaker {
   private observeRejectionInternal(
     sessionId: string,
     toolName: string,
-    reason: string
+    reason: string,
+    requestId?: string
   ): LoopDetection | null {
     if (!this.enabled || !sessionId || !toolName) return null;
 
@@ -463,7 +512,7 @@ export class LoopBreaker {
     state.lastActive = this.now();
     if (!state.rejections) state.rejections = [];
 
-    state.rejections.push({ toolName, reason, at: this.now() });
+    state.rejections.push({ toolName, reason, at: this.now(), requestId });
     if (state.rejections.length > this.windowSize) {
       state.rejections.splice(0, state.rejections.length - this.windowSize);
     }

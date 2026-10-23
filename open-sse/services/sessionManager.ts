@@ -350,6 +350,9 @@ export function extractExternalSessionId(
     h.get("x-agent-session-id") ??
     h.get("x-agent-id") ??
     h.get("x-task-id") ??
+    h.get("x-worker-id") ??
+    h.get("x-run-id") ??
+    h.get("x-agent-name") ??
     null;
 
   const subagent =
@@ -360,6 +363,7 @@ export function extractExternalSessionId(
     h.get("x-antigravity-subagent-id") ??
     h.get("x-thread-id") ??
     h.get("x-roo-task-id") ??
+    h.get("x-worker-id") ??
     null;
 
   const rawTrimmed = raw?.trim();

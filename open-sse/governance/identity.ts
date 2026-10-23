@@ -170,20 +170,26 @@ function extractBodySessionId(body: unknown): string | null {
       ? metadata.session_id
       : typeof metadata?.conversation_id === "string"
         ? metadata.conversation_id
-        : typeof b.user === "string" && b.user.startsWith("session_")
-          ? b.user
-          : null;
+        : typeof metadata?.user_id === "string"
+          ? metadata.user_id
+          : typeof b.user === "string" && b.user.trim() !== ""
+            ? b.user
+            : null;
 
   const subagentFromMeta =
     typeof metadata?.subagent_id === "string"
       ? metadata.subagent_id
       : typeof metadata?.agent_id === "string"
         ? metadata.agent_id
-        : typeof metadata?.thread_id === "string"
-          ? metadata.thread_id
-          : typeof metadata?.task_id === "string"
-            ? metadata.task_id
-            : null;
+        : typeof metadata?.worker_id === "string"
+          ? metadata.worker_id
+          : typeof metadata?.run_id === "string"
+            ? metadata.run_id
+            : typeof metadata?.thread_id === "string"
+              ? metadata.thread_id
+              : typeof metadata?.task_id === "string"
+                ? metadata.task_id
+                : null;
 
   const sTrimmed = sessionFromMeta?.trim();
   const subTrimmed = subagentFromMeta?.trim();
@@ -205,16 +211,37 @@ function extractSubagentTag(body: unknown): string | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const b = body as Record<string, unknown>;
   const tools = Array.isArray(b.tools) ? b.tools : [];
+  let isSubagent = false;
   for (const t of tools) {
     if (!t || typeof t !== "object") continue;
     const name =
       (t as { name?: string; function?: { name?: string } }).name ||
       (t as { function?: { name?: string } }).function?.name;
     if (name === "SubagentHandback" || name === "subagent_finish") {
-      return "subagent";
+      isSubagent = true;
+      break;
     }
   }
-  return null;
+  if (!isSubagent) return null;
+
+  // Extract distinctive subagent discriminator if present in prompt
+  // e.g. "Agent Alpha", "Worker 1", "Subagent: researcher", "[task:123]"
+  const promptText =
+    typeof b.system === "string"
+      ? b.system
+      : Array.isArray(b.messages) &&
+          b.messages[0] &&
+          typeof (b.messages[0] as { content?: unknown }).content === "string"
+        ? (b.messages[0] as { content: string }).content
+        : "";
+
+  const match = promptText.match(
+    /\b(?:agent|worker|subagent|task)[\s_:#-]+([a-zA-Z0-9_-]{1,32})\b/i
+  );
+  if (match && match[1]) {
+    return `subagent:${match[1].toLowerCase()}`;
+  }
+  return "subagent";
 }
 
 /**

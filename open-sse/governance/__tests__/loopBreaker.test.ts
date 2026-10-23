@@ -125,6 +125,31 @@ describe("loop breaker", () => {
       const detection = breaker.observe("s", "c", { x: 3 });
       expect(detection).toBeNull();
     });
+
+    it("does not false-positive on alternating tools when request IDs are strictly disjoint (concurrent agents)", () => {
+      // Simulate two concurrent agents running under the same fallback session ID
+      // Agent 1 runs action A under req-agent-1
+      // Agent 2 runs action B under req-agent-2
+      // Tool executions interleave chronologically: A, B, A, B (3 transitions = pingpongThreshold)
+      breaker.observe("s", "browser_navigate", { url: "https://example.com" }, "req-agent-1");
+      breaker.observe("s", "bash_command", { command: "uptime" }, "req-agent-2");
+      breaker.observe("s", "browser_navigate", { url: "https://example.com" }, "req-agent-1");
+      const detection = breaker.observe("s", "bash_command", { command: "uptime" }, "req-agent-2");
+
+      // Because reqsA (req-agent-1) and reqsB (req-agent-2) have zero overlap,
+      // this is mathematically proven to be concurrent independent streams, not a ping-pong loop.
+      expect(detection).toBeNull();
+    });
+
+    it("fires when alternating tools share a request ID (true sequential ping-pong loop)", () => {
+      breaker.observe("s", "browser_navigate", { url: "https://example.com" }, "req-shared");
+      breaker.observe("s", "bash_command", { command: "uptime" }, "req-shared");
+      breaker.observe("s", "browser_navigate", { url: "https://example.com" }, "req-shared");
+      const detection = breaker.observe("s", "bash_command", { command: "uptime" }, "req-shared");
+
+      expect(detection).not.toBeNull();
+      expect(detection?.kind).toBe("pingpong");
+    });
   });
 
   describe("intervention escalation", () => {

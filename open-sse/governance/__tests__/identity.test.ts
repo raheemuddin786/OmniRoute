@@ -111,6 +111,49 @@ describe("governance identity", () => {
       expect(parent.sessionId).not.toBe(subagent.sessionId);
       expect(subagent.sessionId).toContain(":subagent");
     });
+
+    it("accepts arbitrary body.user as an external session discriminator", () => {
+      const identity = resolveGovernanceIdentity({
+        body: { model: "gpt-4", user: "agent-worker-playwright" },
+      });
+      expect(identity.sessionId).toBe("ext:agent-worker-playwright");
+      expect(identity.source).toBe("external");
+    });
+
+    it("resolves Anthropic metadata.user_id as external session", () => {
+      const identity = resolveGovernanceIdentity({
+        body: {
+          model: "claude-3-sonnet",
+          metadata: { user_id: "anthropic-agent-sub-1" },
+        },
+      });
+      expect(identity.sessionId).toBe("ext:anthropic-agent-sub-1");
+      expect(identity.source).toBe("external");
+    });
+
+    it("differentiates parallel worker agents from prompt tags when tools are identical", () => {
+      const tools = [
+        { type: "function", function: { name: "bash_command" } },
+        { type: "function", function: { name: "SubagentHandback" } },
+      ];
+      const worker1 = resolveGovernanceIdentity({
+        body: {
+          model: "gpt-4",
+          messages: [{ role: "user", content: "Worker 1: perform data pipeline" }],
+          tools,
+        },
+      });
+      const worker2 = resolveGovernanceIdentity({
+        body: {
+          model: "gpt-4",
+          messages: [{ role: "user", content: "Worker 2: perform data pipeline" }],
+          tools,
+        },
+      });
+      expect(worker1.sessionId).not.toBe(worker2.sessionId);
+      expect(worker1.sessionId).toContain(":subagent:1");
+      expect(worker2.sessionId).toContain(":subagent:2");
+    });
   });
 
   describe("conversation fingerprint", () => {

@@ -715,7 +715,8 @@ class GovernanceEgressTap {
         const rejectionDetection = this.options.loopBreaker.observeRejection(
           this.options.sessionId,
           call.name,
-          outcome.reason
+          outcome.reason,
+          this.options.requestId
         );
         if (rejectionDetection) {
           this.handleLoop(rejectionDetection, call, controller);
@@ -725,7 +726,12 @@ class GovernanceEgressTap {
     }
 
     if (!this.options.loopBreaker) return;
-    const detection = this.options.loopBreaker.observe(this.options.sessionId, call.name, args);
+    const detection = this.options.loopBreaker.observe(
+      this.options.sessionId,
+      call.name,
+      args,
+      this.options.requestId
+    );
     if (!detection) return;
     this.handleLoop(detection, call, controller);
   }
