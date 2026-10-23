@@ -179,6 +179,17 @@ describe("tool schema validator", () => {
       expect(outcome.reason).toBe("malformed_arguments");
     });
 
+    it("rejects oversized arguments marked on descriptor", () => {
+      const outcome = validateToolCall(
+        { name: "read_file", arguments: '{"path":"a.txt"}', oversized: true },
+        context({ body })
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok === true) return;
+      expect(outcome.reason).toBe("oversized_arguments");
+      expect(outcome.message).toContain("maximum allowed size limit");
+    });
+
     it("treats an empty argument string as an empty object", () => {
       const outcome = validateToolCall({ name: "read_file", arguments: "" }, context({ body }));
       // `{}` is missing the required `path` → rejected by the schema, but the

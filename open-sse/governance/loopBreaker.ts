@@ -137,11 +137,11 @@ export function resolveGovernanceLoopSteeringEnabled(): boolean {
   return raw !== "0" && raw.toLowerCase() !== "false";
 }
 
-export type LoopKind = "repeat" | "pingpong";
+export type LoopKind = "repeat" | "pingpong" | "polymorphic_repeat" | "unknown_tool_loop";
 
 export interface LoopDetection {
   kind: LoopKind;
-  /** The offending fingerprint(s) — a digest, never the arguments. */
+  /** The offending fingerprint(s) — a digest or tool names, never the arguments. */
   fingerprints: string[];
   /** How many times the offending call(s) were seen in the window. */
   count: number;
@@ -165,9 +165,17 @@ export interface LoopBreakerOptions {
   now?: () => number;
 }
 
+export interface RejectionRecord {
+  toolName: string;
+  reason: string;
+  at: number;
+}
+
 interface SessionState {
   /** Rolling window of fingerprints, oldest first. */
   window: string[];
+  /** Rolling window of recent tool rejections. */
+  rejections: RejectionRecord[];
   /** Number of interventions already delivered to this session. */
   interventions: number;
   /** Last-seen timestamp (for LRU eviction). */
@@ -196,6 +204,22 @@ export function buildLoopInterventionMessage(detection: LoopDetection, toolName?
       `action, or finish the task and report your findings.`
     );
   }
+  if (detection.kind === "polymorphic_repeat") {
+    return (
+      `The tool "${toolName}" has been called repeatedly and rejected ${detection.count} times. ` +
+      `Halt this approach. Do not attempt to invoke "${toolName}" again. ` +
+      `Change strategy: use only valid tools registered in your context catalog, ` +
+      `or finish your task and report your findings.`
+    );
+  }
+  if (detection.kind === "unknown_tool_loop") {
+    return (
+      `Multiple non-existent tools have been requested and rejected ${detection.count} times. ` +
+      `Halt this approach. Stop inventing new tool names. ` +
+      `Change strategy: review the tool catalog provided in your context and use only declared tools, ` +
+      `or finish your task and report your findings.`
+    );
+  }
   return (
     `You have invoked this exact action ${detection.count} times with identical results. ${named}` +
     `Halt this approach. Do not invoke it again with the same arguments. ` +
@@ -218,6 +242,20 @@ export function buildLoopSteeringDirective(detection: LoopDetection, toolName?: 
       `[Governance Steering Directive: An alternating action loop was detected between tools over ${detection.count} cycles with identical results. ` +
       `Halting repetitive execution. Do not repeat this sequence. ` +
       `Immediately change strategy: summarize your progress so far, use the data already acquired, try a fundamentally different approach, or report your final response.]`
+    );
+  }
+  if (detection.kind === "polymorphic_repeat") {
+    return (
+      `[Governance Steering Directive: Tool "${toolName}" has been called repeatedly and rejected ${detection.count} times. ` +
+      `Halting repeated attempts. Do not call "${toolName}" again. ` +
+      `Immediately change strategy: use only tools declared in the active catalog, or conclude and report your final summary.]`
+    );
+  }
+  if (detection.kind === "unknown_tool_loop") {
+    return (
+      `[Governance Steering Directive: Multiple tool calls (${detection.count}) were rejected because the requested tools are not declared in the tool catalog. ` +
+      `Halting unknown tool generation. Do not invent new tool names. ` +
+      `Immediately change strategy: consult the declared tools in your context and use only available tools, or conclude your work.]`
     );
   }
   return (
@@ -385,6 +423,87 @@ export class LoopBreaker {
     return { kind: "pingpong", fingerprints: distinct, count: cycles };
   }
 
+  /**
+   * Observe one tool rejection for a session.
+   *
+   * Catches polymorphic repeat loops (e.g. repeated rejections of the same tool
+   * despite varying arguments) and unknown-tool floods across the window.
+   */
+  observeRejection(sessionId: string, toolName: string, reason: string): LoopDetection | null {
+    try {
+      return this.observeRejectionInternal(sessionId, toolName, reason);
+    } catch (err) {
+      log.error("loop breaker observeRejection failed; passing through (fail-open)", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  private observeRejectionInternal(
+    sessionId: string,
+    toolName: string,
+    reason: string
+  ): LoopDetection | null {
+    if (!this.enabled || !sessionId || !toolName) return null;
+
+    let state = this.sessions.get(sessionId);
+    if (!state) {
+      this.evictIfNeeded();
+      state = { window: [], rejections: [], interventions: 0, lastActive: this.now() };
+      this.sessions.set(sessionId, state);
+    }
+    state.lastActive = this.now();
+    if (!state.rejections) state.rejections = [];
+
+    state.rejections.push({ toolName, reason, at: this.now() });
+    if (state.rejections.length > this.windowSize) {
+      state.rejections.splice(0, state.rejections.length - this.windowSize);
+    }
+
+    // 1. Polymorphic Repeat: same toolName rejected >= repeatThreshold times in the window
+    let sameToolCount = 0;
+    for (const r of state.rejections) {
+      if (r.toolName === toolName) {
+        sameToolCount += 1;
+      }
+    }
+    if (sameToolCount >= this.repeatThreshold) {
+      state.interventions += 1;
+      return {
+        kind: "polymorphic_repeat",
+        fingerprints: [toolName],
+        count: sameToolCount,
+        interventions: state.interventions,
+        shouldAbort: state.interventions > this.maxInterventions,
+      };
+    }
+
+    // 2. Unknown Tool Flood: unknown_tool reason >= repeatThreshold times in the window
+    if (reason === "unknown_tool") {
+      let unknownCount = 0;
+      for (const r of state.rejections) {
+        if (r.reason === "unknown_tool") {
+          unknownCount += 1;
+        }
+      }
+      if (unknownCount >= this.repeatThreshold) {
+        state.interventions += 1;
+        return {
+          kind: "unknown_tool_loop",
+          fingerprints: state.rejections
+            .filter((r) => r.reason === "unknown_tool")
+            .map((r) => r.toolName),
+          count: unknownCount,
+          interventions: state.interventions,
+          shouldAbort: state.interventions > this.maxInterventions,
+        };
+      }
+    }
+
+    return null;
+  }
+
   /** Interventions already delivered to a session. */
   getInterventionCount(sessionId: string): number {
     return this.sessions.get(sessionId)?.interventions ?? 0;
@@ -395,6 +514,7 @@ export class LoopBreaker {
     const state = this.sessions.get(sessionId);
     if (state) {
       state.window = [];
+      state.rejections = [];
     }
   }
 

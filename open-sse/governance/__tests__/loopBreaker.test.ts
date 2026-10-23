@@ -375,5 +375,65 @@ describe("loop breaker", () => {
       expect(directive).toContain("4 cycles");
       expect(directive).toContain("Immediately change strategy");
     });
+
+    it("builds a directive for polymorphic repeat loops", () => {
+      const directive = buildLoopSteeringDirective(
+        {
+          kind: "polymorphic_repeat",
+          fingerprints: ["bash_tool"],
+          count: 3,
+          interventions: 1,
+          shouldAbort: false,
+        },
+        "bash_tool"
+      );
+      expect(directive).toContain(
+        'Tool "bash_tool" has been called repeatedly and rejected 3 times'
+      );
+      expect(directive).toContain("active catalog");
+    });
+
+    it("builds a directive for unknown tool loops", () => {
+      const directive = buildLoopSteeringDirective({
+        kind: "unknown_tool_loop",
+        fingerprints: ["tool_a", "tool_b", "tool_c"],
+        count: 3,
+        interventions: 2,
+        shouldAbort: true,
+      });
+      expect(directive).toContain("Multiple tool calls (3) were rejected");
+      expect(directive).toContain("Do not invent new tool names");
+    });
+  });
+
+  describe("polymorphic tool rejection detection", () => {
+    it("detects polymorphic repeat when the same tool is rejected 3 times with different arguments", () => {
+      expect(breaker.observeRejection("s", "fake_tool", "unknown_tool")).toBeNull();
+      expect(breaker.observeRejection("s", "fake_tool", "unknown_tool")).toBeNull();
+      const detection = breaker.observeRejection("s", "fake_tool", "unknown_tool");
+      expect(detection).not.toBeNull();
+      expect(detection?.kind).toBe("polymorphic_repeat");
+      expect(detection?.count).toBe(3);
+      expect(detection?.fingerprints).toEqual(["fake_tool"]);
+    });
+
+    it("detects unknown tool loop when multiple different unknown tools are invoked and rejected", () => {
+      expect(breaker.observeRejection("s", "unknown_1", "unknown_tool")).toBeNull();
+      expect(breaker.observeRejection("s", "unknown_2", "unknown_tool")).toBeNull();
+      const detection = breaker.observeRejection("s", "unknown_3", "unknown_tool");
+      expect(detection).not.toBeNull();
+      expect(detection?.kind).toBe("unknown_tool_loop");
+      expect(detection?.count).toBe(3);
+      expect(detection?.fingerprints).toContain("unknown_1");
+      expect(detection?.fingerprints).toContain("unknown_2");
+      expect(detection?.fingerprints).toContain("unknown_3");
+    });
+
+    it("does not trip when rejections are cleared by clearWindow", () => {
+      expect(breaker.observeRejection("s", "fake_tool", "unknown_tool")).toBeNull();
+      expect(breaker.observeRejection("s", "fake_tool", "unknown_tool")).toBeNull();
+      breaker.clearWindow("s");
+      expect(breaker.observeRejection("s", "fake_tool", "unknown_tool")).toBeNull();
+    });
   });
 });

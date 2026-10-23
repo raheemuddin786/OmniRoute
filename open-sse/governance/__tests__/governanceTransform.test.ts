@@ -727,4 +727,76 @@ describe("governanceTransform — fail open", () => {
     expect(out).toContain("governance");
     expect(out).toContain("[DONE]");
   });
+
+  it("steers in-stream on polymorphic unknown tool loop with varying arguments", async () => {
+    const loopBreaker = new LoopBreaker({ repeatThreshold: 2, maxInterventions: 0 });
+    let out = "";
+    // Call 1: fake tool with arg 1
+    await run(OPENAI_CALL_FRAMES("fake_command", '{"cmd":"ls"}'), {
+      body: catalog,
+      loopBreaker,
+      clientFormat: FORMATS.OPENAI,
+    });
+    // Call 2: fake tool with arg 2 -> trips polymorphic repeat (2 rejections)
+    out = await run(OPENAI_CALL_FRAMES("fake_command", '{"cmd":"pwd"}'), {
+      body: catalog,
+      loopBreaker,
+      clientFormat: FORMATS.OPENAI,
+    });
+
+    expect(out).toContain("Governance Steering Directive");
+    expect(out).toContain("fake_command");
+    expect(out).not.toContain("tool_calls");
+    expect(out).toContain("stop");
+  });
+
+  it("safely flushes unparsed buffer when stream buffer exceeds maxStreamBufferBytes", async () => {
+    const origMax = process.env.OMNIROUTE_GOVERNANCE_MAX_STREAM_BUFFER_BYTES;
+    try {
+      process.env.OMNIROUTE_GOVERNANCE_MAX_STREAM_BUFFER_BYTES = "100";
+      // Send a 200-byte continuous line without \n\n frame delimiter
+      const hugeLine = "data: " + "a".repeat(150);
+      const out = await run([hugeLine], {
+        body: catalog,
+        clientFormat: FORMATS.OPENAI,
+      });
+      expect(out).toContain("data: aaaaaa");
+    } finally {
+      if (origMax === undefined) delete process.env.OMNIROUTE_GOVERNANCE_MAX_STREAM_BUFFER_BYTES;
+      else process.env.OMNIROUTE_GOVERNANCE_MAX_STREAM_BUFFER_BYTES = origMax;
+    }
+  });
+
+  it("quarantines and completely suppresses looped Anthropic tool_use frames on loop abort", async () => {
+    const loopBreaker = new LoopBreaker({ repeatThreshold: 2, maxInterventions: 0 });
+    // Call 1
+    await run(
+      ANTHROPIC_CALL_FRAMES(
+        "mcp__plugin_playwright_playwright__browser_navigate",
+        '{"url":"https://example.com"}'
+      ),
+      {
+        body: catalog,
+        loopBreaker,
+        clientFormat: FORMATS.CLAUDE,
+      }
+    );
+    // Call 2: repeated call trips repeatThreshold: 2 and maxInterventions: 0 -> aborts
+    const out = await run(
+      ANTHROPIC_CALL_FRAMES(
+        "mcp__plugin_playwright_playwright__browser_navigate",
+        '{"url":"https://example.com"}'
+      ),
+      {
+        body: catalog,
+        loopBreaker,
+        clientFormat: FORMATS.CLAUDE,
+      }
+    );
+
+    expect(out).toContain("Governance Steering Directive");
+    expect(out).toContain("mcp__plugin_playwright_playwright__browser_navigate");
+    expect(out).not.toContain("tool_use"); // The tool_use content block is completely quarantined and dropped!
+    expect(out).toContain("end_turn");
+  });
 });

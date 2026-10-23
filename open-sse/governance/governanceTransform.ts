@@ -75,12 +75,22 @@ import { validateToolCall, auditToolCallRejection } from "./toolSchemaValidator.
 import { recordGovernanceAudit } from "./auditBus.ts";
 import { registerLoopIntervention } from "./loopIntervention.ts";
 import { buildRejectionKey, getToolRejectionLedger } from "./toolRejectionLedger.ts";
-import { ToolCallAssembler } from "./toolCallAssembler.ts";
+import { ToolCallAssembler, type ToolCallChunkInfo } from "./toolCallAssembler.ts";
 import type { TokenSentinelTracker, TokenSentinelBreach } from "./tokenSentinel.ts";
 import type { LoopBreaker, LoopDetection } from "./loopBreaker.ts";
 import type { ToolCallValidationContext, ToolCallRejectionReason } from "./toolSchemaValidator.ts";
 
 const log = logger("GOVERNANCE");
+
+export const DEFAULT_MAX_STREAM_BUFFER_BYTES = 4 * 1024 * 1024; // 4 MB
+
+export function resolveGovernanceMaxStreamBufferBytes(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_MAX_STREAM_BUFFER_BYTES;
+  if (raw === undefined || raw === "") return DEFAULT_MAX_STREAM_BUFFER_BYTES;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_STREAM_BUFFER_BYTES;
+  return parsed;
+}
 
 export interface GovernanceTransformOptions {
   /** Client wire format — selects the terminal frame shape. */
@@ -464,13 +474,17 @@ function extractFramePayload(frame: string): unknown {
 class GovernanceEgressTap {
   private readonly decoder = new TextDecoder();
   private readonly assembler = new ToolCallAssembler();
+  private readonly maxStreamBufferBytes: number;
   private buffer = "";
   private terminated = false;
-  private openAnthropicBlockIndex: number | null = null;
-  private highestAnthropicBlockIndex = -1;
+  private pendingToolFrames: string[] = [];
+  private openEmittedBlockIndex: number | null = null;
+  private highestEmittedBlockIndex = -1;
   private hasSeenMessageStart = false;
 
-  constructor(private readonly options: GovernanceTransformOptions) {}
+  constructor(private readonly options: GovernanceTransformOptions) {
+    this.maxStreamBufferBytes = resolveGovernanceMaxStreamBufferBytes();
+  }
 
   /** The validation context shared by the validator and the audit rows. */
   private validationContext(): ToolCallValidationContext {
@@ -487,6 +501,35 @@ class GovernanceEgressTap {
     };
   }
 
+  /** Emit a frame directly to controller while tracking block indices actually emitted to the wire. */
+  private enqueueFrame(
+    raw: string,
+    controller: TransformStreamDefaultController<Uint8Array>
+  ): void {
+    const payload = extractFramePayload(raw);
+    const rec =
+      payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+    if (rec) {
+      if (rec.type === "message_start") {
+        this.hasSeenMessageStart = true;
+      } else if (rec.type === "content_block_start") {
+        const idx = typeof rec.index === "number" ? rec.index : null;
+        if (idx !== null) {
+          this.openEmittedBlockIndex = idx;
+          this.highestEmittedBlockIndex = Math.max(this.highestEmittedBlockIndex, idx);
+        }
+      } else if (rec.type === "content_block_stop") {
+        const idx = typeof rec.index === "number" ? rec.index : null;
+        if (idx === null || this.openEmittedBlockIndex === idx) {
+          this.openEmittedBlockIndex = null;
+        }
+      } else if (rec.type === "message_stop") {
+        this.openEmittedBlockIndex = null;
+      }
+    }
+    controller.enqueue(encoder.encode(raw));
+  }
+
   /** Emit the clean terminal frames or active steering frames for the client format. */
   private flushTerminal(
     controller: TransformStreamDefaultController<Uint8Array>,
@@ -498,8 +541,8 @@ class GovernanceEgressTap {
 
     if (isSteeringEnabled && steeringDirective) {
       const frames = buildGovernanceSteeringFrames(this.options.clientFormat, steeringDirective, {
-        openAnthropicBlockIndex: this.openAnthropicBlockIndex,
-        highestAnthropicBlockIndex: this.highestAnthropicBlockIndex,
+        openAnthropicBlockIndex: this.openEmittedBlockIndex,
+        highestAnthropicBlockIndex: this.highestEmittedBlockIndex,
         hasSeenMessageStart: this.hasSeenMessageStart,
       });
       for (const frame of frames) controller.enqueue(frame);
@@ -579,7 +622,7 @@ class GovernanceEgressTap {
    */
   private handleLoop(
     detection: LoopDetection,
-    call: { name: string },
+    call: { name: string; callId?: string | null; args?: unknown },
     controller: TransformStreamDefaultController<Uint8Array>
   ): void {
     log.warn("loop detected by governance", {
@@ -590,6 +633,17 @@ class GovernanceEgressTap {
       sessionId: this.options.sessionId,
     });
     this.auditLoop(detection, call.name);
+
+    // Record the rejection in the ledger so any subsequent tool_result is intercepted and rewritten with is_error: true
+    const context = this.validationContext();
+    this.rejectToolCall(
+      { name: call.name, callId: call.callId || null, args: call.args },
+      {
+        reason: "repetitive_loop",
+        message: `Action was halted by governance: repetitive execution loop detected for tool "${call.name}".`,
+      },
+      context
+    );
 
     // Always register the next-turn system prompt intervention so the model receives
     // context reflection on the subsequent request.
@@ -618,6 +672,9 @@ class GovernanceEgressTap {
       });
     }
 
+    // Quarantine & discard pending tool frames so client never receives or executes the looped tool call
+    this.pendingToolFrames = [];
+
     const steeringDirective = buildLoopSteeringDirective(detection, call.name);
     this.flushTerminal(
       controller,
@@ -629,7 +686,7 @@ class GovernanceEgressTap {
 
   /** Validate one COMPLETE tool call and observe the loop breaker. */
   private handleToolCall(
-    call: { name: string; callId: string | null; args: unknown },
+    call: { name: string; callId: string | null; args: unknown; oversized?: boolean },
     controller: TransformStreamDefaultController<Uint8Array>
   ): void {
     const context = this.validationContext();
@@ -639,11 +696,27 @@ class GovernanceEgressTap {
     // arguments, so the loop fingerprint is comparable across wire formats
     // (OpenAI streams a JSON string, Anthropic an object).
     const args = parseArgumentText(call.args);
-    const descriptor = { name: call.name, arguments: args, callId: call.callId || null };
+    const descriptor = {
+      name: call.name,
+      arguments: args,
+      callId: call.callId || null,
+      oversized: call.oversized,
+    };
 
     const outcome = validateToolCall(descriptor, context);
     if (outcome.ok === false) {
       this.rejectToolCall({ name: call.name, callId: call.callId, args }, outcome, context);
+      if (typeof this.options.loopBreaker?.observeRejection === "function") {
+        const rejectionDetection = this.options.loopBreaker.observeRejection(
+          this.options.sessionId,
+          call.name,
+          outcome.reason
+        );
+        if (rejectionDetection) {
+          this.handleLoop(rejectionDetection, call, controller);
+          return;
+        }
+      }
     }
 
     if (!this.options.loopBreaker) return;
@@ -702,7 +775,7 @@ class GovernanceEgressTap {
   private handlePayload(
     payload: unknown,
     controller: TransformStreamDefaultController<Uint8Array>
-  ): void {
+  ): ToolCallChunkInfo | null {
     const rec =
       payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
     if (rec) {
@@ -726,7 +799,7 @@ class GovernanceEgressTap {
       }
     }
 
-    if (this.checkTokenSentinel(payload, controller)) return;
+    if (this.checkTokenSentinel(payload, controller)) return null;
 
     // The assembler completes a call only on the format's own TERMINAL marker
     // (the OpenAI `finish_reason` chunk, the Anthropic `content_block_stop`, the
@@ -736,11 +809,17 @@ class GovernanceEgressTap {
     for (const call of info.completes) {
       if (!call.name) continue;
       this.handleToolCall(
-        { name: call.name, callId: call.callId, args: call.arguments },
+        {
+          name: call.name,
+          callId: call.callId,
+          args: call.arguments,
+          oversized: call.oversized,
+        },
         controller
       );
-      if (this.terminated) return;
+      if (this.terminated) return info;
     }
+    return info;
   }
 
   /**
@@ -757,23 +836,59 @@ class GovernanceEgressTap {
     try {
       this.buffer += this.decoder.decode(chunk, { stream: true });
 
+      // Guard against unbounded buffer growth from non-delimited streams
+      if (this.buffer.length > this.maxStreamBufferBytes) {
+        log.warn(
+          "governance stream buffer exceeded ceiling; flushing raw buffer to prevent memory exhaustion",
+          {
+            bufferLength: this.buffer.length,
+            sessionId: this.options.sessionId,
+          }
+        );
+        controller.enqueue(encoder.encode(this.buffer));
+        this.buffer = "";
+        return;
+      }
+
       let match = FRAME_SEPARATOR.exec(this.buffer);
       while (match !== null) {
         const frame = this.buffer.slice(0, match.index);
         this.buffer = this.buffer.slice(match.index + match[0].length);
 
         const payload = extractFramePayload(frame);
+        let chunkInfo: ToolCallChunkInfo | null = null;
         if (payload !== null) {
-          this.handlePayload(payload, controller);
+          chunkInfo = this.handlePayload(payload, controller);
         }
         if (this.terminated) {
-          // The terminal frames were already enqueued; drop the rest.
+          // Terminal frames were already enqueued; drop the rest of the stream.
+          this.pendingToolFrames = [];
           this.buffer = "";
           return;
         }
-        // Forward the frame's ORIGINAL bytes — the governance tap inspects the
-        // payload but never rewrites it.
-        controller.enqueue(encoder.encode(frame + match[0]));
+
+        const rawFrame = frame + match[0];
+        const isToolFrame = Boolean(chunkInfo?.hasToolContent || this.assembler.hasPending);
+
+        if (isToolFrame) {
+          // Tool calls are quarantined until validation and loop-breaker approval
+          this.pendingToolFrames.push(rawFrame);
+          if (!this.assembler.hasPending && this.pendingToolFrames.length > 0) {
+            for (const tf of this.pendingToolFrames) {
+              this.enqueueFrame(tf, controller);
+            }
+            this.pendingToolFrames = [];
+          }
+        } else {
+          // Non-tool frame: flush any pending approved tool frames first
+          if (!this.assembler.hasPending && this.pendingToolFrames.length > 0) {
+            for (const tf of this.pendingToolFrames) {
+              this.enqueueFrame(tf, controller);
+            }
+            this.pendingToolFrames = [];
+          }
+          this.enqueueFrame(rawFrame, controller);
+        }
 
         match = FRAME_SEPARATOR.exec(this.buffer);
       }
@@ -783,6 +898,16 @@ class GovernanceEgressTap {
         error: err instanceof Error ? err.message : String(err),
       });
       this.buffer = "";
+      if (this.pendingToolFrames.length > 0) {
+        for (const tf of this.pendingToolFrames) {
+          try {
+            controller.enqueue(encoder.encode(tf));
+          } catch {
+            /* ignore */
+          }
+        }
+        this.pendingToolFrames = [];
+      }
       try {
         controller.enqueue(chunk);
       } catch {
@@ -796,7 +921,10 @@ class GovernanceEgressTap {
    * the trailing bytes.
    */
   flush(controller: TransformStreamDefaultController<Uint8Array>): void {
-    if (this.terminated) return;
+    if (this.terminated) {
+      this.pendingToolFrames = [];
+      return;
+    }
     try {
       // A truncated stream (the upstream ended without a terminal marker) still
       // carries the accumulated arguments — the best available approximation of
@@ -804,15 +932,43 @@ class GovernanceEgressTap {
       for (const call of this.assembler.completeAll()) {
         if (!call.name) continue;
         this.handleToolCall(
-          { name: call.name, callId: call.callId, args: call.arguments },
+          {
+            name: call.name,
+            callId: call.callId,
+            args: call.arguments,
+            oversized: call.oversized,
+          },
           controller
         );
-        if (this.terminated) return;
+        if (this.terminated) {
+          this.pendingToolFrames = [];
+          return;
+        }
       }
+
+      if (this.pendingToolFrames.length > 0) {
+        for (const tf of this.pendingToolFrames) {
+          this.enqueueFrame(tf, controller);
+        }
+        this.pendingToolFrames = [];
+      }
+
       const tail = this.buffer + this.decoder.decode();
-      if (tail) controller.enqueue(encoder.encode(tail));
-    } catch {
-      /* fail-open: a flush error must not break the response */
+      if (tail) this.enqueueFrame(tail, controller);
+    } catch (err) {
+      log.error("governance transform flush failed (fail-open)", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      if (this.pendingToolFrames.length > 0) {
+        for (const tf of this.pendingToolFrames) {
+          try {
+            controller.enqueue(encoder.encode(tf));
+          } catch {
+            /* ignore */
+          }
+        }
+        this.pendingToolFrames = [];
+      }
     }
   }
 }

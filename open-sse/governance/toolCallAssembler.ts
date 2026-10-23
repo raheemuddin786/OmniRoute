@@ -48,6 +48,16 @@
  *  records names and counters only).
  */
 
+export const DEFAULT_MAX_TOOL_ARG_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export function resolveGovernanceMaxToolArgBytes(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_MAX_TOOL_ARG_BYTES;
+  if (raw === undefined || raw === "") return DEFAULT_MAX_TOOL_ARG_BYTES;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_TOOL_ARG_BYTES;
+  return parsed;
+}
+
 export interface ToolCallStart {
   /** Stable key for this call, shared by all of its fragments. */
   key: string;
@@ -84,6 +94,8 @@ export interface ToolCallComplete {
   format: string;
   /** The format-native index of the call. */
   index: number | null;
+  /** True when argument accumulation exceeded the size threshold. */
+  oversized?: boolean;
 }
 
 export interface ToolCallChunkInfo {
@@ -137,6 +149,12 @@ interface PendingCall {
   index: number | null;
   /** The last name reported through `ToolCallChunkInfo.names`. */
   reportedName: string;
+  /** True when argument accumulation exceeded size ceiling. */
+  oversized?: boolean;
+}
+
+export interface ToolCallAssemblerOptions {
+  maxArgBytes?: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -158,6 +176,11 @@ function nonEmptyString(value: unknown): string | null {
  */
 export class ToolCallAssembler {
   private readonly calls = new Map<string, PendingCall>();
+  private readonly maxArgBytes: number;
+
+  constructor(options: ToolCallAssemblerOptions = {}) {
+    this.maxArgBytes = options.maxArgBytes ?? resolveGovernanceMaxToolArgBytes();
+  }
 
   /**
    * Consume one client-facing SSE payload.
@@ -216,6 +239,7 @@ export class ToolCallAssembler {
         arguments: pending.args && pending.args.trim() !== "" ? pending.args : "{}",
         format: pending.format,
         index: pending.index,
+        ...(pending.oversized ? { oversized: true } : {}),
       });
     }
     this.calls.clear();
@@ -223,6 +247,17 @@ export class ToolCallAssembler {
   }
 
   // ── shared per-call bookkeeping ──
+
+  /** Append argument fragment with byte ceiling guard. */
+  private appendArg(pending: PendingCall, fragment: string, info: ToolCallChunkInfo): void {
+    if (!fragment) return;
+    if (pending.args.length + fragment.length > this.maxArgBytes) {
+      pending.oversized = true;
+    } else {
+      pending.args += fragment;
+    }
+    info.args.push({ key: pending.key, text: fragment });
+  }
 
   /** Report the call as started (once per call). */
   private reportStart(pending: PendingCall, format: string, info: ToolCallChunkInfo): void {
@@ -311,8 +346,7 @@ export class ToolCallAssembler {
     info.touchedKeys.push(key);
     this.reportName(pending, name, "openai", info);
     if (fragment) {
-      pending.args += fragment;
-      info.args.push({ key, text: fragment });
+      this.appendArg(pending, fragment, info);
     }
     info.hasToolContent = true;
   }
@@ -368,7 +402,13 @@ export class ToolCallAssembler {
     // carries keys, it IS the final argument text.
     const input = asRecord(block.input);
     if (input && Object.keys(input).length > 0) {
-      pending.args = JSON.stringify(input);
+      const text = JSON.stringify(input);
+      if (text.length > this.maxArgBytes) {
+        pending.oversized = true;
+        pending.args = "";
+      } else {
+        pending.args = text;
+      }
       pending.argsFinal = true;
     }
     info.hasToolContent = true;
@@ -392,8 +432,7 @@ export class ToolCallAssembler {
       // the already-final text would duplicate the arguments, so the final
       // text wins and the fragment is dropped.
       if (!pending.argsFinal) {
-        pending.args += fragment;
-        info.args.push({ key, text: fragment });
+        this.appendArg(pending, fragment, info);
       }
     }
     info.hasToolContent = true;
@@ -458,7 +497,12 @@ export class ToolCallAssembler {
     // The item carries the complete arguments.
     const args = typeof item.arguments === "string" ? item.arguments : "";
     if (args) {
-      pending.args = args;
+      if (args.length > this.maxArgBytes) {
+        pending.oversized = true;
+        pending.args = "";
+      } else {
+        pending.args = args;
+      }
       pending.argsFinal = true;
     }
     this.complete(pending, info);
@@ -475,8 +519,7 @@ export class ToolCallAssembler {
     this.reportStart(pending, "responses", info);
     info.touchedKeys.push(key);
     if (fragment) {
-      pending.args += fragment;
-      info.args.push({ key, text: fragment });
+      this.appendArg(pending, fragment, info);
     }
     info.hasToolContent = true;
   }
@@ -489,7 +532,12 @@ export class ToolCallAssembler {
     if (typeof record.output_index === "number") pending.index = record.output_index;
     const args = typeof record.arguments === "string" ? record.arguments : "";
     if (args) {
-      pending.args = args;
+      if (args.length > this.maxArgBytes) {
+        pending.oversized = true;
+        pending.args = "";
+      } else {
+        pending.args = args;
+      }
       pending.argsFinal = true;
     }
 
@@ -517,6 +565,7 @@ export class ToolCallAssembler {
         format: "",
         index: null,
         reportedName: "",
+        oversized: false,
       };
       this.calls.set(key, pending);
     }
@@ -532,6 +581,7 @@ export class ToolCallAssembler {
       arguments: pending.args && pending.args.trim() !== "" ? pending.args : "{}",
       format: pending.format,
       index: pending.index,
+      ...(pending.oversized ? { oversized: true } : {}),
     });
     info.hasToolContent = true;
   }

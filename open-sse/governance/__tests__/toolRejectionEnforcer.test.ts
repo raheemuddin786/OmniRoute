@@ -161,6 +161,20 @@ describe("applyToolCallRejections", () => {
     expect(body.messages[1].content).toBe("the real result");
   });
 
+  it("is idempotent and does not duplicate prefix if content already has OPENAI_TOOL_ERROR_MARKER", () => {
+    const existingMarker = `${OPENAI_TOOL_ERROR_MARKER}\nalready rejected`;
+    const body = {
+      messages: [{ role: "tool", tool_call_id: "call_1", content: existingMarker }],
+    };
+    const rejections = new Map([
+      ["call_1", { message: "already rejected", reason: "unknown_tool" as const }],
+    ]);
+    const out = applyToolCallRejections(body, rejections);
+    expect(out).toBe(body);
+    const messages = (out as { messages: Array<{ role: string; content: string }> }).messages;
+    expect(messages[0].content).toBe(existingMarker);
+  });
+
   it("rewrites an Anthropic tool_result with is_error", () => {
     const body = {
       messages: [

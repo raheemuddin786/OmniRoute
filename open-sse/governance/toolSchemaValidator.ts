@@ -79,13 +79,19 @@ import { sanitizeErrorMessage } from "../utils/error.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { logger } from "../utils/logger.ts";
 import { recordGovernanceAudit } from "./auditBus.ts";
+import { resolveGovernanceMaxToolArgBytes } from "./toolCallAssembler.ts";
 
 const log = logger("GOVERNANCE");
 
 /** Upper bound on the once-per-session DEGRADED dedup set. */
 export const MAX_DEGRADED_SESSIONS = 500;
 
-export type ToolCallRejectionReason = "unknown_tool" | "invalid_arguments" | "malformed_arguments";
+export type ToolCallRejectionReason =
+  | "unknown_tool"
+  | "invalid_arguments"
+  | "malformed_arguments"
+  | "oversized_arguments"
+  | "repetitive_loop";
 
 export interface ToolCallDescriptor {
   /** Tool name as emitted by the model. */
@@ -94,6 +100,8 @@ export interface ToolCallDescriptor {
   arguments: unknown;
   /** Provider-assigned call id, when the format has one. */
   callId?: string | null;
+  /** True when argument accumulation was truncated due to exceeding size limit. */
+  oversized?: boolean;
 }
 
 export interface ToolCallValidationContext {
@@ -400,6 +408,24 @@ function validateToolCallInternal(
   const toolName = typeof call?.name === "string" ? call.name.trim() : "";
   if (!toolName) {
     return rejection(context, call, "unknown_tool", "Tool call is missing a tool name.");
+  }
+
+  if (call.oversized) {
+    return rejection(
+      context,
+      call,
+      "oversized_arguments",
+      `Tool "${toolName}" was called with arguments exceeding the maximum allowed size limit.`
+    );
+  }
+  const maxBytes = resolveGovernanceMaxToolArgBytes();
+  if (typeof call.arguments === "string" && call.arguments.length > maxBytes) {
+    return rejection(
+      context,
+      call,
+      "oversized_arguments",
+      `Tool "${toolName}" was called with arguments exceeding the maximum allowed size limit.`
+    );
   }
 
   const catalog = resolveCatalog(context.body);

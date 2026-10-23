@@ -358,5 +358,47 @@ describe("ToolCallAssembler", () => {
       expect(info.touchedKeys).toHaveLength(0);
       expect(info.hasToolContent).toBe(false);
     });
+
+    it("marks a call oversized and caps memory when arguments exceed maxArgBytes", () => {
+      const assembler = new ToolCallAssembler({ maxArgBytes: 50 });
+      // Stream chunks that together exceed 50 bytes
+      assembler.consume({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  function: { name: "large_tool", arguments: '{"chunk":"12345678901234567890"}' },
+                },
+              ],
+            },
+          },
+        ],
+      });
+      assembler.consume({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, function: { arguments: '{"chunk2":"12345678901234567890"}' } },
+              ],
+            },
+          },
+        ],
+      });
+      const end = assembler.consume({
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: '{"chunk3":"exceeding_bytes"}' } }],
+            },
+          },
+        ],
+      });
+      expect(end.completes).toHaveLength(1);
+      expect(end.completes[0].oversized).toBe(true);
+    });
   });
 });

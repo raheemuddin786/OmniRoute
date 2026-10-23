@@ -205,6 +205,10 @@ export function applyToolCallRejections<T>(
           const callId = typeof msg.tool_call_id === "string" ? msg.tool_call_id : "";
           const rejection = rejections.get(callId);
           if (!rejection) return rawMessage;
+          const currentContent = typeof msg.content === "string" ? msg.content : "";
+          if (currentContent.startsWith(OPENAI_TOOL_ERROR_MARKER)) {
+            return rawMessage;
+          }
           changed = true;
           // The OpenAI tool role has no `is_error` field — the repo's own
           // Claude→OpenAI translator uses this marker for the same reason.
