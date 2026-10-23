@@ -240,3 +240,43 @@ describe("token sentinel — mid-stream disconnect", () => {
     expect(tracker.observeReasoningText("x".repeat(100))).toBeNull();
   });
 });
+
+describe("resolveGovernanceReasoningCeiling", () => {
+  const originalEnv = process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING;
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING = originalEnv;
+    } else {
+      delete process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING;
+    }
+  });
+
+  it("returns DEFAULT_REASONING_TOKEN_CEILING when env var is undefined", () => {
+    delete process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING;
+    expect(resolveGovernanceReasoningCeiling()).toBe(DEFAULT_REASONING_TOKEN_CEILING);
+  });
+
+  it("returns DEFAULT_REASONING_TOKEN_CEILING when env var is empty string", () => {
+    process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING = "";
+    expect(resolveGovernanceReasoningCeiling()).toBe(DEFAULT_REASONING_TOKEN_CEILING);
+  });
+
+  it("returns DEFAULT_REASONING_TOKEN_CEILING when env var is non-numeric string", () => {
+    process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING = "invalid_ceiling";
+    expect(resolveGovernanceReasoningCeiling()).toBe(DEFAULT_REASONING_TOKEN_CEILING);
+  });
+
+  it("returns DEFAULT_REASONING_TOKEN_CEILING when env var is zero or negative", () => {
+    process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING = "0";
+    expect(resolveGovernanceReasoningCeiling()).toBe(DEFAULT_REASONING_TOKEN_CEILING);
+
+    process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING = "-500";
+    expect(resolveGovernanceReasoningCeiling()).toBe(DEFAULT_REASONING_TOKEN_CEILING);
+  });
+
+  it("parses and returns valid positive integer", () => {
+    process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING = "32000";
+    expect(resolveGovernanceReasoningCeiling()).toBe(32_000);
+  });
+});

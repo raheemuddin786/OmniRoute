@@ -1,13 +1,13 @@
 ---
 title: "Proxy Governance Layer"
 version: 3.8.53
-lastUpdated: 2026-10-20
+lastUpdated: 2026-10-23
 ---
 
 # Proxy Governance Layer
 
 > **Source of truth:** `open-sse/governance/` and `open-sse/handlers/chatCore/governanceIngress.ts`
-> **Last updated:** 2026-10-20 — v3.8.53
+> **Last updated:** 2026-10-23 — v3.8.53
 
 The proxy governance layer sits between a client and the upstream model provider and enforces four
 things on the model's behalf:

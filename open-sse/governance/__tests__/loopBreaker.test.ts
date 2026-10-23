@@ -158,6 +158,25 @@ describe("loop breaker", () => {
       expect(breaker.observe("s2", "read_file", { p: 1 })).toBeNull();
     });
 
+    it("keeps interleaved concurrent sessions completely isolated", () => {
+      // Interleave actions between session A and session B
+      breaker.observe("sessionA", "read_file", { path: "a.txt" });
+      breaker.observe("sessionB", "write_file", { path: "b.txt" });
+      breaker.observe("sessionA", "read_file", { path: "a.txt" });
+      breaker.observe("sessionB", "write_file", { path: "b.txt" });
+
+      // Session A reaches threshold on its 3rd call
+      const detectionA = breaker.observe("sessionA", "read_file", { path: "a.txt" });
+      expect(detectionA).not.toBeNull();
+      expect(detectionA?.kind).toBe("repeat");
+
+      // Session B has only done 2 calls, so it must NOT trigger
+      const detectionB = breaker.observe("sessionB", "other_tool", {});
+      expect(detectionB).toBeNull();
+      expect(breaker.getInterventionCount("sessionB")).toBe(0);
+      expect(breaker.getInterventionCount("sessionA")).toBe(1);
+    });
+
     it("forgets a session on reset", () => {
       for (let i = 0; i < REPEAT_THRESHOLD; i++) breaker.observe("s", "read_file", { p: 1 });
       breaker.reset("s");

@@ -193,8 +193,14 @@ interface SessionState {
  * that was repeated. Naming it lets the model recognise which action to stop,
  * which is the whole point of the intervention.
  */
+function sanitizeToolName(name?: string): string {
+  if (!name || typeof name !== "string") return "";
+  return name.replace(/[^\w.:\/-]/g, "_").slice(0, 80);
+}
+
 export function buildLoopInterventionMessage(detection: LoopDetection, toolName?: string): string {
-  const named = toolName ? `The action in question is the "${toolName}" tool.` : "";
+  const safeName = sanitizeToolName(toolName);
+  const named = safeName ? `The action in question is the "${safeName}" tool.` : "";
   if (detection.kind === "pingpong") {
     return (
       `You have invoked two actions in an alternating loop for ${detection.count} cycles with ` +
@@ -206,8 +212,8 @@ export function buildLoopInterventionMessage(detection: LoopDetection, toolName?
   }
   if (detection.kind === "polymorphic_repeat") {
     return (
-      `The tool "${toolName}" has been called repeatedly and rejected ${detection.count} times. ` +
-      `Halt this approach. Do not attempt to invoke "${toolName}" again. ` +
+      `The tool "${safeName}" has been called repeatedly and rejected ${detection.count} times. ` +
+      `Halt this approach. Do not attempt to invoke "${safeName}" again. ` +
       `Change strategy: use only valid tools registered in your context catalog, ` +
       `or finish your task and report your findings.`
     );
@@ -236,7 +242,8 @@ export function buildLoopInterventionMessage(detection: LoopDetection, toolName?
  * recover and pivot without crashing with an unrecoverable API Error.
  */
 export function buildLoopSteeringDirective(detection: LoopDetection, toolName?: string): string {
-  const named = toolName ? `("${toolName}") ` : "";
+  const safeName = sanitizeToolName(toolName);
+  const named = safeName ? `("${safeName}") ` : "";
   if (detection.kind === "pingpong") {
     return (
       `[Governance Steering Directive: An alternating action loop was detected between tools over ${detection.count} cycles with identical results. ` +
@@ -246,8 +253,8 @@ export function buildLoopSteeringDirective(detection: LoopDetection, toolName?: 
   }
   if (detection.kind === "polymorphic_repeat") {
     return (
-      `[Governance Steering Directive: Tool "${toolName}" has been called repeatedly and rejected ${detection.count} times. ` +
-      `Halting repeated attempts. Do not call "${toolName}" again. ` +
+      `[Governance Steering Directive: Tool "${safeName}" has been called repeatedly and rejected ${detection.count} times. ` +
+      `Halting repeated attempts. Do not call "${safeName}" again. ` +
       `Immediately change strategy: use only tools declared in the active catalog, or conclude and report your final summary.]`
     );
   }
