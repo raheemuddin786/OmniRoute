@@ -28,10 +28,15 @@ test("#10314: classifyComboOutcome keeps auth distinct from quality/model", () =
 // pin the corrected, intentional mapping for the exact statuses call out in
 // the fix: 499 (client-abort convention), 408 (request timeout), 429 (rate
 // limit/quota — its own class, not lumped into `model`), and the 5xx family.
-test("#10501: classifyComboOutcome — 499/408 are timeout, 429 is rate_limit, 5xx is provider (not timeout)", () => {
+test("#10501: classifyComboOutcome — 499/408 are timeout, 429/402 is rate_limit, 5xx is provider (not timeout)", () => {
   assert.equal(classifyComboOutcome(499, "client closed request"), "timeout");
   assert.equal(classifyComboOutcome(408, "request timeout"), "timeout");
   assert.equal(classifyComboOutcome(429, "rate limited"), "rate_limit");
+  assert.equal(
+    classifyComboOutcome(402, "Add credits to continue, or switch to a free model"),
+    "rate_limit"
+  );
+  assert.equal(classifyComboOutcome(400, "insufficient credits"), "rate_limit");
   assert.equal(classifyComboOutcome(500, "internal server error"), "provider");
   assert.equal(classifyComboOutcome(502, "bad gateway"), "provider");
   assert.equal(classifyComboOutcome(503, "upstream unavailable"), "provider");
@@ -40,7 +45,12 @@ test("#10501: classifyComboOutcome — 499/408 are timeout, 429 is rate_limit, 5
 
 test("#10314: formatComboOutcomes lists quality and auth reasons SEPARATELY (both visible)", () => {
   const msg = formatComboOutcomes([
-    { model: "openai/model-quality", status: 502, error: "response failed quality validation", kind: "quality" },
+    {
+      model: "openai/model-quality",
+      status: 502,
+      error: "response failed quality validation",
+      kind: "quality",
+    },
     { model: "openai/proxy-account-b", status: 401, error: "invalid_api_key", kind: "auth" },
   ]);
   assert.match(msg, /quality validation/);
@@ -50,10 +60,7 @@ test("#10314: formatComboOutcomes lists quality and auth reasons SEPARATELY (bot
 });
 
 test("#10314: redactConnectionLabel masks connection/account identifiers", () => {
-  assert.equal(
-    redactConnectionLabel("openai/proxy-account-b"),
-    "openai/proxy-account-b"
-  );
+  assert.equal(redactConnectionLabel("openai/proxy-account-b"), "openai/proxy-account-b");
   const withUuid = redactConnectionLabel("openai/8a4f0c6e-3b27-4c51-9d88-1f2a3b4c5d6e");
   assert.equal(withUuid, "openai/conn:8a4f0c6e");
   const withHex = redactConnectionLabel("openai/0f1e2d3c4b5a69788796170a1b2c3d4e5f607182");
@@ -62,7 +69,10 @@ test("#10314: redactConnectionLabel masks connection/account identifiers", () =>
 
 test("#10314: buildRedactedSummary is redacted and truncates past 5 entries", () => {
   const s = buildRedactedSummary(
-    Array.from({ length: 6 }, (_, i) => ({ model: `openai/8a4f0c6e-3b27-4c51-9d88-1f2a3b4c5d6e-${i}`, status: 401 + i }))
+    Array.from({ length: 6 }, (_, i) => ({
+      model: `openai/8a4f0c6e-3b27-4c51-9d88-1f2a3b4c5d6e-${i}`,
+      status: 401 + i,
+    }))
   );
   assert.ok(!s.includes("8a4f0c6e-3b27"), "summary must not leak a full UUID");
   assert.match(s, /conn:8a4f0c6e/);

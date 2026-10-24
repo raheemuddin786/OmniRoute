@@ -1130,18 +1130,43 @@ async function handleChatImplementation(
 
   let spbCombo: any = null;
 
-  if (isSpbActive && spbDecision?.selectedModel && (isSpbModel || isIncompatibleModality)) {
-    log.info(
-      "SPB",
-      `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → ${spbDecision.selectedModel} (tier=${spbDecision.tierAssignment.tier}, phase=${spbDecision.intent.taskPhase})`
-    );
-    resolvedModelStr = spbDecision.selectedModel;
-    body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
+  if (isSpbActive && (isSpbModel || isIncompatibleModality)) {
+    const currentTierConfig = getTierConfig();
+    const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
+    const activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
 
-    // Prioritized tier combo strictly from user-configured tier models, excluding non-chat modalities
-    const uniqueTierModels = Array.from(
-      new Set(spbDecision.tierAssignment.recommendedModels || [])
-    ).filter((m) => {
+    // Build complete prioritized fallback ladder across tiers:
+    // primary tier models first, followed by sibling tier models in fallback order.
+    const candidateModels: string[] = [];
+    if (activeTier === "tier_1_apex") {
+      candidateModels.push(
+        ...(spbDecision?.tierAssignment?.recommendedModels?.length
+          ? spbDecision.tierAssignment.recommendedModels
+          : tierModels.apex || []),
+        ...(tierModels.resilient || []),
+        ...(tierModels.local || [])
+      );
+    } else if (activeTier === "tier_3_local") {
+      candidateModels.push(
+        ...(spbDecision?.tierAssignment?.recommendedModels?.length
+          ? spbDecision.tierAssignment.recommendedModels
+          : tierModels.local || []),
+        ...(tierModels.resilient || []),
+        ...(tierModels.apex || [])
+      );
+    } else {
+      // Default / tier_2_resilient: resilient -> apex -> local
+      candidateModels.push(
+        ...(spbDecision?.tierAssignment?.recommendedModels?.length
+          ? spbDecision.tierAssignment.recommendedModels
+          : tierModels.resilient || []),
+        ...(tierModels.apex || []),
+        ...(tierModels.local || [])
+      );
+    }
+
+    // Filter out non-chat modalities
+    const uniqueTierModels = Array.from(new Set(candidateModels)).filter((m) => {
       const modelName = typeof m === "string" ? m : (m as any)?.model || "";
       const lower = modelName.toLowerCase();
       return (
@@ -1152,24 +1177,63 @@ async function handleChatImplementation(
         !lower.includes("transcribe")
       );
     });
-    if (uniqueTierModels.length > 0) {
+
+    const effectiveSelectedModel =
+      spbDecision?.selectedModel && uniqueTierModels.includes(spbDecision.selectedModel)
+        ? spbDecision.selectedModel
+        : uniqueTierModels.length > 0
+          ? typeof uniqueTierModels[0] === "string"
+            ? uniqueTierModels[0]
+            : (uniqueTierModels[0] as any).model
+          : null;
+
+    if (effectiveSelectedModel) {
+      log.info(
+        "SPB",
+        `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → ${effectiveSelectedModel} (tier=${activeTier}, phase=${spbDecision?.intent?.taskPhase || "DEFAULT"})`
+      );
+      resolvedModelStr = effectiveSelectedModel;
+      body = {
+        ...body,
+        model: resolvedModelStr,
+        _spbActive: true,
+        _spbDecision: spbDecision
+          ? { ...spbDecision, selectedModel: effectiveSelectedModel }
+          : {
+              intent: {
+                taskPhase: "DEFAULT",
+                complexityScore: 0.5,
+                requiresTools: false,
+                promptAnchorHash: "",
+              },
+              tierAssignment: {
+                tier: activeTier,
+                recommendedModels: uniqueTierModels,
+                maxTokens: 8192,
+                temperature: 0.2,
+                cacheEnabled: true,
+              },
+              selectedModel: effectiveSelectedModel,
+              checkpointRestored: false,
+            },
+      };
+
       spbCombo = {
-        id: `spb-${spbDecision.tierAssignment.tier}`,
-        name: `SPB ${spbDecision.tierAssignment.tier}`,
+        id: `spb-${activeTier}`,
+        name: `SPB ${activeTier}`,
         type: "spb",
         strategy: "priority",
         models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
       };
+    } else if (isIncompatibleModality) {
+      const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
+      log.warn(
+        "SPB",
+        `Modality Shield: Incompatible non-chat model detected (${resolvedModelStr}), safely redirecting to ${shieldModel}`
+      );
+      resolvedModelStr = shieldModel;
+      body = { ...body, model: resolvedModelStr };
     }
-  } else if (isIncompatibleModality && isSpbActive) {
-    const currentTierConfig = getTierConfig();
-    const shieldModel = currentTierConfig?.tierModels?.resilient?.[0] || resolvedModelStr;
-    log.warn(
-      "SPB",
-      `Modality Shield: Incompatible non-chat model detected (${resolvedModelStr}), safely redirecting to ${shieldModel}`
-    );
-    resolvedModelStr = shieldModel;
-    body = { ...body, model: resolvedModelStr };
   }
 
   let _taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;

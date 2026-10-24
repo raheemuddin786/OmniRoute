@@ -64,7 +64,13 @@ export function classifyComboOutcome(status: number, errorText: string): ComboOu
   ) {
     return "auth";
   }
-  if (status === 429) return "rate_limit";
+  if (
+    status === 402 ||
+    status === 429 ||
+    /(credits?|quota|insufficient.?funds|payment|balance)/i.test(text)
+  ) {
+    return "rate_limit";
+  }
   if (status === 408 || status === 499) return "timeout";
   if (status >= 500) return "provider";
   return "model";

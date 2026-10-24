@@ -137,6 +137,13 @@ export async function createVirtualAutoCombo(
     );
   }
 
+  if (state.model === "auto/spb" || state.model === "auto/smart-proxy-bridge") {
+    return errorResponse(
+      HTTP_STATUS.SERVICE_UNAVAILABLE,
+      `No models configured for ${state.model}. Please configure tier models in SPB settings.`
+    );
+  }
+
   try {
     const { createVirtualAutoCombo: createVirtual } =
       await import("@omniroute/open-sse/services/autoCombo/virtualFactory.ts");

@@ -145,6 +145,9 @@ export function hasIdenticalModelErrorStreak(
   const tail = comboErrors.slice(-streak);
   const [first, ...rest] = tail;
   if (first.kind !== "model") return false;
+  // Request-shape errors that apply to the request payload itself are strictly 400 or 422.
+  // Quota (402), auth (401/403), rate limits (429), or infra (5xx) must never early-abort fallback.
+  if (first.status !== 400 && first.status !== 422) return false;
   return rest.every(
     (e) => e.kind === first.kind && e.status === first.status && e.error === first.error
   );
