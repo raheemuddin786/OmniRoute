@@ -84,6 +84,61 @@ export function resolveGovernanceReasoningCeiling(): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REASONING_TOKEN_CEILING;
   return parsed;
 }
+
+/** Default runaway single-word repetition threshold. */
+export const DEFAULT_REPETITION_RUNAWAY_THRESHOLD = 8;
+/** Default consecutive stutter threshold in pairs. */
+export const DEFAULT_REPETITION_STUTTER_THRESHOLD = 4;
+/** Default phrase repetition cycle count threshold. */
+export const DEFAULT_REPETITION_PHRASE_CYCLES = 4;
+
+/**
+ * Resolve whether degenerate repetition detection is enabled.
+ * Override with `OMNIROUTE_GOVERNANCE_DEGENERATE_REPETITION_ENABLED` ("0" or "false" disables).
+ * Defaults to true.
+ */
+export function resolveGovernanceDegenerateRepetitionEnabled(): boolean {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_DEGENERATE_REPETITION_ENABLED;
+  if (raw === undefined || raw === "") return true;
+  return raw !== "0" && raw.toLowerCase() !== "false";
+}
+
+/**
+ * Resolve the threshold for runaway single-word repetition.
+ * Override with `OMNIROUTE_GOVERNANCE_REPETITION_RUNAWAY_THRESHOLD` (positive integers only).
+ */
+export function resolveGovernanceRepetitionRunawayThreshold(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_REPETITION_RUNAWAY_THRESHOLD;
+  if (raw === undefined || raw === "") return DEFAULT_REPETITION_RUNAWAY_THRESHOLD;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REPETITION_RUNAWAY_THRESHOLD;
+  return parsed;
+}
+
+/**
+ * Resolve the threshold for consecutive stutter pairs.
+ * Override with `OMNIROUTE_GOVERNANCE_REPETITION_STUTTER_THRESHOLD` (positive integers only).
+ */
+export function resolveGovernanceRepetitionStutterThreshold(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_REPETITION_STUTTER_THRESHOLD;
+  if (raw === undefined || raw === "") return DEFAULT_REPETITION_STUTTER_THRESHOLD;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REPETITION_STUTTER_THRESHOLD;
+  return parsed;
+}
+
+/**
+ * Resolve the minimum repetition cycles for multi-word phrase loops.
+ * Override with `OMNIROUTE_GOVERNANCE_REPETITION_PHRASE_CYCLES` (positive integers only).
+ */
+export function resolveGovernanceRepetitionPhraseCycles(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_REPETITION_PHRASE_CYCLES;
+  if (raw === undefined || raw === "") return DEFAULT_REPETITION_PHRASE_CYCLES;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REPETITION_PHRASE_CYCLES;
+  return parsed;
+}
+
 /** Velocity window in milliseconds. */
 export const VELOCITY_WINDOW_MS = 2_000;
 /** Approximate characters per token used for the reasoning-token estimate. */
@@ -107,6 +162,8 @@ export interface TokenSentinelOptions {
   velocityCeiling?: number | null;
   /** Velocity window in ms. Default 2 000. */
   velocityWindowMs?: number;
+  /** Whether degenerate repetition detection is enabled. */
+  repetitionEnabled?: boolean;
   /** Injectable clock (tests). */
   now?: () => number;
 }
@@ -131,60 +188,112 @@ interface VelocitySample {
 
 /**
  * Detect degenerate token / phrase repetition loops in model text (stuttering, runaway loops).
+ *
+ * Structural & Syntax Awareness:
+ *  - Excludes standard Markdown table dividers (`|`, `---`), code formatting brackets,
+ *    and numbered list repetitions.
+ *  - Distinguishes consecutive, uninterrupted stuttering from words scattered across normal sentences.
+ *  - Adapts phrase repetition cycle requirements dynamically between short phrases and full sentences.
  */
-export function detectDegenerateRepetition(text: string): { detected: boolean; reason?: string } {
+export function detectDegenerateRepetition(
+  text: string,
+  options?: { isReasoning?: boolean }
+): { detected: boolean; reason?: string } {
+  if (!resolveGovernanceDegenerateRepetitionEnabled()) {
+    return { detected: false };
+  }
   if (!text || text.length < 35) return { detected: false };
+
+  // Check if text is predominantly structural code/markdown (e.g. tables, code blocks, diffs)
+  const isStructuralCodeOrMarkdown =
+    (text.includes("|") && (text.includes("---") || text.includes("-|-"))) ||
+    (text.includes("```") && (text.match(/```/g)?.length ?? 0) % 2 === 1) ||
+    /^[ \t]*[-*+]\s+/m.test(text) ||
+    /^[ \t]*\d+\.\s+/m.test(text);
 
   const words = text.trim().split(/\s+/).slice(-80);
   if (words.length < 5) return { detected: false };
 
-  // 1. Runaway single-word repetition (e.g. "wait wait wait wait wait wait")
-  if (words.length >= 6) {
-    const lastWord = words[words.length - 1].toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (lastWord.length >= 2) {
+  const isReasoning = options?.isReasoning ?? false;
+  const baseRunaway = resolveGovernanceRepetitionRunawayThreshold();
+  const baseStutter = resolveGovernanceRepetitionStutterThreshold();
+  const basePhraseCycles = resolveGovernanceRepetitionPhraseCycles();
+
+  // Content stream is naturally more structured (code, markdown, lists); require higher threshold
+  const runawayThreshold = isReasoning ? baseRunaway : baseRunaway + 2;
+  const stutterThreshold = baseStutter;
+
+  // 1. Runaway single-word repetition (e.g. "wait wait wait wait wait wait wait wait")
+  if (words.length >= runawayThreshold) {
+    const rawLast = words[words.length - 1];
+    const lastWord = rawLast.toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Ignore pure punctuation, numbers, or markdown dividers like "---" or "0"
+    if (lastWord.length >= 2 && !/^\d+$/.test(lastWord)) {
       let run = 0;
       for (let i = words.length - 1; i >= 0; i--) {
         const w = words[i].toLowerCase().replace(/[^a-z0-9]/g, "");
         if (w === lastWord) run++;
         else break;
       }
-      if (run >= 6) {
+      if (run >= runawayThreshold) {
         return { detected: true, reason: `runaway_word_repeat ("${lastWord}" x ${run})` };
       }
     }
   }
 
   // 2. Word-level stuttering (consecutive identical words in stream)
-  let stutterCount = 0;
+  // Truly degenerate stuttering is an unbroken sequence of repeated adjacent words
+  // (e.g. "Google's Google's recommended recommended snippet snippet is is always always")
+  // rather than isolated duplicate tokens scattered across normal code, JSON, or sentences.
+  let maxConsecutiveStutter = 0;
+  let currentConsecutiveStutter = 0;
   for (let i = 1; i < words.length; i++) {
     const w1 = words[i - 1].toLowerCase().replace(/[^a-z0-9]/g, "");
     const w2 = words[i].toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (w1.length >= 2 && w1 === w2) {
-      stutterCount++;
+    if (w1.length >= 2 && w1 === w2 && !/^\d+$/.test(w1)) {
+      currentConsecutiveStutter++;
+      if (currentConsecutiveStutter > maxConsecutiveStutter) {
+        maxConsecutiveStutter = currentConsecutiveStutter;
+      }
+      i++; // Skip the second token of the pair so we test the next pair
+    } else {
+      currentConsecutiveStutter = 0;
     }
   }
-  if (stutterCount >= 4) {
-    return { detected: true, reason: `word_stuttering (${stutterCount} stutter pairs)` };
+  if (maxConsecutiveStutter >= stutterThreshold) {
+    return {
+      detected: true,
+      reason: `word_stuttering (${maxConsecutiveStutter} consecutive stutter pairs)`,
+    };
   }
 
-  // 3. Multi-word phrase repetition cycle (k words repeated 3+ times consecutively)
+  // 3. Multi-word phrase repetition cycle (k words repeated consecutively)
+  // For structural code/markdown with list items or tables, require higher cycle threshold
+  // to prevent killing valid multi-item generation.
+  const effectiveCycles = isStructuralCodeOrMarkdown
+    ? Math.max(basePhraseCycles, 5)
+    : !isReasoning
+      ? Math.max(basePhraseCycles, 4)
+      : basePhraseCycles;
+
   for (let k = 3; k <= 25; k++) {
-    if (words.length < k * 3) break;
-    const g1 = words.slice(-k).join(" ").toLowerCase();
-    const g2 = words
-      .slice(-k * 2, -k)
-      .join(" ")
-      .toLowerCase();
-    const g3 = words
-      .slice(-k * 3, -k * 2)
-      .join(" ")
-      .toLowerCase();
-    if (g1 === g2 && g2 === g3) {
-      const clean = g1.replace(/[^a-z0-9]/g, "");
+    if (words.length < k * effectiveCycles) break;
+
+    const slices: string[] = [];
+    for (let c = 1; c <= effectiveCycles; c++) {
+      const sliceStart = -k * c;
+      const sliceEnd = c === 1 ? undefined : -k * (c - 1);
+      slices.push(words.slice(sliceStart, sliceEnd).join(" ").toLowerCase());
+    }
+
+    const first = slices[0];
+    const allMatch = slices.every((s) => s === first);
+    if (allMatch) {
+      const clean = first.replace(/[^a-z0-9]/g, "");
       if (clean.length >= 8) {
         return {
           detected: true,
-          reason: `phrase_repetition_cycle ("${words.slice(-k).join(" ").slice(0, 35)}...")`,
+          reason: `phrase_repetition_cycle ("${words.slice(-k).join(" ").slice(0, 35)}..." x ${effectiveCycles})`,
         };
       }
     }
@@ -199,6 +308,7 @@ export class TokenSentinelTracker {
   private readonly ceiling: number;
   private readonly velocityCeiling: number | null;
   private readonly velocityWindowMs: number;
+  private readonly repetitionEnabled: boolean;
   private readonly now: () => number;
   private recentTextTail = "";
   private released = false;
@@ -209,6 +319,8 @@ export class TokenSentinelTracker {
     this.velocityCeiling =
       options.velocityCeiling === undefined ? DEFAULT_VELOCITY_CEILING : options.velocityCeiling;
     this.velocityWindowMs = options.velocityWindowMs ?? VELOCITY_WINDOW_MS;
+    this.repetitionEnabled =
+      options.repetitionEnabled ?? resolveGovernanceDegenerateRepetitionEnabled();
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -236,19 +348,21 @@ export class TokenSentinelTracker {
     if (typeof text !== "string" || text.length === 0) return null;
 
     // Check for degenerate repetition across accumulated stream text
-    this.recentTextTail = (this.recentTextTail + text).slice(-1500);
-    const rep = detectDegenerateRepetition(this.recentTextTail);
-    if (rep.detected) {
-      this.breached = true;
-      return {
-        kind: "repetition",
-        cumulativeTokens: this.cumulativeTokens,
-        velocity: this.computeVelocity(),
-        limit: 0,
-        message:
-          `Degenerate repetition loop detected in model output (${rep.reason}). ` +
-          `The stream was stopped to bound token waste.`,
-      };
+    if (this.repetitionEnabled) {
+      this.recentTextTail = (this.recentTextTail + text).slice(-1500);
+      const rep = detectDegenerateRepetition(this.recentTextTail, { isReasoning });
+      if (rep.detected) {
+        this.breached = true;
+        return {
+          kind: "repetition",
+          cumulativeTokens: this.cumulativeTokens,
+          velocity: this.computeVelocity(),
+          limit: 0,
+          message:
+            `Degenerate repetition loop detected in model output (${rep.reason}). ` +
+            `The stream was stopped to bound token waste.`,
+        };
+      }
     }
 
     if (isReasoning) {

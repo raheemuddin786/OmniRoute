@@ -8,6 +8,11 @@ import {
   releaseTokenSentinelTracker,
   liveTokenSentinelCount,
   releaseAllTokenSentinelTrackers,
+  detectDegenerateRepetition,
+  resolveGovernanceDegenerateRepetitionEnabled,
+  resolveGovernanceRepetitionRunawayThreshold,
+  resolveGovernanceRepetitionStutterThreshold,
+  resolveGovernanceRepetitionPhraseCycles,
   DEFAULT_REASONING_TOKEN_CEILING,
   CHARS_PER_TOKEN,
 } from "../tokenSentinel.ts";
@@ -278,5 +283,90 @@ describe("resolveGovernanceReasoningCeiling", () => {
   it("parses and returns valid positive integer", () => {
     process.env.OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING = "32000";
     expect(resolveGovernanceReasoningCeiling()).toBe(32_000);
+  });
+});
+
+describe("detectDegenerateRepetition", () => {
+  const originalEnabled = process.env.OMNIROUTE_GOVERNANCE_DEGENERATE_REPETITION_ENABLED;
+  const originalRunaway = process.env.OMNIROUTE_GOVERNANCE_REPETITION_RUNAWAY_THRESHOLD;
+  const originalStutter = process.env.OMNIROUTE_GOVERNANCE_REPETITION_STUTTER_THRESHOLD;
+  const originalPhrase = process.env.OMNIROUTE_GOVERNANCE_REPETITION_PHRASE_CYCLES;
+
+  afterEach(() => {
+    if (originalEnabled === undefined)
+      delete process.env.OMNIROUTE_GOVERNANCE_DEGENERATE_REPETITION_ENABLED;
+    else process.env.OMNIROUTE_GOVERNANCE_DEGENERATE_REPETITION_ENABLED = originalEnabled;
+    if (originalRunaway === undefined)
+      delete process.env.OMNIROUTE_GOVERNANCE_REPETITION_RUNAWAY_THRESHOLD;
+    else process.env.OMNIROUTE_GOVERNANCE_REPETITION_RUNAWAY_THRESHOLD = originalRunaway;
+    if (originalStutter === undefined)
+      delete process.env.OMNIROUTE_GOVERNANCE_REPETITION_STUTTER_THRESHOLD;
+    else process.env.OMNIROUTE_GOVERNANCE_REPETITION_STUTTER_THRESHOLD = originalStutter;
+    if (originalPhrase === undefined)
+      delete process.env.OMNIROUTE_GOVERNANCE_REPETITION_PHRASE_CYCLES;
+    else process.env.OMNIROUTE_GOVERNANCE_REPETITION_PHRASE_CYCLES = originalPhrase;
+  });
+
+  it("detects genuine consecutive word-level stuttering", () => {
+    const text = "Google's Google's recommended recommended snippet snippet is is always always ";
+    const res = detectDegenerateRepetition(text);
+    expect(res.detected).toBe(true);
+    expect(res.reason).toContain("word_stuttering");
+  });
+
+  it("does NOT false-positive on words scattered across normal code, sentences, or JSON", () => {
+    const code = `
+      const item = { type: type, status: status, value: value };
+      const other = { type: type, status: status, value: value };
+      return true;
+    `;
+    const res = detectDegenerateRepetition(code);
+    expect(res.detected).toBe(false);
+  });
+
+  it("does NOT false-positive on structured Markdown tables and bulleted lists", () => {
+    const tableAndList = `
+      | Step | Status | Evidence |
+      | --- | --- | --- |
+      | GAP-001 | Complete and verified | routes/web.php tested |
+      | GAP-002 | Complete and verified | routes/api.php tested |
+      | GAP-003 | Complete and verified | routes/console.php tested |
+      - Phase 1: locate_root and read_docs
+      - Phase 2: locate_root and read_docs
+      - Phase 3: locate_root and read_docs
+    `;
+    const res = detectDegenerateRepetition(tableAndList);
+    expect(res.detected).toBe(false);
+  });
+
+  it("detects runaway single-word repetition", () => {
+    const text = "wait wait wait wait wait wait wait wait wait wait wait";
+    const res = detectDegenerateRepetition(text, { isReasoning: true });
+    expect(res.detected).toBe(true);
+    expect(res.reason).toContain("runaway_word_repeat");
+  });
+
+  it("honours OMNIROUTE_GOVERNANCE_DEGENERATE_REPETITION_ENABLED=false", () => {
+    process.env.OMNIROUTE_GOVERNANCE_DEGENERATE_REPETITION_ENABLED = "false";
+    expect(resolveGovernanceDegenerateRepetitionEnabled()).toBe(false);
+    const text = "wait wait wait wait wait wait wait wait wait wait wait";
+    const res = detectDegenerateRepetition(text);
+    expect(res.detected).toBe(false);
+  });
+
+  it("honours repetition threshold environment variable overrides", () => {
+    process.env.OMNIROUTE_GOVERNANCE_REPETITION_RUNAWAY_THRESHOLD = "15";
+    process.env.OMNIROUTE_GOVERNANCE_REPETITION_STUTTER_THRESHOLD = "10";
+    process.env.OMNIROUTE_GOVERNANCE_REPETITION_PHRASE_CYCLES = "8";
+
+    expect(resolveGovernanceRepetitionRunawayThreshold()).toBe(15);
+    expect(resolveGovernanceRepetitionStutterThreshold()).toBe(10);
+    expect(resolveGovernanceRepetitionPhraseCycles()).toBe(8);
+  });
+
+  it("allows disabling repetition via tracker options", () => {
+    const tracker = new TokenSentinelTracker({ repetitionEnabled: false });
+    const text = "wait wait wait wait wait wait wait wait wait wait wait";
+    expect(tracker.observeText(text)).toBeNull();
   });
 });
