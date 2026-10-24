@@ -56,6 +56,11 @@ const log = logger("GOVERNANCE");
 export const WINDOW_SIZE = 10;
 /** Identical fingerprints inside the window that constitute a loop. */
 export const REPEAT_THRESHOLD = 3;
+/**
+ * Repeat threshold for safe read-only operations (file reading, directory inspection, grep).
+ * Agents legitimately read the same configuration or status multiple times during a workflow.
+ */
+export const READONLY_REPEAT_THRESHOLD = 5;
 /** Alternating cycles between two distinct fingerprints that constitute a loop. */
 export const PINGPONG_THRESHOLD = 3;
 /**
@@ -85,6 +90,18 @@ export function resolveGovernanceLoopRepeatThreshold(): number {
   if (raw === undefined || raw === "") return REPEAT_THRESHOLD;
   const parsed = Number.parseInt(String(raw), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return REPEAT_THRESHOLD;
+  return parsed;
+}
+
+/**
+ * Resolve the repeat threshold for idempotent read-only tool calls.
+ * Override with `OMNIROUTE_GOVERNANCE_LOOP_READONLY_REPEAT_THRESHOLD` (positive integers only).
+ */
+export function resolveGovernanceLoopReadonlyRepeatThreshold(): number {
+  const raw = process.env.OMNIROUTE_GOVERNANCE_LOOP_READONLY_REPEAT_THRESHOLD;
+  if (raw === undefined || raw === "") return READONLY_REPEAT_THRESHOLD;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return READONLY_REPEAT_THRESHOLD;
   return parsed;
 }
 
@@ -137,6 +154,139 @@ export function resolveGovernanceLoopSteeringEnabled(): boolean {
   return raw !== "0" && raw.toLowerCase() !== "false";
 }
 
+/**
+ * Known read-only or inspection tool names and patterns.
+ * Agents legitimately call these repeatedly during standard exploration, planning,
+ * reading code, inspecting logs, or checking task/build statuses.
+ */
+const KNOWN_READONLY_EXACT = new Set([
+  "read",
+  "read_file",
+  "readfile",
+  "view_file",
+  "viewfile",
+  "view",
+  "cat",
+  "grep",
+  "grep_search",
+  "grepsearch",
+  "search",
+  "search_files",
+  "filesearch",
+  "list_dir",
+  "listdir",
+  "list_directory",
+  "ls",
+  "dir",
+  "search_web",
+  "web_search",
+  "read_url_content",
+  "read_browser_page",
+  "fetch_url",
+  "status",
+  "git_status",
+  "task_status",
+  "get_task",
+]);
+
+const READONLY_PREFIXES = [
+  "read_",
+  "view_",
+  "list_",
+  "search_",
+  "get_",
+  "inspect_",
+  "check_",
+  "describe_",
+  "show_",
+  "find_",
+  "fetch_",
+];
+
+const READONLY_SUFFIXES = ["_read", "_view", "_search", "_status", "_list", "_info"];
+
+export function isReadOnlyOrInspectionTool(toolName?: string, args?: unknown): boolean {
+  if (!toolName || typeof toolName !== "string") return false;
+  const normalized = toolName.trim().toLowerCase();
+
+  // Special-case tool inspection (e.g. manage_task with status/list action)
+  if (normalized === "manage_task" && args && typeof args === "object") {
+    const action = String(
+      (args as Record<string, unknown>).Action ?? (args as Record<string, unknown>).action ?? ""
+    ).toLowerCase();
+    return action === "status" || action === "list";
+  }
+
+  if (KNOWN_READONLY_EXACT.has(normalized)) return true;
+
+  for (const prefix of READONLY_PREFIXES) {
+    if (normalized.startsWith(prefix)) return true;
+  }
+
+  for (const suffix of READONLY_SUFFIXES) {
+    if (normalized.endsWith(suffix)) return true;
+  }
+
+  return false;
+}
+
+const KNOWN_MUTATING_EXACT = new Set([
+  "write",
+  "write_file",
+  "write_to_file",
+  "writetofile",
+  "edit",
+  "edit_file",
+  "replace_file_content",
+  "multi_replace_file_content",
+  "delete_file",
+  "rm",
+  "apply_patch",
+  "patch",
+  "run_command",
+  "bash",
+  "terminal",
+  "exec",
+  "execute",
+  "execute_command",
+]);
+
+const MUTATING_PREFIXES = [
+  "write_",
+  "edit_",
+  "replace_",
+  "multi_replace_",
+  "create_",
+  "update_",
+  "delete_",
+  "remove_",
+  "insert_",
+  "modify_",
+  "post_",
+  "put_",
+  "patch_",
+];
+
+export function isMutatingTool(toolName?: string, args?: unknown): boolean {
+  if (!toolName || typeof toolName !== "string") return false;
+  const normalized = toolName.trim().toLowerCase();
+
+  if (normalized === "manage_task" && args && typeof args === "object") {
+    const action = String(
+      (args as Record<string, unknown>).Action ?? (args as Record<string, unknown>).action ?? ""
+    ).toLowerCase();
+    return action === "kill" || action === "send_input";
+  }
+
+  if (KNOWN_MUTATING_EXACT.has(normalized)) return true;
+
+  for (const prefix of MUTATING_PREFIXES) {
+    if (normalized.startsWith(prefix)) return true;
+  }
+
+  return false;
+}
+
 export type LoopKind = "repeat" | "pingpong" | "polymorphic_repeat" | "unknown_tool_loop";
 
 export interface LoopDetection {
@@ -158,6 +308,7 @@ export interface LoopBreakerOptions {
   enabled?: boolean;
   windowSize?: number;
   repeatThreshold?: number;
+  readonlyRepeatThreshold?: number;
   pingpongThreshold?: number;
   maxInterventions?: number;
   maxSessions?: number;
@@ -168,6 +319,7 @@ export interface LoopBreakerOptions {
 export interface WindowEntry {
   fingerprint: string;
   toolName?: string;
+  args?: unknown;
   requestId?: string;
 }
 
@@ -297,6 +449,7 @@ export class LoopBreaker {
   private readonly enabled: boolean;
   private readonly windowSize: number;
   private readonly repeatThreshold: number;
+  private readonly readonlyRepeatThreshold: number;
   private readonly pingpongThreshold: number;
   private readonly maxInterventions: number;
   private readonly maxSessions: number;
@@ -306,6 +459,11 @@ export class LoopBreaker {
     this.enabled = options.enabled ?? resolveGovernanceLoopEnabled();
     this.windowSize = options.windowSize ?? resolveGovernanceLoopWindowSize();
     this.repeatThreshold = options.repeatThreshold ?? resolveGovernanceLoopRepeatThreshold();
+    this.readonlyRepeatThreshold =
+      options.readonlyRepeatThreshold ??
+      (options.repeatThreshold !== undefined
+        ? options.repeatThreshold
+        : resolveGovernanceLoopReadonlyRepeatThreshold());
     this.pingpongThreshold = options.pingpongThreshold ?? resolveGovernanceLoopPingpongThreshold();
     this.maxInterventions = options.maxInterventions ?? resolveGovernanceLoopMaxInterventions();
     this.maxSessions = options.maxSessions ?? MAX_TRACKED_SESSIONS;
@@ -316,7 +474,8 @@ export class LoopBreaker {
    * Observe one tool call for a session.
    *
    * Returns a `LoopDetection` when a loop is detected, otherwise null. On
-   * detection the session's intervention counter is incremented     * expected to inject the intervention message (or abort, per
+   * detection the session's intervention counter is incremented and the caller is
+   * expected to inject the intervention message (or abort, per
    * `shouldAbort`) so the counter tracks interventions DELIVERED.
    */
   observe(
@@ -353,7 +512,7 @@ export class LoopBreaker {
     }
     state.lastActive = this.now();
 
-    state.window.push({ fingerprint, toolName, requestId });
+    state.window.push({ fingerprint, toolName, args, requestId });
     if (state.window.length > this.windowSize) {
       state.window.splice(0, state.window.length - this.windowSize);
     }
@@ -397,20 +556,45 @@ export class LoopBreaker {
     const pingpong = this.detectPingpong(normalized);
     if (pingpong) return pingpong;
 
-    // ── Repeat: the current fingerprint occurred at least `repeatThreshold` times ──
-    // Counted across the whole sliding window, but strictly anchored to the CURRENT
-    // action (window tail). If the model pivots to a different tool (such as writing
-    // a document or taking a new action), prior repeated calls must not falsely accuse
-    // the new action of repeating.
+    // ── Repeat: the current fingerprint occurred at least the effective repeat threshold ──
+    // Counted across the sliding window, but strictly anchored to the CURRENT action (window tail).
+    // For read-only/inspection tools (Read, view_file, grep, etc.), safe idempotent reads are scaled
+    // by `readonlyRepeatThreshold` and epoch-bounded: intervening mutating tool calls reset the
+    // repetition counter because file/system state potentially changed.
     const currentEntry = normalized[normalized.length - 1];
     const currentFingerprint = currentEntry.fingerprint;
+    const isReadOnly = isReadOnlyOrInspectionTool(currentEntry.toolName, currentEntry.args);
+    const effectiveThreshold = isReadOnly ? this.readonlyRepeatThreshold : this.repeatThreshold;
+
     let count = 0;
-    for (const item of normalized) {
-      if (item.fingerprint === currentFingerprint) {
-        count += 1;
+    if (isReadOnly) {
+      // Find the index of the most recent mutating action in the window, if any.
+      let lastMutationIndex = -1;
+      for (let i = normalized.length - 2; i >= 0; i--) {
+        const entry = normalized[i];
+        if (isMutatingTool(entry.toolName, entry.args)) {
+          lastMutationIndex = i;
+          break;
+        }
+      }
+
+      // Count occurrences of currentFingerprint only within the current state epoch
+      // (i.e. since the most recent state mutation).
+      const startIndex = lastMutationIndex >= 0 ? lastMutationIndex + 1 : 0;
+      for (let i = startIndex; i < normalized.length; i++) {
+        if (normalized[i].fingerprint === currentFingerprint) {
+          count += 1;
+        }
+      }
+    } else {
+      for (const item of normalized) {
+        if (item.fingerprint === currentFingerprint) {
+          count += 1;
+        }
       }
     }
-    if (count >= this.repeatThreshold) {
+
+    if (count >= effectiveThreshold) {
       return { kind: "repeat", fingerprints: [currentFingerprint], count };
     }
 

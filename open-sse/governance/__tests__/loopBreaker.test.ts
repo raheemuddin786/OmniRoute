@@ -8,6 +8,7 @@ import {
   resolveGovernanceLoopSteeringEnabled,
   WINDOW_SIZE,
   REPEAT_THRESHOLD,
+  READONLY_REPEAT_THRESHOLD,
   PINGPONG_THRESHOLD,
   MAX_INTERVENTIONS,
 } from "../loopBreaker.ts";
@@ -47,14 +48,14 @@ describe("loop breaker", () => {
   describe("repeat detection", () => {
     it("does not fire below the threshold", () => {
       for (let i = 0; i < REPEAT_THRESHOLD - 1; i++) {
-        expect(breaker.observe("s", "read_file", { p: 1 })).toBeNull();
+        expect(breaker.observe("s", "custom_tool", { p: 1 })).toBeNull();
       }
     });
 
     it("fires at the threshold with the repeat kind", () => {
       let detection = null;
       for (let i = 0; i < REPEAT_THRESHOLD; i++) {
-        detection = breaker.observe("s", "read_file", { p: 1 });
+        detection = breaker.observe("s", "custom_tool", { p: 1 });
       }
       expect(detection).not.toBeNull();
       expect(detection?.kind).toBe("repeat");
@@ -62,9 +63,9 @@ describe("loop breaker", () => {
     });
 
     it("does NOT fire when the same tool is called with DIFFERENT arguments", () => {
-      expect(breaker.observe("s", "read_file", { p: 1 })).toBeNull();
-      expect(breaker.observe("s", "read_file", { p: 2 })).toBeNull();
-      expect(breaker.observe("s", "read_file", { p: 3 })).toBeNull();
+      expect(breaker.observe("s", "custom_tool", { p: 1 })).toBeNull();
+      expect(breaker.observe("s", "custom_tool", { p: 2 })).toBeNull();
+      expect(breaker.observe("s", "custom_tool", { p: 3 })).toBeNull();
     });
 
     it("counts across the whole window, not just consecutive calls", () => {
@@ -156,7 +157,7 @@ describe("loop breaker", () => {
     it("does not abort on the first detection", () => {
       let detection = null;
       for (let i = 0; i < REPEAT_THRESHOLD; i++) {
-        detection = breaker.observe("s", "read_file", { p: 1 });
+        detection = breaker.observe("s", "custom_tool", { p: 1 });
       }
       expect(detection?.shouldAbort).toBe(false);
       expect(detection?.interventions).toBe(1);
@@ -165,13 +166,13 @@ describe("loop breaker", () => {
     it("aborts only after the intervention budget is exhausted", () => {
       let detection = null;
       for (let i = 0; i < REPEAT_THRESHOLD * (MAX_INTERVENTIONS + 2); i++) {
-        detection = breaker.observe("s", "read_file", { p: 1 });
+        detection = breaker.observe("s", "custom_tool", { p: 1 });
       }
       expect(detection?.shouldAbort).toBe(true);
     });
 
     it("tracks the intervention count per session", () => {
-      for (let i = 0; i < REPEAT_THRESHOLD; i++) breaker.observe("s1", "read_file", { p: 1 });
+      for (let i = 0; i < REPEAT_THRESHOLD; i++) breaker.observe("s1", "custom_tool", { p: 1 });
       expect(breaker.getInterventionCount("s1")).toBe(1);
       expect(breaker.getInterventionCount("s2")).toBe(0);
     });
@@ -179,19 +180,19 @@ describe("loop breaker", () => {
 
   describe("session isolation", () => {
     it("does not carry state across sessions", () => {
-      for (let i = 0; i < REPEAT_THRESHOLD - 1; i++) breaker.observe("s1", "read_file", { p: 1 });
-      expect(breaker.observe("s2", "read_file", { p: 1 })).toBeNull();
+      for (let i = 0; i < REPEAT_THRESHOLD - 1; i++) breaker.observe("s1", "custom_tool", { p: 1 });
+      expect(breaker.observe("s2", "custom_tool", { p: 1 })).toBeNull();
     });
 
     it("keeps interleaved concurrent sessions completely isolated", () => {
       // Interleave actions between session A and session B
-      breaker.observe("sessionA", "read_file", { path: "a.txt" });
+      breaker.observe("sessionA", "custom_tool", { path: "a.txt" });
       breaker.observe("sessionB", "write_file", { path: "b.txt" });
-      breaker.observe("sessionA", "read_file", { path: "a.txt" });
+      breaker.observe("sessionA", "custom_tool", { path: "a.txt" });
       breaker.observe("sessionB", "write_file", { path: "b.txt" });
 
       // Session A reaches threshold on its 3rd call
-      const detectionA = breaker.observe("sessionA", "read_file", { path: "a.txt" });
+      const detectionA = breaker.observe("sessionA", "custom_tool", { path: "a.txt" });
       expect(detectionA).not.toBeNull();
       expect(detectionA?.kind).toBe("repeat");
 
@@ -203,10 +204,10 @@ describe("loop breaker", () => {
     });
 
     it("forgets a session on reset", () => {
-      for (let i = 0; i < REPEAT_THRESHOLD; i++) breaker.observe("s", "read_file", { p: 1 });
+      for (let i = 0; i < REPEAT_THRESHOLD; i++) breaker.observe("s", "custom_tool", { p: 1 });
       breaker.reset("s");
       expect(breaker.getInterventionCount("s")).toBe(0);
-      expect(breaker.observe("s", "read_file", { p: 1 })).toBeNull();
+      expect(breaker.observe("s", "custom_tool", { p: 1 })).toBeNull();
     });
   });
 
@@ -262,10 +263,10 @@ describe("loop breaker", () => {
 
   describe("strategy pivot after intervention (regression: false loop on document writing)", () => {
     it("does NOT flag subsequent different tool calls after an intervention", () => {
-      // Model calls read_file 3 times -> triggers 1st intervention
-      breaker.observe("session-1", "read_file", { path: "notes.txt" });
-      breaker.observe("session-1", "read_file", { path: "notes.txt" });
-      const firstDetection = breaker.observe("session-1", "read_file", { path: "notes.txt" });
+      // Model calls custom_tool 3 times -> triggers 1st intervention
+      breaker.observe("session-1", "custom_tool", { path: "notes.txt" });
+      breaker.observe("session-1", "custom_tool", { path: "notes.txt" });
+      const firstDetection = breaker.observe("session-1", "custom_tool", { path: "notes.txt" });
       expect(firstDetection).not.toBeNull();
       expect(firstDetection?.kind).toBe("repeat");
       expect(firstDetection?.interventions).toBe(1);
@@ -478,6 +479,65 @@ describe("loop breaker", () => {
       expect(breaker.observeRejection("s", "fake_tool", "unknown_tool")).toBeNull();
       breaker.clearWindow("s");
       expect(breaker.observeRejection("s", "fake_tool", "unknown_tool")).toBeNull();
+    });
+  });
+
+  describe("read-only tool threshold and mutation awareness", () => {
+    it("does not fire at REPEAT_THRESHOLD for safe read-only operations", () => {
+      for (let i = 0; i < REPEAT_THRESHOLD; i++) {
+        expect(breaker.observe("s", "Read", { path: "a.txt" })).toBeNull();
+      }
+      expect(breaker.getInterventionCount("s")).toBe(0);
+    });
+
+    it("fires at READONLY_REPEAT_THRESHOLD for safe read-only operations", () => {
+      let detection = null;
+      for (let i = 0; i < READONLY_REPEAT_THRESHOLD; i++) {
+        detection = breaker.observe("s", "Read", { path: "a.txt" });
+      }
+      expect(detection).not.toBeNull();
+      expect(detection?.kind).toBe("repeat");
+      expect(detection?.count).toBe(READONLY_REPEAT_THRESHOLD);
+    });
+
+    it("resets repetition epoch when an intervening mutating tool call occurs", () => {
+      // Over 9 turns, Read is called 5 times but each is separated by a file modification.
+      for (let i = 0; i < 5; i++) {
+        const readDetection = breaker.observe("s", "Read", { path: "a.txt" });
+        expect(readDetection).toBeNull();
+        if (i < 4) {
+          const editDetection = breaker.observe("s", "replace_file_content", {
+            path: "a.txt",
+            content: `update ${i}`,
+          });
+          expect(editDetection).toBeNull();
+        }
+      }
+      expect(breaker.getInterventionCount("s")).toBe(0);
+    });
+
+    it("honours custom readonlyRepeatThreshold via options", () => {
+      const customBreaker = new LoopBreaker({ readonlyRepeatThreshold: 4 });
+      for (let i = 0; i < 3; i++) {
+        expect(customBreaker.observe("s", "view_file", { path: "a.txt" })).toBeNull();
+      }
+      const detection = customBreaker.observe("s", "view_file", { path: "a.txt" });
+      expect(detection).not.toBeNull();
+      expect(detection?.count).toBe(4);
+    });
+
+    it("treats manage_task with status as read-only and kill as mutating", () => {
+      for (let i = 0; i < 3; i++) {
+        expect(breaker.observe("s", "manage_task", { action: "status", taskId: "t1" })).toBeNull();
+      }
+      // Mutating manage_task with kill fires at REPEAT_THRESHOLD (3)
+      const mutBreaker = new LoopBreaker();
+      let killDetection = null;
+      for (let i = 0; i < REPEAT_THRESHOLD; i++) {
+        killDetection = mutBreaker.observe("s", "manage_task", { action: "kill", taskId: "t1" });
+      }
+      expect(killDetection).not.toBeNull();
+      expect(killDetection?.count).toBe(REPEAT_THRESHOLD);
     });
   });
 });
