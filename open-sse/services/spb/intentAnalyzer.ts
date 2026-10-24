@@ -95,6 +95,12 @@ export function classifyIntent(
 ): IntentProfile {
   let totalChars = 0;
 
+  // Agent environment & thinking indicators
+  const complexReasoningRegex =
+    /\b(think deeply|deep thinking|deep reasoning|reasoning effort|think step by step|chain of thought|deliberate|evaluate trade-offs|comparative analysis|high-level strategy|synthesis|synthesize|holistic review)\b/i;
+  const planModeRegex =
+    /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|distributed systems?|microservices architecture|rfc proposal|system rfc|formal proof|algorithmic proof|strategic planning|multi-tier architecture|threat model(?:ing)?|apex reasoning)\b/i;
+
   const codeRegex =
     /\b(function|class|const|let|var|import|export|def|return|async|await|interface|type|code|implement|typescript|javascript|python|rust|golang|sql|query|endpoint|controller|service|component|bug|fix|debug|patch|issue|script|module|file|method)\b/i;
 
@@ -144,10 +150,13 @@ export function classifyIntent(
 
   const targetText = activeHumanText;
 
-  // Architecture keywords are evaluated STRICTLY on user instruction, never on tool results or system prompts.
-  // Tier 1 is reserved for architectural planning and apex reasoning, and must NOT handle execution tasks.
+  // Architecture / Plan Mode / Complex Reasoning keywords are evaluated on user instruction or intent
+  // Tier 1 is reserved for architectural planning, plan mode, and apex reasoning (when not in middle of tool-execution loops)
   const hasPureArchitectureIntent =
-    (architectureRegex.test(targetText) || architectureWordRegex.test(targetText)) &&
+    (architectureRegex.test(targetText) ||
+      architectureWordRegex.test(targetText) ||
+      planModeRegex.test(targetText) ||
+      complexReasoningRegex.test(targetText)) &&
     !executionVerbsRegex.test(targetText) &&
     !isToolResultTurn;
 

@@ -387,6 +387,49 @@ export function SmartProxyBridgeTab() {
         </div>
       )}
 
+      {/* SPB Usage & Configuration Banner */}
+      <div className="rounded-lg border bg-card p-5 shadow-sm border-indigo-500/30 bg-indigo-50/50 dark:bg-indigo-950/20">
+        <div className="flex items-start gap-4">
+          <div className="rounded-lg bg-indigo-500/10 p-2 text-indigo-500 mt-0.5">
+            <span className="material-symbols-outlined text-2xl">alt_route</span>
+          </div>
+          <div className="space-y-1.5 flex-1">
+            <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+              Smart Proxy Bridge Client Model Identifier
+              <code className="rounded bg-indigo-500/20 px-2 py-0.5 font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
+                auto/spb
+              </code>
+            </h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              To utilize autonomous context-aware routing, configure your client agent (Claude Code,
+              Gemini CLI, AntiGravity, Cursor, OpenHands) to request the model identifier{" "}
+              <code className="font-mono font-semibold text-foreground">auto/spb</code> (or{" "}
+              <code className="font-mono font-semibold text-foreground">
+                auto/smart-proxy-bridge
+              </code>
+              ). The proxy autonomously inspects task phase, prompt complexity, agent plan mode, and
+              tool execution status to dynamically dispatch traffic across Tier 1 (Apex Reasoning),
+              Tier 2 (Resilient Execution), and Tier 3 (Local Edge Inference) with zero client-side
+              tier parameters.
+            </p>
+            <div className="pt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-foreground">Tier 1:</span> Architectural Planning
+                &amp; Deep Reasoning
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-foreground">Tier 2:</span> Code Generation &amp;
+                Tool Verification
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-foreground">Tier 3:</span> Fast Refactoring &amp;
+                Deterministic Formatting
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border bg-card p-5 shadow-sm">
           <div className="text-sm font-medium text-muted-foreground">Total Requests Routed</div>

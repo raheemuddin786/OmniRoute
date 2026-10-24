@@ -120,6 +120,26 @@ test("SPB Intent Analyzer extracts array content blocks and isolates system prom
     },
   ]);
   assert.equal(archProfile.taskPhase, "ARCHITECTURAL_PLANNING");
+
+  // 6. Plan mode indicators from agent environments should be ARCHITECTURAL_PLANNING (Tier 1)
+  const planModeProfile = classifyIntent([
+    sysMsg,
+    {
+      role: "user",
+      content: "Enter plan mode: analyze requirements and formulate an implementation plan.",
+    },
+  ]);
+  assert.equal(planModeProfile.taskPhase, "ARCHITECTURAL_PLANNING");
+
+  // 7. Deep reasoning / synthesis requests should be ARCHITECTURAL_PLANNING (Tier 1)
+  const reasoningProfile = classifyIntent([
+    sysMsg,
+    {
+      role: "user",
+      content: "Think deeply and perform a comparative analysis of the trade-offs.",
+    },
+  ]);
+  assert.equal(reasoningProfile.taskPhase, "ARCHITECTURAL_PLANNING");
 });
 
 test("SPB Tiered Registry selects correct model tiers based on configuration", () => {
