@@ -799,4 +799,54 @@ describe("governanceTransform — fail open", () => {
     expect(out).not.toContain("tool_use"); // The tool_use content block is completely quarantined and dropped!
     expect(out).toContain("end_turn");
   });
+
+  describe("clean-turn reset via flush", () => {
+    it("calls onCleanTurn on the loop breaker when the stream ends without a governance termination", async () => {
+      const loopBreaker = new LoopBreaker({ repeatThreshold: 3, maxInterventions: 10 });
+
+      // Trigger 2 interventions in a previous turn by repeating a tool 3× twice
+      for (let i = 0; i < 2; i++) {
+        for (let j = 0; j < 3; j++) {
+          loopBreaker.observe("session-under-test", "run_command", { cmd: "make" });
+        }
+        loopBreaker.clearWindow("session-under-test");
+      }
+      expect(loopBreaker.getInterventionCount("session-under-test")).toBe(2);
+
+      // Now run a clean stream (no tool calls in it, so no loop fired)
+      await run(['data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'], { loopBreaker });
+
+      // The clean flush must have decremented the intervention counter by 1
+      expect(loopBreaker.getInterventionCount("session-under-test")).toBe(1);
+    });
+
+    it("does NOT call onCleanTurn when the stream was terminated by the loop breaker", async () => {
+      // maxInterventions: 0 means the first detection immediately hard-aborts
+      const loopBreaker = new LoopBreaker({ repeatThreshold: 2, maxInterventions: 0 });
+
+      // First call — no loop yet
+      await run(
+        ANTHROPIC_CALL_FRAMES(
+          "mcp__plugin_playwright_playwright__browser_navigate",
+          '{"url":"https://example.com"}'
+        ),
+        { body: catalog, loopBreaker, clientFormat: FORMATS.CLAUDE }
+      );
+      const afterFirst = loopBreaker.getInterventionCount("session-under-test");
+
+      // Second call — triggers repeat, aborts stream
+      await run(
+        ANTHROPIC_CALL_FRAMES(
+          "mcp__plugin_playwright_playwright__browser_navigate",
+          '{"url":"https://example.com"}'
+        ),
+        { body: catalog, loopBreaker, clientFormat: FORMATS.CLAUDE }
+      );
+      const afterAbort = loopBreaker.getInterventionCount("session-under-test");
+
+      // An aborted stream must NOT have its counter decremented by onCleanTurn —
+      // the count must be strictly greater after the abort (an intervention was recorded).
+      expect(afterAbort).toBeGreaterThan(afterFirst);
+    });
+  });
 });

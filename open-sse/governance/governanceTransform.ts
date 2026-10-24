@@ -930,6 +930,11 @@ class GovernanceEgressTap {
   /**
    * End of stream: judge the calls the upstream never terminated, then forward
    * the trailing bytes.
+   *
+   * A clean flush (no governance termination) signals the loop breaker that
+   * this turn completed without any repetition — the model's intervention
+   * counter is decremented and the window is pruned so stale cross-phase tool
+   * calls do not count against the next turn.
    */
   flush(controller: TransformStreamDefaultController<Uint8Array>): void {
     if (this.terminated) {
@@ -966,6 +971,21 @@ class GovernanceEgressTap {
 
       const tail = this.buffer + this.decoder.decode();
       if (tail) this.enqueueFrame(tail, controller);
+
+      // The turn ended cleanly — no sentinel breach, no loop abort.
+      // Signal the loop breaker so it can:
+      //  - decrement the session's intervention counter (model earned trust back)
+      //  - prune the oldest half of the tool-call window (cross-phase cleanup)
+      if (this.options.loopBreaker) {
+        try {
+          this.options.loopBreaker.onCleanTurn(this.options.sessionId);
+        } catch (err) {
+          // Fire-and-forget: a failure here must never affect the response.
+          log.error("loop breaker onCleanTurn failed (fail-open)", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     } catch (err) {
       log.error("governance transform flush failed (fail-open)", {
         error: err instanceof Error ? err.message : String(err),

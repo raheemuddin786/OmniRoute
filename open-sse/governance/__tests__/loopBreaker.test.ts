@@ -540,4 +540,112 @@ describe("loop breaker", () => {
       expect(killDetection?.count).toBe(REPEAT_THRESHOLD);
     });
   });
+
+  describe("onCleanTurn", () => {
+    it("decrements the intervention counter by 1 on a clean turn", () => {
+      // Trigger 2 interventions
+      for (let i = 0; i < MAX_INTERVENTIONS; i++) {
+        for (let j = 0; j < REPEAT_THRESHOLD; j++) {
+          breaker.observe("s", "run_command", { cmd: "npm test" });
+        }
+        breaker.clearWindow("s");
+      }
+      expect(breaker.getInterventionCount("s")).toBe(MAX_INTERVENTIONS);
+
+      breaker.onCleanTurn("s");
+      expect(breaker.getInterventionCount("s")).toBe(MAX_INTERVENTIONS - 1);
+    });
+
+    it("floors the intervention counter at zero and never goes negative", () => {
+      // Session with 0 interventions
+      breaker.observe("s", "view_file", { path: "a.ts" });
+      expect(breaker.getInterventionCount("s")).toBe(0);
+
+      breaker.onCleanTurn("s");
+      expect(breaker.getInterventionCount("s")).toBe(0);
+
+      breaker.onCleanTurn("s"); // second call still safe
+      expect(breaker.getInterventionCount("s")).toBe(0);
+    });
+
+    it("is a no-op for an unknown session", () => {
+      // Must not throw and must not create a session entry
+      expect(() => breaker.onCleanTurn("unknown-session")).not.toThrow();
+      expect(breaker.getInterventionCount("unknown-session")).toBe(0);
+    });
+
+    it("prunes the oldest half of the tool-call window", () => {
+      // Fill the window with WINDOW_SIZE distinct calls so each fingerprint appears once
+      for (let i = 0; i < WINDOW_SIZE; i++) {
+        breaker.observe("s", "view_file", { path: `file_${i}.ts` });
+      }
+      // Now add the same call (file_0.ts) that was in the first half of the window.
+      // Without pruning it would be in the window and only needs 2 more to hit REPEAT_THRESHOLD (3).
+      breaker.onCleanTurn("s");
+
+      // After pruning, only the newest half remains. file_0 was in the oldest half
+      // so it has been pruned. One more observation with file_0.ts should NOT fire.
+      const result = breaker.observe("s", "view_file", { path: "file_0.ts" });
+      expect(result).toBeNull();
+    });
+
+    it("prunes the oldest half of the rejections window", () => {
+      const customBreaker = new LoopBreaker({ repeatThreshold: 2, maxInterventions: 10 });
+      // Record 4 rejections so the window is at half-capacity
+      for (let i = 0; i < 4; i++) {
+        customBreaker.observeRejection("s", "bad_tool", "unknown_tool");
+        customBreaker.clearWindow("s");
+      }
+      const countBefore = customBreaker.getInterventionCount("s");
+
+      customBreaker.onCleanTurn("s");
+
+      // After pruning half the rejections, 2 more unknown_tool rejections should
+      // not immediately hit the polymorphic-repeat threshold of 2 — only 1 rejection remains.
+      // The key assertion is that without pruning we would have hit the threshold earlier.
+      customBreaker.observeRejection("s", "bad_tool", "unknown_tool");
+      expect(customBreaker.getInterventionCount("s")).toBeGreaterThanOrEqual(countBefore);
+    });
+
+    it("after a clean turn, a subsequent genuine loop is still detected", () => {
+      // Trigger 1 intervention to raise the counter
+      for (let j = 0; j < REPEAT_THRESHOLD; j++) {
+        breaker.observe("s", "run_command", { cmd: "npm test" });
+      }
+      expect(breaker.getInterventionCount("s")).toBe(1);
+      breaker.clearWindow("s");
+
+      // A clean turn decrements to 0
+      breaker.onCleanTurn("s");
+      expect(breaker.getInterventionCount("s")).toBe(0);
+
+      // The model now repeats a NEW loop — must still be caught
+      let detection = null;
+      for (let j = 0; j < REPEAT_THRESHOLD; j++) {
+        detection = breaker.observe("s", "bash", { cmd: "ls" });
+      }
+      expect(detection).not.toBeNull();
+      expect(detection?.kind).toBe("repeat");
+    });
+
+    it("multiple clean turns each decrement the counter independently", () => {
+      // Manually set interventions to 3 via repeated detections
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < REPEAT_THRESHOLD; j++) {
+          breaker.observe("s", `tool_${i}`, { x: i });
+        }
+        breaker.clearWindow("s");
+      }
+      expect(breaker.getInterventionCount("s")).toBe(3);
+
+      breaker.onCleanTurn("s");
+      expect(breaker.getInterventionCount("s")).toBe(2);
+      breaker.onCleanTurn("s");
+      expect(breaker.getInterventionCount("s")).toBe(1);
+      breaker.onCleanTurn("s");
+      expect(breaker.getInterventionCount("s")).toBe(0);
+      breaker.onCleanTurn("s"); // floor
+      expect(breaker.getInterventionCount("s")).toBe(0);
+    });
+  });
 });

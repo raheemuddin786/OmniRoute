@@ -758,6 +758,45 @@ export class LoopBreaker {
     }
   }
 
+  /**
+   * Notify the breaker that a streaming turn completed cleanly — no loop or
+   * rejection was detected during the entire turn.
+   *
+   * Two effects:
+   *  1. The session's intervention counter is decremented by 1 (floored at 0).
+   *     This lets the model earn back "trust" after it successfully changed
+   *     behaviour in response to an earlier intervention — preventing a hard
+   *     abort from triggering on a future legitimate action just because the
+   *     session accumulated interventions from a different task phase.
+   *  2. The oldest half of the sliding window is pruned. Tool calls from a
+   *     completed phase of work (e.g. file exploration before a refactor) should
+   *     not count against the next phase (e.g. writing new files). Pruning to
+   *     the newest half retains enough history for genuine repeat-loop detection
+   *     within the current phase while discarding cross-phase ghosts.
+   *
+   * Safe to call even for unknown sessions — it is a no-op in that case.
+   */
+  onCleanTurn(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+
+    // Decrement intervention credit — but never below zero.
+    if (state.interventions > 0) {
+      state.interventions -= 1;
+    }
+
+    // Prune the oldest half of the window so cross-phase tool calls age out.
+    const keepFrom = Math.floor(state.window.length / 2);
+    if (keepFrom > 0) {
+      state.window = state.window.slice(keepFrom);
+    }
+    // Rejections window: prune to the newest half as well.
+    const keepRejectionsFrom = Math.floor(state.rejections.length / 2);
+    if (keepRejectionsFrom > 0) {
+      state.rejections = state.rejections.slice(keepRejectionsFrom);
+    }
+  }
+
   /** Reset interventions count for a session. */
   resetInterventions(sessionId: string): void {
     const state = this.sessions.get(sessionId);
