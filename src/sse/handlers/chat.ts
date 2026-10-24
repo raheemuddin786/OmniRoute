@@ -1135,10 +1135,20 @@ async function handleChatImplementation(
     resolvedModelStr = spbDecision.selectedModel;
     body = { ...body, model: resolvedModelStr };
 
-    // Prioritized tier combo strictly from user-configured tier models
+    // Prioritized tier combo strictly from user-configured tier models, excluding non-chat modalities
     const uniqueTierModels = Array.from(
       new Set(spbDecision.tierAssignment.recommendedModels || [])
-    );
+    ).filter((m) => {
+      const modelName = typeof m === "string" ? m : (m as any)?.model || "";
+      const lower = modelName.toLowerCase();
+      return (
+        !lower.includes("diffusion") &&
+        !lower.includes("rerank") &&
+        !lower.includes("embedding") &&
+        !lower.includes("whisper") &&
+        !lower.includes("transcribe")
+      );
+    });
     if (uniqueTierModels.length > 0) {
       spbCombo = {
         id: `spb-${spbDecision.tierAssignment.tier}`,

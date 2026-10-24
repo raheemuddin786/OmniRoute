@@ -78,7 +78,15 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
 
 function cleanUserInstruction(text: string): string {
   // Strip <system-reminder>...</system-reminder> blocks injected by agent environments
-  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "").trim();
+  const cleaned = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "").trim();
+  if (
+    cleaned === "(no content)" ||
+    cleaned === "[Tool use interrupted]" ||
+    cleaned === "no content"
+  ) {
+    return "";
+  }
+  return cleaned;
 }
 
 export function classifyIntent(
@@ -153,11 +161,8 @@ export function classifyIntent(
     (isToolResultTurn && codeRegex.test(latestExtracted.toolResultText));
 
   const clientHasTools = Array.isArray(tools) && tools.length > 0;
-  // requiresTools is true for active tool loops (tool results) or when client tools exist and the task is code/testing/execution
-  const requiresTools =
-    isToolResultTurn ||
-    (clientHasTools &&
-      (hasCodeKeywords || hasTestKeywords || executionVerbsRegex.test(targetText)));
+  // requiresTools is true for active tool loops (tool results) or whenever client tools are provided by the agent runtime
+  const requiresTools = isToolResultTurn || clientHasTools;
 
   const estimatedTokens = Math.ceil(totalChars / 4);
 
