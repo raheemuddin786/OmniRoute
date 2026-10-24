@@ -841,6 +841,9 @@ async function handleChatImplementation(
         "SPB",
         `SPB-IR routed: phase=${spbDecision.intent.taskPhase}, tier=${spbDecision.tierAssignment.tier}, checkpointRestored=${spbDecision.checkpointRestored}`
       );
+      if (body) {
+        body = { ...body, _spbActive: true, _spbDecision: spbDecision };
+      }
     } catch (spbErr) {
       log.warn("SPB", `SPB-IR processing warning: ${spbErr}`);
     }
@@ -1133,7 +1136,7 @@ async function handleChatImplementation(
       `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → ${spbDecision.selectedModel} (tier=${spbDecision.tierAssignment.tier}, phase=${spbDecision.intent.taskPhase})`
     );
     resolvedModelStr = spbDecision.selectedModel;
-    body = { ...body, model: resolvedModelStr };
+    body = { ...body, model: resolvedModelStr, _spbActive: true, _spbDecision: spbDecision };
 
     // Prioritized tier combo strictly from user-configured tier models, excluding non-chat modalities
     const uniqueTierModels = Array.from(
