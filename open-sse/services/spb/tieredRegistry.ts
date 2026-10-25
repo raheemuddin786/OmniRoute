@@ -21,7 +21,7 @@ export function selectModelTier(
   taskPhase: TaskPhase,
   _complexityScore: number,
   customModels?: TierModelsConfig,
-  requiresTools?: boolean
+  isToolResultTurn?: boolean
 ): TierAssignment {
   const models = {
     apex: customModels?.apex ?? [],
@@ -29,9 +29,15 @@ export function selectModelTier(
     local: customModels?.local ?? [],
   };
 
+  // Only block Tier 1/3 during ACTIVE tool execution (tool result turn), not when tools are merely available.
+  // This allows plan mode / architectural planning (Tier 1) and refactoring (Tier 3) to route correctly
+  // even when the agent runtime provides tools, as long as we're not mid-execution.
+  const inToolExecution = isToolResultTurn === true;
+
   // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.
   // Tier 1 models are costly and must not handle execution tasks.
-  if (taskPhase === "ARCHITECTURAL_PLANNING" && !requiresTools) {
+  // Allow Tier 1 for pure planning/architecture tasks unless we're in active tool execution.
+  if (taskPhase === "ARCHITECTURAL_PLANNING" && !inToolExecution) {
     return {
       tier: "tier_1_apex",
       recommendedModels: models.apex,
@@ -42,8 +48,11 @@ export function selectModelTier(
   }
 
   // 2. Tier 3: Local/edge inference, refactoring, formatting, and deterministic tasks.
-  // Restricted to tasks without active tool calling requirements.
-  if ((taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") && !requiresTools) {
+  // Allow Tier 3 for refactoring/deterministic tasks unless we're in active tool execution.
+  if (
+    (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") &&
+    !inToolExecution
+  ) {
     return {
       tier: "tier_3_local",
       recommendedModels: models.local,
@@ -55,6 +64,7 @@ export function selectModelTier(
 
   // 3. Tier 2: Resilient execution, code generation, test iteration, and verification.
   // Handles all code generation, testing, tool-calling agents, and complex execution.
+  // Also catches active tool execution turns for any phase.
   return {
     tier: "tier_2_resilient",
     recommendedModels: models.resilient,

@@ -40,12 +40,14 @@ export async function processSmartProxyRouting(
     const intent = classifyIntent(messages, tools);
 
     // 3. Select model tier using dynamic config and tool requirements
+    // Pass isToolResultTurn to allow Tier 1/3 for pure planning/refactoring unless we're mid-tool-execution
     const tierConfig = getTierConfig();
     let tierAssignment = selectModelTier(
       intent.taskPhase,
       intent.complexityScore,
       tierConfig?.tierModels,
-      intent.requiresTools
+      intent.requiresTools,
+      intent.isToolResultTurn
     );
 
     // 4. Check for existing checkpoint & state resumption with safe error handling

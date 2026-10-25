@@ -17,6 +17,7 @@ export interface IntentProfile {
   requiresTools: boolean;
   complexityScore: number; // 0.0 to 1.0
   promptAnchorHash: string;
+  isToolResultTurn: boolean;
 }
 
 interface ExtractedContent {
@@ -101,6 +102,9 @@ export function classifyIntent(
   const planModeRegex =
     /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|distributed systems?|microservices architecture|rfc proposal|system rfc|formal proof|algorithmic proof|strategic planning|multi-tier architecture|threat model(?:ing)?|apex reasoning)\b/i;
 
+  const purePlanningPhrasesRegex =
+    /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|threat model(?:ing)?|rfc proposal|system rfc)\b/i;
+
   const codeRegex =
     /\b(function|class|const|let|var|import|export|def|return|async|await|interface|type|code|implement|typescript|javascript|python|rust|golang|sql|query|endpoint|controller|service|component|bug|fix|debug|patch|issue|script|module|file|method)\b/i;
 
@@ -117,8 +121,9 @@ export function classifyIntent(
   const deterministicRegex =
     /\b(format|json|csv|yaml|markdown table|sort|deduplicate|escape|unescape|normalize)\b/i;
 
-  const executionVerbsRegex =
-    /\b(implement|code|write|create|edit|fix|run|test|debug|refactor|function|class|method)\b/i;
+  // Strict execution indicators that distinguish active bug fixing / code writing from planning
+  const executionFixBugRegex =
+    /\b(fix (?:the |a )?bug|resolve error|debug failing|patch the code)\b/i;
 
   // Extract content across all messages
   const userMessages = messages.filter((m) => m.role === "user");
@@ -152,13 +157,17 @@ export function classifyIntent(
 
   // Architecture / Plan Mode / Complex Reasoning keywords are evaluated on user instruction or intent
   // Tier 1 is reserved for architectural planning, plan mode, and apex reasoning (when not in middle of tool-execution loops)
+  // Phrases explicitly indicating plan mode / architectural planning take precedence unless actively fixing bugs or in tool results.
+  const isExplicitPlanningPhrase = purePlanningPhrasesRegex.test(targetText);
   const hasPureArchitectureIntent =
-    (architectureRegex.test(targetText) ||
-      architectureWordRegex.test(targetText) ||
-      planModeRegex.test(targetText) ||
-      complexReasoningRegex.test(targetText)) &&
-    !executionVerbsRegex.test(targetText) &&
-    !isToolResultTurn;
+    !isToolResultTurn &&
+    !executionFixBugRegex.test(targetText) &&
+    (isExplicitPlanningPhrase ||
+      ((architectureRegex.test(targetText) ||
+        architectureWordRegex.test(targetText) ||
+        planModeRegex.test(targetText) ||
+        complexReasoningRegex.test(targetText)) &&
+        !/\b(fix (?:the |a )?bug|debug|patch failing)\b/i.test(targetText)));
 
   const hasTestKeywords =
     testRegex.test(targetText) ||
@@ -228,6 +237,7 @@ export function classifyIntent(
     requiresTools,
     complexityScore,
     promptAnchorHash,
+    isToolResultTurn,
   };
 }
 

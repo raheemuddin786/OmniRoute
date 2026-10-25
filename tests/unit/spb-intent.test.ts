@@ -259,7 +259,7 @@ test("SPB Intent Analyzer ensures promptAnchorHash is invariant across conversat
   assert.equal(turn1.promptAnchorHash, turn2.promptAnchorHash);
 });
 
-test("SPB Tiered Registry tool-calling guard forces Tier 2 if tools are present even for simple tasks", () => {
+test("SPB Tiered Registry tool-execution guard forces Tier 2 only during active tool execution, not merely tools available", () => {
   const configuredModels = {
     apex: ["test-apex"],
     resilient: ["test-resilient"],
@@ -270,10 +270,22 @@ test("SPB Tiered Registry tool-calling guard forces Tier 2 if tools are present 
   assert.equal(tierWithoutTools.tier, "tier_3_local");
   assert.deepEqual(tierWithoutTools.recommendedModels, ["test-local"]);
 
-  // With requiresTools = true, it must guard against local model and upgrade to tier_2_resilient
-  const tierWithTools = selectModelTier("FAST_REFACTOR", 0.1, configuredModels, true);
-  assert.equal(tierWithTools.tier, "tier_2_resilient");
-  assert.deepEqual(tierWithTools.recommendedModels, ["test-resilient"]);
+  // With requiresTools = true but NOT in tool execution turn (e.g., plan mode with tools available)
+  // should still allow Tier 3 for refactoring - tools available ≠ active execution
+  const tierWithToolsNotExecuting = selectModelTier(
+    "FAST_REFACTOR",
+    0.1,
+    configuredModels,
+    true,
+    false
+  );
+  assert.equal(tierWithToolsNotExecuting.tier, "tier_3_local");
+  assert.deepEqual(tierWithToolsNotExecuting.recommendedModels, ["test-local"]);
+
+  // With isToolResultTurn = true (active tool execution), must guard and upgrade to tier_2_resilient
+  const tierWithToolExecution = selectModelTier("FAST_REFACTOR", 0.1, configuredModels, true, true);
+  assert.equal(tierWithToolExecution.tier, "tier_2_resilient");
+  assert.deepEqual(tierWithToolExecution.recommendedModels, ["test-resilient"]);
 });
 
 test("SPB strictly adheres to tier boundaries across code gen, tests, refactor, and architecture", () => {
@@ -478,4 +490,82 @@ test("SPB Combo Step Normalization cleanly expands combo references and combo/ p
   assert.ok(step3);
   assert.equal(step3.kind, "combo-ref");
   assert.equal((step3 as { comboName: string }).comboName, "apex-reasoning-fleet");
+});
+
+test("SPB dynamic tier steering with agent tools provided (Claude plan mode, execution, refactor)", async () => {
+  const sessionId = "agent_dynamic_tier_steering_" + Date.now();
+  const agentTools = [
+    { name: "Bash", description: "Execute shell commands" },
+    { name: "Read", description: "Read files" },
+    { name: "Edit", description: "Edit files" },
+  ];
+
+  // Turn 1: Claude Plan Mode with tools present in payload -> Must steer to Tier 1 Apex
+  const planDecision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Enter plan mode: analyze architectural trade-offs and formulate an implementation plan for microservices.",
+      },
+    ],
+    tools: agentTools,
+  });
+  assert.equal(planDecision.intent.taskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(planDecision.tierAssignment.tier, "tier_1_apex");
+  assert.equal(planDecision.selectedModel, "test-apex-1");
+
+  // Turn 2: Active tool execution loop -> Must steer to Tier 2 Resilient
+  const toolExecDecision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Enter plan mode: analyze architectural trade-offs and formulate an implementation plan for microservices.",
+      },
+      { role: "assistant", content: "I will read the configuration." },
+      {
+        role: "user",
+        content: [{ type: "tool_result", content: "Configuration loaded successfully." }],
+      },
+    ],
+    tools: agentTools,
+  });
+  assert.equal(toolExecDecision.intent.isToolResultTurn, true);
+  assert.equal(toolExecDecision.tierAssignment.tier, "tier_2_resilient");
+  assert.equal(toolExecDecision.selectedModel, "test-resilient-1");
+
+  // Turn 3: Refactoring with tools present in payload -> Must steer to Tier 3 Local
+  const refactorDecision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content: "Please refactor and clean up this code to simplify the syntax and beautify it.",
+      },
+    ],
+    tools: agentTools,
+  });
+  assert.equal(refactorDecision.intent.taskPhase, "FAST_REFACTOR");
+  assert.equal(refactorDecision.tierAssignment.tier, "tier_3_local");
+  assert.equal(refactorDecision.selectedModel, "test-local-1");
+
+  // Turn 4: Realistic architectural phrasing with words like 'create', 'write', or 'plan'
+  // e.g., "Can you create an architectural design for our payment service?"
+  const archCreationDecision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Can you create an architectural design and blueprint for our distributed payment service?",
+      },
+    ],
+    tools: agentTools,
+  });
+  assert.equal(archCreationDecision.intent.taskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(archCreationDecision.tierAssignment.tier, "tier_1_apex");
+  assert.equal(archCreationDecision.selectedModel, "test-apex-1");
 });

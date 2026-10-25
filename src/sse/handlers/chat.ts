@@ -1178,6 +1178,21 @@ async function handleChatImplementation(
       );
     });
 
+    // Check if the targeted tier lacks configured models and warn operator
+    const tierConfiguredCount =
+      activeTier === "tier_1_apex"
+        ? tierModels.apex?.length || 0
+        : activeTier === "tier_3_local"
+          ? tierModels.local?.length || 0
+          : tierModels.resilient?.length || 0;
+
+    if (tierConfiguredCount === 0 && candidateModels.length > 0) {
+      log.warn(
+        "SPB",
+        `Target tier '${activeTier}' has no configured models in tierModels; falling back to sibling tier models.`
+      );
+    }
+
     const effectiveSelectedModel =
       spbDecision?.selectedModel && uniqueTierModels.includes(spbDecision.selectedModel)
         ? spbDecision.selectedModel
