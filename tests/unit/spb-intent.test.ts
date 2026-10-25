@@ -516,8 +516,8 @@ test("SPB dynamic tier steering with agent tools provided (Claude plan mode, exe
   assert.equal(planDecision.tierAssignment.tier, "tier_1_apex");
   assert.equal(planDecision.selectedModel, "test-apex-1");
 
-  // Turn 2: Active tool execution loop -> Must steer to Tier 2 Resilient
-  const toolExecDecision = await processSmartProxyRouting({
+  // Turn 2: Inspection tool loop during Plan Mode (e.g., Reading a config or checking MCP) -> Stays in Tier 1 Apex
+  const planToolReadDecision = await processSmartProxyRouting({
     sessionId,
     messages: [
       {
@@ -525,19 +525,56 @@ test("SPB dynamic tier steering with agent tools provided (Claude plan mode, exe
         content:
           "Enter plan mode: analyze architectural trade-offs and formulate an implementation plan for microservices.",
       },
-      { role: "assistant", content: "I will read the configuration." },
+      { role: "assistant", content: "I will inspect the configuration file." },
       {
         role: "user",
-        content: [{ type: "tool_result", content: "Configuration loaded successfully." }],
+        content: [{ type: "tool_result", content: "export const config = { port: 8080 };" }],
       },
     ],
     tools: agentTools,
   });
-  assert.equal(toolExecDecision.intent.isToolResultTurn, true);
-  assert.equal(toolExecDecision.tierAssignment.tier, "tier_2_resilient");
-  assert.equal(toolExecDecision.selectedModel, "test-resilient-1");
+  assert.equal(planToolReadDecision.intent.isToolResultTurn, true);
+  assert.equal(planToolReadDecision.intent.taskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(planToolReadDecision.tierAssignment.tier, "tier_1_apex");
+  assert.equal(planToolReadDecision.selectedModel, "test-apex-1");
 
-  // Turn 3: Refactoring with tools present in payload -> Must steer to Tier 3 Local
+  // Turn 3: Transition to code execution (e.g., writing/editing files or tests) -> Switches to Tier 2 Resilient
+  const codeExecDecision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content: "Now implement and write the TypeScript controller file.",
+      },
+      { role: "assistant", content: "I have written the controller." },
+      {
+        role: "user",
+        content: [{ type: "tool_result", content: "File written successfully: authController.ts" }],
+      },
+    ],
+    tools: agentTools,
+  });
+  assert.equal(codeExecDecision.intent.taskPhase, "CODE_GENERATION");
+  assert.equal(codeExecDecision.tierAssignment.tier, "tier_2_resilient");
+  assert.equal(codeExecDecision.selectedModel, "test-resilient-1");
+
+  // Turn 4: Dynamic switch BACK to Tier 1 for complex reasoning / review mid-workflow
+  const rePlanDecision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Think deeply: evaluate the security trade-offs of this architecture and formulate a threat model.",
+      },
+    ],
+    tools: agentTools,
+  });
+  assert.equal(rePlanDecision.intent.taskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(rePlanDecision.tierAssignment.tier, "tier_1_apex");
+  assert.equal(rePlanDecision.selectedModel, "test-apex-1");
+
+  // Turn 5: Refactoring with tools present in payload -> Must steer to Tier 3 Local
   const refactorDecision = await processSmartProxyRouting({
     sessionId,
     messages: [

@@ -21,6 +21,7 @@ export function selectModelTier(
   taskPhase: TaskPhase,
   _complexityScore: number,
   customModels?: TierModelsConfig,
+  _requiresTools?: boolean,
   isToolResultTurn?: boolean
 ): TierAssignment {
   const models = {
@@ -35,9 +36,9 @@ export function selectModelTier(
   const inToolExecution = isToolResultTurn === true;
 
   // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.
-  // Tier 1 models are costly and must not handle execution tasks.
-  // Allow Tier 1 for pure planning/architecture tasks unless we're in active tool execution.
-  if (taskPhase === "ARCHITECTURAL_PLANNING" && !inToolExecution) {
+  // Tier 1 models are costly and must not handle code execution tasks, but they DO handle
+  // inspection tools (Read, Grep, MCP, research) during planning.
+  if (taskPhase === "ARCHITECTURAL_PLANNING") {
     return {
       tier: "tier_1_apex",
       recommendedModels: models.apex,

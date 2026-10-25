@@ -155,19 +155,29 @@ export function classifyIntent(
 
   const targetText = activeHumanText;
 
+  // Detect code modification / mutation tools from tool results or user text
+  const isCodeMutationToolResult =
+    isToolResultTurn &&
+    /\b(edit|write|file_write|write_file|patch|diff|applied|saved|edited|commit)\b/i.test(
+      latestExtracted.toolResultText
+    );
+
   // Architecture / Plan Mode / Complex Reasoning keywords are evaluated on user instruction or intent
-  // Tier 1 is reserved for architectural planning, plan mode, and apex reasoning (when not in middle of tool-execution loops)
-  // Phrases explicitly indicating plan mode / architectural planning take precedence unless actively fixing bugs or in tool results.
+  // Tier 1 is reserved for architectural planning, plan mode, and apex reasoning.
+  // Inspection tools (Read, Grep, Glob, MCP, WebSearch) during active plan mode remain in Tier 1.
+  // When a tool result turn arrives without any prior explicit plan mode directive, default tool results to Tier 2.
   const isExplicitPlanningPhrase = purePlanningPhrasesRegex.test(targetText);
   const hasPureArchitectureIntent =
-    !isToolResultTurn &&
+    !isCodeMutationToolResult &&
     !executionFixBugRegex.test(targetText) &&
-    (isExplicitPlanningPhrase ||
-      ((architectureRegex.test(targetText) ||
-        architectureWordRegex.test(targetText) ||
-        planModeRegex.test(targetText) ||
-        complexReasoningRegex.test(targetText)) &&
-        !/\b(fix (?:the |a )?bug|debug|patch failing)\b/i.test(targetText)));
+    (isToolResultTurn
+      ? isExplicitPlanningPhrase
+      : isExplicitPlanningPhrase ||
+        ((architectureRegex.test(targetText) ||
+          architectureWordRegex.test(targetText) ||
+          planModeRegex.test(targetText) ||
+          complexReasoningRegex.test(targetText)) &&
+          !/\b(fix (?:the |a )?bug|debug|patch failing)\b/i.test(targetText)));
 
   const hasTestKeywords =
     testRegex.test(targetText) ||
@@ -200,13 +210,16 @@ export function classifyIntent(
   let complexityScore = 0.2;
 
   // Intent Classification Hierarchy adhering strictly to tier responsibilities:
-  // - Tool execution feedback: Tier 2 (Resilient execution & verification)
-  // - Pure architectural planning: Tier 1 (Apex reasoning)
+  // - Pure architectural planning / Plan mode (including research & inspection tool feedback): Tier 1 (Apex reasoning)
+  // - Tool execution feedback (code mutation/tests): Tier 2 (Resilient execution & verification)
   // - Test verification: Tier 2 (Testing & verification)
   // - Refactoring: Tier 3 (Fast refactor)
   // - Formatting / Deterministic: Tier 3 (Deterministic routing)
   // - Code generation / Tool execution: Tier 2 (Code generation)
-  if (isToolResultTurn) {
+  if (hasPureArchitectureIntent) {
+    taskPhase = "ARCHITECTURAL_PLANNING";
+    complexityScore = 0.9;
+  } else if (isToolResultTurn) {
     if (hasTestKeywords) {
       taskPhase = "TESTING_AND_VERIFICATION";
       complexityScore = 0.6;
@@ -214,9 +227,6 @@ export function classifyIntent(
       taskPhase = "CODE_GENERATION";
       complexityScore = 0.65;
     }
-  } else if (hasPureArchitectureIntent) {
-    taskPhase = "ARCHITECTURAL_PLANNING";
-    complexityScore = 0.9;
   } else if (hasTestKeywords) {
     taskPhase = "TESTING_AND_VERIFICATION";
     complexityScore = 0.6;
