@@ -827,13 +827,39 @@ async function handleChatImplementation(
     Boolean(isSpbTarget) &&
     (getTierConfig().spbEnabled !== false || isFeatureFlagEnabled("SPB_ENABLED"));
 
+  // Branch forking headers
+  const forkFromHeader = request.headers.get("x-omniroute-fork-from")?.trim() || null;
+  const forkPointHeader = request.headers.get("x-omniroute-fork-point")?.trim() || null;
+  const branchModeHeader = request.headers.get("x-omniroute-branch-mode")?.trim() as
+    "isolate" | "continuation" | "speculative" | null;
+  const pruneLegacyHeader = request.headers.get("x-omniroute-prune-legacy")?.trim() === "true";
+
   let spbDecision: SpbRoutingDecision | null = null;
   if (isSpbActive && Array.isArray(body?.messages)) {
     try {
-      const { processSmartProxyRouting } =
+      const { processSmartProxyRouting, forkSession } =
         await import("@omniroute/open-sse/services/spb/proxyBridge");
+
+      // Handle session forking if branch headers are present
+      let effectiveSessionId = sessionId;
+      if (forkFromHeader && forkPointHeader) {
+        const forkResult = await forkSession({
+          parentSessionId: forkFromHeader,
+          forkPointHash: forkPointHeader,
+          branchMode: branchModeHeader ?? "continuation",
+          pruneLegacy: pruneLegacyHeader,
+          currentMessages: body.messages,
+          currentTools: body.tools,
+        });
+        effectiveSessionId = forkResult.branchId;
+        log.info(
+          "SPB",
+          `Forked session ${effectiveSessionId} from ${forkFromHeader} at ${forkPointHeader}`
+        );
+      }
+
       spbDecision = await processSmartProxyRouting({
-        sessionId,
+        sessionId: effectiveSessionId,
         messages: body.messages,
         tools: body.tools,
       });

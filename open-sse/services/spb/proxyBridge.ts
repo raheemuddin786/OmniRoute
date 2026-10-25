@@ -8,6 +8,34 @@ import { classifyIntent, IntentProfile } from "./intentAnalyzer.ts";
 import { selectModelTier, TierAssignment } from "./tieredRegistry.ts";
 import { getTierConfig } from "../tierResolver.ts";
 import { saveCheckpoint, getCheckpoint, recordSpbTelemetry } from "../../../src/lib/db/spbState.ts";
+import {
+  maybeCcrReplace,
+  storeBlock,
+  DEFAULT_MIN_CHARS,
+  RETRIEVAL_RAMP_FACTOR_DEFAULT,
+} from "../compression/engines/ccr/index.ts";
+import { forkSession, ForkedSessionContext } from "./branchManager.ts";
+import {
+  decomposeRequestIntoSubTasks,
+  executeParallelPhase,
+  executeSequentialPhase,
+  type SubTask,
+  type PartitionedContext,
+  type VerifiedArtifactContract,
+  type DecompositionResult,
+} from "./contextPartition.ts";
+
+export {
+  forkSession,
+  type ForkedSessionContext,
+  decomposeRequestIntoSubTasks,
+  executeParallelPhase,
+  executeSequentialPhase,
+  type SubTask,
+  type PartitionedContext,
+  type VerifiedArtifactContract,
+  type DecompositionResult,
+};
 
 export interface SpbRoutingContext {
   sessionId?: string;
@@ -36,8 +64,55 @@ export async function processSmartProxyRouting(
       : [{ role: "user", content: String(context.messages || "") }];
     const tools = Array.isArray(context.tools) ? context.tools : undefined;
 
-    // 2. Classify intent with error boundary
-    const intent = classifyIntent(messages, tools);
+    // 1b. CCR ingress offloading: replace large tool outputs with CCR markers
+    // to prevent context bloat before intent classification
+    const processedMessages = await Promise.all(
+      messages.map(async (msg) => {
+        if (typeof msg.content === "string" && msg.content.length >= DEFAULT_MIN_CHARS) {
+          const { text, replaced, hash } = maybeCcrReplace(
+            msg.content,
+            DEFAULT_MIN_CHARS,
+            sessionId,
+            RETRIEVAL_RAMP_FACTOR_DEFAULT
+          );
+          if (replaced && hash) {
+            // Store the original content for later retrieval
+            storeBlock(msg.content, sessionId, { source: "compression" });
+            return { ...msg, content: text };
+          }
+        } else if (Array.isArray(msg.content)) {
+          // Handle multi-part messages (Anthropic format)
+          const processedParts = await Promise.all(
+            msg.content.map(async (part) => {
+              if (
+                part &&
+                typeof part === "object" &&
+                part.type === "text" &&
+                typeof part.text === "string" &&
+                part.text.length >= DEFAULT_MIN_CHARS
+              ) {
+                const { text, replaced, hash } = maybeCcrReplace(
+                  part.text,
+                  DEFAULT_MIN_CHARS,
+                  sessionId,
+                  RETRIEVAL_RAMP_FACTOR_DEFAULT
+                );
+                if (replaced && hash) {
+                  storeBlock(part.text, sessionId, { source: "compression" });
+                  return { ...part, text };
+                }
+              }
+              return part;
+            })
+          );
+          return { ...msg, content: processedParts };
+        }
+        return msg;
+      })
+    );
+
+    // 2. Classify intent with error boundary (using CCR-processed messages)
+    const intent = classifyIntent(processedMessages, tools);
 
     // 3. Select model tier using dynamic config and tool requirements
     // Pass isToolResultTurn to allow Tier 1/3 for pure planning/refactoring unless we're mid-tool-execution
@@ -140,6 +215,7 @@ export async function processSmartProxyRouting(
       taskPhase: "CODE_GENERATION",
       estimatedTokens: 1000,
       requiresTools: false,
+      isToolResultTurn: false,
       complexityScore: 0.5,
       promptAnchorHash: "sha256:spb_fallback_" + Date.now(),
     };

@@ -29,6 +29,10 @@ export interface AgenticConversationRow {
   turnCount: number;
   firstSeenAt: string;
   lastSeenAt: string;
+  parentConversationId?: string | null;
+  forkTurnHash?: string | null;
+  branchType?: string | null;
+  continuationCapsule?: string | null;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -46,6 +50,11 @@ function toRow(value: unknown): AgenticConversationRow {
     turnCount: Number(r.turn_count ?? 1),
     firstSeenAt: String(r.first_seen_at ?? ""),
     lastSeenAt: String(r.last_seen_at ?? ""),
+    parentConversationId:
+      typeof r.parent_conversation_id === "string" ? r.parent_conversation_id : null,
+    forkTurnHash: typeof r.fork_turn_hash === "string" ? r.fork_turn_hash : null,
+    branchType: typeof r.branch_type === "string" ? r.branch_type : "trunk",
+    continuationCapsule: typeof r.continuation_capsule === "string" ? r.continuation_capsule : null,
   };
 }
 
@@ -53,18 +62,43 @@ export function createAgenticConversation(input: {
   id?: string;
   apiKeyId: string | null;
   fingerprintHash: string;
+  parentConversationId?: string | null;
+  forkTurnHash?: string | null;
+  branchType?: string | null;
+  continuationCapsule?: string | null;
 }): AgenticConversationRow {
   const db = getDbInstance();
   const now = new Date().toISOString();
   const id = input.id || `conv_${uuidv4()}`;
+  const parentConversationId = input.parentConversationId ?? null;
+  const forkTurnHash = input.forkTurnHash ?? null;
+  const branchType = input.branchType ?? "trunk";
+  const continuationCapsule = input.continuationCapsule ?? null;
 
-  // last_message_count/last_messages_hash are dead columns (superseded by
-  // conversation_turn_nodes, migration 156) — 0/'' placeholders only.
-  db.prepare(
-    `INSERT INTO agentic_conversations
-       (id, api_key_id, fingerprint_hash, last_message_count, last_messages_hash, turn_count, first_seen_at, last_seen_at)
-     VALUES (?, ?, ?, 0, '', 1, ?, ?)`
-  ).run(id, input.apiKeyId, input.fingerprintHash, now, now);
+  try {
+    db.prepare(
+      `INSERT INTO agentic_conversations
+         (id, api_key_id, fingerprint_hash, last_message_count, last_messages_hash, turn_count, first_seen_at, last_seen_at, parent_conversation_id, fork_turn_hash, branch_type, continuation_capsule)
+       VALUES (?, ?, ?, 0, '', 1, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      input.apiKeyId,
+      input.fingerprintHash,
+      now,
+      now,
+      parentConversationId,
+      forkTurnHash,
+      branchType,
+      continuationCapsule
+    );
+  } catch {
+    // Fallback if migration 213 columns are not yet applied on an existing test DB
+    db.prepare(
+      `INSERT INTO agentic_conversations
+         (id, api_key_id, fingerprint_hash, last_message_count, last_messages_hash, turn_count, first_seen_at, last_seen_at)
+       VALUES (?, ?, ?, 0, '', 1, ?, ?)`
+    ).run(id, input.apiKeyId, input.fingerprintHash, now, now);
+  }
 
   return {
     id,
@@ -73,6 +107,10 @@ export function createAgenticConversation(input: {
     turnCount: 1,
     firstSeenAt: now,
     lastSeenAt: now,
+    parentConversationId,
+    forkTurnHash,
+    branchType,
+    continuationCapsule,
   };
 }
 
