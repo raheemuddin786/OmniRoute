@@ -9,7 +9,8 @@ export type TaskPhase =
   | "CODE_GENERATION"
   | "TESTING_AND_VERIFICATION"
   | "FAST_REFACTOR"
-  | "DETERMINISTIC_ROUTING";
+  | "DETERMINISTIC_ROUTING"
+  | "INSPECTION_SYNTHESIS";
 
 export interface IntentProfile {
   taskPhase: TaskPhase;
@@ -158,7 +159,7 @@ export function classifyIntent(
   // Detect code modification / mutation tools from tool results or user text
   const isCodeMutationToolResult =
     isToolResultTurn &&
-    /\b(edit|write|file_write|write_file|patch|diff|applied|saved|edited|commit)\b/i.test(
+    /\b(edit|edits|edited|editing|write|writes|written|writing|file_write|write_file|patch|patches|patched|diff|diffs|applied|saved|commit|committed)\b/i.test(
       latestExtracted.toolResultText
     );
 
@@ -212,6 +213,7 @@ export function classifyIntent(
   // Intent Classification Hierarchy adhering strictly to tier responsibilities:
   // - Pure architectural planning / Plan mode (including research & inspection tool feedback): Tier 1 (Apex reasoning)
   // - Tool execution feedback (code mutation/tests): Tier 2 (Resilient execution & verification)
+  // - Read-only inspection / exploration tool feedback: Tier 3 (Inspection synthesis)
   // - Test verification: Tier 2 (Testing & verification)
   // - Refactoring: Tier 3 (Fast refactor)
   // - Formatting / Deterministic: Tier 3 (Deterministic routing)
@@ -223,9 +225,12 @@ export function classifyIntent(
     if (hasTestKeywords) {
       taskPhase = "TESTING_AND_VERIFICATION";
       complexityScore = 0.6;
-    } else {
+    } else if (isCodeMutationToolResult) {
       taskPhase = "CODE_GENERATION";
       complexityScore = 0.65;
+    } else {
+      taskPhase = "INSPECTION_SYNTHESIS";
+      complexityScore = 0.3;
     }
   } else if (hasTestKeywords) {
     taskPhase = "TESTING_AND_VERIFICATION";

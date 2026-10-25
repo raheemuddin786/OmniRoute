@@ -48,11 +48,11 @@ export function selectModelTier(
     };
   }
 
-  // 2. Tier 3: Local/edge inference, refactoring, formatting, and deterministic tasks.
-  // Allow Tier 3 for refactoring/deterministic tasks unless we're in active tool execution.
+  // 2. Tier 3: Local/edge inference, inspection synthesis, refactoring, formatting, and deterministic tasks.
+  // Allow Tier 3 for inspection synthesis, or refactoring/deterministic tasks unless we're in active code mutation tool execution.
   if (
-    (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") &&
-    !inToolExecution
+    taskPhase === "INSPECTION_SYNTHESIS" ||
+    ((taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") && !inToolExecution)
   ) {
     return {
       tier: "tier_3_local",

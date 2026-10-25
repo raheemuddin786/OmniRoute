@@ -94,8 +94,24 @@ test("SPB Intent Analyzer extracts array content blocks and isolates system prom
       content: [{ type: "tool_result", content: "workflow.add_edge('intake', 'architecture')" }],
     },
   ]);
-  assert.equal(toolResultProfile.taskPhase, "CODE_GENERATION");
+  assert.equal(toolResultProfile.taskPhase, "INSPECTION_SYNTHESIS");
   assert.equal(toolResultProfile.requiresTools, true);
+
+  // 2b. Tool result with code mutation should be CODE_GENERATION (Tier 2)
+  const mutationToolResultProfile = classifyIntent([
+    sysMsg,
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          content: "File written and patch applied successfully to src/server.ts",
+        },
+      ],
+    },
+  ]);
+  assert.equal(mutationToolResultProfile.taskPhase, "CODE_GENERATION");
+  assert.equal(mutationToolResultProfile.requiresTools, true);
 
   // 3. User asking to fix architecture bug should be CODE_GENERATION (Tier 2), NOT Tier 1
   const fixArchProfile = classifyIntent([
@@ -605,4 +621,29 @@ test("SPB dynamic tier steering with agent tools provided (Claude plan mode, exe
   assert.equal(archCreationDecision.intent.taskPhase, "ARCHITECTURAL_PLANNING");
   assert.equal(archCreationDecision.tierAssignment.tier, "tier_1_apex");
   assert.equal(archCreationDecision.selectedModel, "test-apex-1");
+
+  // Turn 5: Read-only tool result turn (e.g. file inspection / grep result) -> Routes to Tier 3 Local
+  const readOnlyInspectionDecision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content: "Search for references to the payment controller in the codebase.",
+      },
+      { role: "assistant", content: "I will search the repository." },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            content: "Found 2 references in src/routes/index.ts: lines 12, 45",
+          },
+        ],
+      },
+    ],
+    tools: agentTools,
+  });
+  assert.equal(readOnlyInspectionDecision.intent.taskPhase, "INSPECTION_SYNTHESIS");
+  assert.equal(readOnlyInspectionDecision.tierAssignment.tier, "tier_3_local");
+  assert.equal(readOnlyInspectionDecision.selectedModel, "test-local-1");
 });
