@@ -7,6 +7,10 @@ import {
   serializeAnthropicForDevin,
 } from "../../open-sse/executors/devin-agentic/serializer.ts";
 import { parseDevinToolRequest } from "../../open-sse/executors/devin-agentic/toolParser.ts";
+import {
+  assertKnownDevinModel,
+  normalizeDevinAgenticModel,
+} from "../../open-sse/executors/devin-cli-agentic.ts";
 
 const readTool = {
   name: "Read",
@@ -176,4 +180,13 @@ test("devin agentic SSE renders Anthropic tool lifecycle", () => {
   assert.match(sse, /event: message_delta/);
   assert.match(sse, /"stop_reason":"tool_use"/);
   assert.match(sse, /event: message_stop/);
+});
+
+test("devin agentic model normalization strips redundant provider prefixes", () => {
+  assert.equal(normalizeDevinAgenticModel("swe-1-6-slow"), "swe-1-6-slow");
+  assert.equal(normalizeDevinAgenticModel("dva/swe-1-6-slow"), "swe-1-6-slow");
+  assert.equal(normalizeDevinAgenticModel("dva/dva/swe-1-6-slow"), "swe-1-6-slow");
+  assert.equal(normalizeDevinAgenticModel("devin-cli-agentic/swe-1-6-slow"), "swe-1-6-slow");
+  assert.doesNotThrow(() => assertKnownDevinModel("dva/swe-1-6-slow"));
+  assert.doesNotThrow(() => assertKnownDevinModel("dva/dva/swe-1-6-slow"));
 });

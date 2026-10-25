@@ -427,7 +427,7 @@ export async function runAcpTurn(args: {
   });
 }
 
-function normalizeDevinAgenticModel(model: string): string {
+export function normalizeDevinAgenticModel(model: string): string {
   let normalized = model.trim();
   while (normalized.startsWith("dva/") || normalized.startsWith("devin-cli-agentic/")) {
     normalized = normalized.startsWith("dva/")
@@ -437,7 +437,7 @@ function normalizeDevinAgenticModel(model: string): string {
   return normalized;
 }
 
-function assertKnownDevinModel(model: string): void {
+export function assertKnownDevinModel(model: string): void {
   const normalized = normalizeDevinAgenticModel(model);
   if (!DEVIN_MODEL_CATALOG.some((entry) => entry.id === normalized)) {
     throw new DevinAgenticBridgeError(
