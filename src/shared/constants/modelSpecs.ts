@@ -929,6 +929,16 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     supportsTools: true,
   },
 
+  // ── Devin SWE Models ─────────────────────────────────────────────
+  "swe-1-6-slow": {
+    maxOutputTokens: 128000,
+    contextWindow: 262000,
+    supportsTools: true,
+    supportsThinking: false,
+    supportsVision: false,
+    aliases: ["dva/swe-1-6-slow", "devin-cli-agentic/swe-1-6-slow"],
+  },
+
   // Defaults
   __default__: {},
 };

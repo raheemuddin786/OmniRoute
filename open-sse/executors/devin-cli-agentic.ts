@@ -427,8 +427,19 @@ export async function runAcpTurn(args: {
   });
 }
 
+function normalizeDevinAgenticModel(model: string): string {
+  let normalized = model.trim();
+  while (normalized.startsWith("dva/") || normalized.startsWith("devin-cli-agentic/")) {
+    normalized = normalized.startsWith("dva/")
+      ? normalized.slice(4)
+      : normalized.slice("devin-cli-agentic/".length);
+  }
+  return normalized;
+}
+
 function assertKnownDevinModel(model: string): void {
-  if (!DEVIN_MODEL_CATALOG.some((entry) => entry.id === model)) {
+  const normalized = normalizeDevinAgenticModel(model);
+  if (!DEVIN_MODEL_CATALOG.some((entry) => entry.id === normalized)) {
     throw new DevinAgenticBridgeError(
       `Model is not present in the current Devin catalog: ${model}`,
       "unknown_devin_model",
@@ -489,15 +500,16 @@ export class DevinCliAgenticExecutor extends BaseExecutor {
 
   async execute({ model, body, stream, credentials, signal, log }: ExecuteInput) {
     try {
-      assertKnownDevinModel(model);
+      const canonicalModel = normalizeDevinAgenticModel(model);
+      assertKnownDevinModel(canonicalModel);
       const prompt = serializeAnthropicForDevin(body);
       const devinBin = resolveDevinBin();
-      log?.info?.("DEVIN_AGENTIC", `devin acp → model=${model}, bin=${devinBin}`);
+      log?.info?.("DEVIN_AGENTIC", `devin acp → model=${canonicalModel}, bin=${devinBin}`);
 
       const turnArgs = {
         devinBin,
         env: buildDevinChildEnv(credentials),
-        model,
+        model: canonicalModel,
         signal,
         log,
       };
@@ -561,14 +573,14 @@ export class DevinCliAgenticExecutor extends BaseExecutor {
       const message = tool
         ? buildClaudeToolUseResponse({
             id,
-            model,
+            model: canonicalModel,
             tool,
             inputTokens: prompt.inputTokensEstimate,
             outputTokens,
           })
         : buildClaudeTextResponse({
             id,
-            model,
+            model: canonicalModel,
             text,
             inputTokens: prompt.inputTokensEstimate,
             outputTokens,
@@ -585,7 +597,7 @@ export class DevinCliAgenticExecutor extends BaseExecutor {
         }),
         url: "devin://acp/stdio",
         headers: {},
-        transformedBody: { model, promptLength: prompt.text.length },
+        transformedBody: { model: canonicalModel, promptLength: prompt.text.length },
       };
     } catch (error) {
       const bridge = error instanceof DevinAgenticBridgeError ? error : null;
