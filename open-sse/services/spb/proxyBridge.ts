@@ -91,9 +91,10 @@ export async function processSmartProxyRouting(
       : [{ role: "user", content: String(context.messages || "") }];
     const tools = Array.isArray(context.tools) ? context.tools : undefined;
 
-    // 1b. CCR ingress offloading: replace large tool outputs with CCR markers
-    // to prevent context bloat before intent classification
-    const processedMessages = await Promise.all(
+    // 1b. CCR ingress offloading for intent classification only:
+    // create a lightweight copy to prevent context bloat during heuristic analysis,
+    // while keeping the original messages completely intact for model dispatch.
+    const classificationMessages = await Promise.all(
       messages.map(async (msg) => {
         if (typeof msg.content === "string" && msg.content.length >= DEFAULT_MIN_CHARS) {
           const { text, replaced, hash } = maybeCcrReplace(
@@ -138,8 +139,8 @@ export async function processSmartProxyRouting(
       })
     );
 
-    // 2. Classify intent with error boundary (using CCR-processed messages)
-    const intent = classifyIntent(processedMessages, tools);
+    // 2. Classify intent with error boundary (using classification messages)
+    const intent = classifyIntent(classificationMessages, tools);
 
     // 3. Select model tier using dynamic config and tool requirements
     // Pass isToolResultTurn AND guidanceContract to enforce supervision
@@ -218,22 +219,50 @@ export async function processSmartProxyRouting(
     // 6. Inbound Intelligence, Prompt Enhancement & Necessity Gate
     let lastUserIndex = -1;
     let lastUserText = "";
-    for (let i = processedMessages.length - 1; i >= 0; i--) {
-      if (processedMessages[i]?.role === "user") {
+    let isLastUserArrayContent = false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === "user") {
         lastUserIndex = i;
-        const c = processedMessages[i].content;
-        lastUserText = typeof c === "string" ? c : Array.isArray(c) ? JSON.stringify(c) : "";
+        const c = messages[i].content;
+        if (typeof c === "string") {
+          lastUserText = c;
+        } else if (Array.isArray(c)) {
+          isLastUserArrayContent = true;
+          // Extract text blocks only; never stringify structured tool_result or object blocks
+          const textBlocks = (c as unknown[])
+            .filter(
+              (p): p is { type: string; text: string } =>
+                typeof p === "object" &&
+                p !== null &&
+                "type" in p &&
+                (p as { type: unknown }).type === "text" &&
+                "text" in p &&
+                typeof (p as { text: unknown }).text === "string"
+            )
+            .map((p) => p.text);
+          lastUserText = textBlocks.join("\n");
+        }
         break;
       }
     }
 
-    const enhancement = lastUserText
-      ? enhanceInboundPrompt(lastUserText, tierAssignment.tier, intent.taskPhase, processedMessages)
-      : undefined;
+    // Never enforce confirmation gates or overwrite structured content on tool result turns
+    // or when the message consists of tool execution outputs. Doing so alters tool schemas and halts autonomous agent runs.
+    const isToolTurn = intent.isToolResultTurn || (isLastUserArrayContent && !lastUserText.trim());
+
+    const enhancement =
+      !isToolTurn && lastUserText.trim()
+        ? enhanceInboundPrompt(lastUserText, tierAssignment.tier, intent.taskPhase, messages)
+        : undefined;
 
     let enhancedMessages: Array<{ role: string; content?: unknown }> | undefined;
-    if (enhancement && enhancement.enhancedPrompt !== lastUserText && lastUserIndex >= 0) {
-      enhancedMessages = processedMessages.map((m, idx) => {
+    if (
+      enhancement &&
+      enhancement.enhancedPrompt !== lastUserText &&
+      lastUserIndex >= 0 &&
+      !isLastUserArrayContent
+    ) {
+      enhancedMessages = messages.map((m, idx) => {
         if (idx === lastUserIndex) {
           return { ...m, content: enhancement.enhancedPrompt };
         }

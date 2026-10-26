@@ -403,3 +403,158 @@ test("pruneOldToolOutputsForReprompt conserves tokens by pruning historical tool
   assert.equal(pruned[3].content, "B".repeat(1500));
   assert.equal(pruned[4].content, "C".repeat(1500));
 });
+
+test("processSmartProxyRouting preserves structured tool_result arrays and bypasses confirmation gating", async () => {
+  const sessionId = "spb_tool_result_preservation_" + Date.now();
+  const toolResultContent = [
+    {
+      type: "tool_result",
+      tool_use_id: "tool_u123",
+      content: "Error: Cannot find module './foo'",
+    },
+  ];
+  const decision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: "Fix the bug" },
+      { role: "assistant", content: "Let me check the files." },
+      { role: "user", content: toolResultContent as unknown as string },
+    ],
+    tools: [{ name: "read_file" }],
+  });
+
+  assert.equal(decision.intent.isToolResultTurn, true);
+  assert.equal(decision.necessity, undefined);
+  assert.equal(decision.enhancedMessages, undefined);
+});
+
+test("processSpbOutboundZeroLoss preserves autonomous tool calls without re-prompting", async () => {
+  const prompt = "Can you check the TypeScript types and run tests?";
+  const toolCallResponse = new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_abc123",
+                type: "function",
+                function: { name: "grep_search", arguments: '{"query":"interface"}' },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+
+  let dispatchCalled = false;
+  const dispatchMock = async () => {
+    dispatchCalled = true;
+    return new Response(JSON.stringify({ choices: [] }));
+  };
+
+  const finalResponse = await processSpbOutboundZeroLoss({
+    initialResponse: toolCallResponse,
+    dispatchModel: dispatchMock,
+    body: {
+      messages: [{ role: "user", content: prompt }],
+      tools: [{ type: "function", function: { name: "grep_search" } }],
+    },
+    originalPrompt: prompt,
+    preservedIntentions: ["TypeScript types", "Tests"],
+    tier: "tier_2_resilient",
+    taskPhase: "INSPECTION_SYNTHESIS",
+    sessionId: "test_tool_call_session",
+    maxReprompts: 2,
+  });
+
+  assert.equal(dispatchCalled, false, "Should not re-prompt when model produces a tool call");
+  assert.equal(finalResponse.headers.get("X-OmniRoute-SPB-Satisfaction"), "1.00");
+  assert.equal(finalResponse.headers.get("X-OmniRoute-SPB-Reprompt-Count"), "0");
+  const json = await finalResponse.json();
+  assert.ok(json.choices[0].message.tool_calls.length > 0);
+});
+
+test("processSpbOutboundZeroLoss reconstructs consumed streaming body on upstream dispatch failure", async () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode('data: {"choices":[{"delta":{"content":"function hello() { // TODO"\\n\\n')
+      );
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  const streamResponse = new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+
+  // Upstream returns 500 error on re-prompt dispatch
+  const failingDispatch = async () => new Response("Internal Server Error", { status: 500 });
+
+  const finalResponse = await processSpbOutboundZeroLoss({
+    initialResponse: streamResponse,
+    dispatchModel: failingDispatch,
+    body: { messages: [{ role: "user", content: "Implement hello" }] },
+    originalPrompt: "Implement hello",
+    preservedIntentions: ["hello"],
+    tier: "tier_2_resilient",
+    taskPhase: "CODE_GENERATION",
+    sessionId: "test_safety_stream_body",
+    maxReprompts: 2,
+  });
+
+  // Verify that the body is not empty and can be read
+  assert.ok(finalResponse.body, "Stream body must be present and reconstructed");
+  const reader = finalResponse.body.getReader();
+  let totalChunks = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) totalChunks++;
+  }
+  assert.ok(totalChunks > 0, "Reconstructed stream must emit data chunks rather than empty body");
+});
+
+test("processSmartProxyRouting never corrupts large prior messages with CCR markers in enhancedMessages", async () => {
+  const sessionId = "spb_ccr_corruption_guard_" + Date.now();
+  const largeCodebaseDump =
+    "export class LargeSystem {\n" + "  // substantive code\n".repeat(50) + "}\n";
+  const largeGitStatus = "## main...origin/main\n" + " M src/file.ts\n".repeat(40);
+  const userPrompt = "Review the architecture and plan next steps";
+
+  const decision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: largeGitStatus },
+      { role: "assistant", content: "I see the changed files." },
+      { role: "user", content: largeCodebaseDump },
+      { role: "assistant", content: "I have read the codebase dump." },
+      { role: "user", content: userPrompt },
+    ],
+  });
+
+  assert.ok(decision.enhancedMessages, "Expected enhancedMessages to be returned");
+  const enhanced = decision.enhancedMessages!;
+
+  // Verify that prior messages are NOT replaced with [CCR retrieve hash=...]
+  for (let i = 0; i < enhanced.length - 1; i++) {
+    const content = typeof enhanced[i].content === "string" ? (enhanced[i].content as string) : "";
+    assert.ok(
+      !content.includes("[CCR retrieve hash="),
+      `Message at index ${i} was corrupted with a CCR retrieve placeholder: ${content}`
+    );
+  }
+  assert.equal(enhanced[0].content, largeGitStatus, "largeGitStatus must remain verbatim");
+  assert.equal(enhanced[2].content, largeCodebaseDump, "largeCodebaseDump must remain verbatim");
+});

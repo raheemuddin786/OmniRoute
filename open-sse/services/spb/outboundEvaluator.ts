@@ -29,6 +29,7 @@ export interface ExtractedResponseContent {
   isStream: boolean;
   rawChunks: Uint8Array[];
   jsonBody?: Record<string, unknown>;
+  hasToolCalls: boolean;
 }
 
 const PLACEHOLDER_PATTERNS = [
@@ -49,8 +50,32 @@ export function evaluateResponseIntent(
   responseText: string,
   tier: ModelTier,
   taskPhase: TaskPhase,
-  sessionId: string = "default_session"
+  sessionId: string = "default_session",
+  hasToolCalls: boolean = false
 ): ResponseEvaluationResult {
+  // If the model produced tool calls, it is an active intermediate turn in an autonomous execution loop.
+  // Never flag tool calls as omissions or reprompt them.
+  if (hasToolCalls) {
+    return {
+      isSatisfied: true,
+      satisfactionScore: 1.0,
+      omissions: [],
+      oddities: [],
+      repromptCount: 0,
+    };
+  }
+
+  // If the original prompt is empty (e.g. tool execution return turn), approve without reprompt
+  if (!originalPrompt || !originalPrompt.trim()) {
+    return {
+      isSatisfied: true,
+      satisfactionScore: 1.0,
+      omissions: [],
+      oddities: [],
+      repromptCount: 0,
+    };
+  }
+
   const omissions: string[] = [];
   const oddities: string[] = [];
   let score = 1.0;
@@ -178,6 +203,7 @@ export async function extractResponseContent(
       const clone = response.clone();
       const json = (await clone.json()) as Record<string, unknown>;
       let text = "";
+      let hasToolCalls = false;
       const choices = json?.choices as Array<Record<string, unknown>> | undefined;
       const firstChoiceMsg = choices?.[0]?.message as Record<string, unknown> | undefined;
       if (typeof firstChoiceMsg?.content === "string") {
@@ -194,15 +220,49 @@ export async function extractResponseContent(
           text = parts[0].text;
         }
       }
-      return { text, isStream: false, rawChunks: [], jsonBody: json };
+
+      // Detect tool calls in JSON
+      if (Array.isArray(firstChoiceMsg?.tool_calls) && firstChoiceMsg.tool_calls.length > 0) {
+        hasToolCalls = true;
+      }
+      if (choices?.[0]?.finish_reason === "tool_calls") {
+        hasToolCalls = true;
+      }
+      if (Array.isArray(json?.content)) {
+        for (const c of json.content as Array<Record<string, unknown>>) {
+          if (c && typeof c === "object" && (c.type === "tool_use" || c.type === "tool_call")) {
+            hasToolCalls = true;
+            break;
+          }
+        }
+      }
+      if (json?.stop_reason === "tool_use") {
+        hasToolCalls = true;
+      }
+      if (Array.isArray(json?.candidates)) {
+        const candidate = json.candidates[0] as Record<string, unknown> | undefined;
+        const candidateContent = candidate?.content as Record<string, unknown> | undefined;
+        const parts = candidateContent?.parts as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(parts)) {
+          for (const p of parts) {
+            if (p && typeof p === "object" && p.functionCall) {
+              hasToolCalls = true;
+              break;
+            }
+          }
+        }
+      }
+
+      return { text, isStream: false, rawChunks: [], jsonBody: json, hasToolCalls };
     } catch {
-      return { text: "", isStream: false, rawChunks: [] };
+      return { text: "", isStream: false, rawChunks: [], hasToolCalls: false };
     }
   }
 
   // Streaming extraction: consume and buffer stream chunks
   const rawChunks: Uint8Array[] = [];
   let accumulatedText = "";
+  let hasToolCalls = false;
   const decoder = new TextDecoder();
 
   if (response.body) {
@@ -233,6 +293,28 @@ export async function extractResponseContent(
             else if (parsed.candidates?.[0]?.content?.parts?.[0]?.text) {
               accumulatedText += parsed.candidates[0].content.parts[0].text;
             }
+
+            // OpenAI tool calls
+            if (
+              (Array.isArray(parsed.choices?.[0]?.delta?.tool_calls) &&
+                parsed.choices[0].delta.tool_calls.length > 0) ||
+              parsed.choices?.[0]?.finish_reason === "tool_calls"
+            ) {
+              hasToolCalls = true;
+            }
+            // Anthropic tool_use
+            else if (
+              (parsed.type === "content_block_start" &&
+                parsed.content_block?.type === "tool_use") ||
+              (parsed.type === "message_delta" && parsed.delta?.stop_reason === "tool_use") ||
+              parsed.type === "tool_use"
+            ) {
+              hasToolCalls = true;
+            }
+            // Gemini functionCall
+            else if (parsed.candidates?.[0]?.content?.parts?.[0]?.functionCall) {
+              hasToolCalls = true;
+            }
           } catch {
             // Non-JSON frame
           }
@@ -241,10 +323,25 @@ export async function extractResponseContent(
     }
   }
 
+  if (!hasToolCalls && rawChunks.length > 0) {
+    const fullPayload = decoder.decode(Buffer.concat(rawChunks));
+    if (
+      fullPayload.includes('"type":"tool_use"') ||
+      fullPayload.includes('"tool_use"') ||
+      fullPayload.includes('"tool_calls"') ||
+      fullPayload.includes('"finish_reason":"tool_calls"') ||
+      fullPayload.includes('"stop_reason":"tool_use"') ||
+      fullPayload.includes('"functionCall"')
+    ) {
+      hasToolCalls = true;
+    }
+  }
+
   return {
     text: accumulatedText,
     isStream: true,
     rawChunks,
+    hasToolCalls,
   };
 }
 
@@ -326,19 +423,28 @@ export async function processSpbOutboundZeroLoss(args: {
     return currentResponse;
   }
 
+  const clientHasTools = Array.isArray(args.body?.tools) && args.body.tools.length > 0;
+  let lastExtracted: ExtractedResponseContent | undefined;
+  let lastEvalResult: ResponseEvaluationResult | undefined;
+
   while (repromptCount <= maxReprompts) {
     const extracted = await extractResponseContent(currentResponse);
+    lastExtracted = extracted;
+
+    // If the model produced tool calls or client provided tools and tool calls occurred, mark satisfied immediately
     const evalResult = evaluateResponseIntent(
       args.originalPrompt,
       args.preservedIntentions,
       extracted.text,
       args.tier,
       args.taskPhase,
-      args.sessionId
+      args.sessionId,
+      extracted.hasToolCalls || (clientHasTools && extracted.hasToolCalls)
     );
+    lastEvalResult = evalResult;
 
-    // If response satisfies 100% of intention criteria or max iterations reached
-    if (evalResult.isSatisfied || repromptCount >= maxReprompts) {
+    // If response satisfies 100% of intention criteria, max iterations reached, or tool call generated
+    if (evalResult.isSatisfied || repromptCount >= maxReprompts || extracted.hasToolCalls) {
       if (extracted.isStream) {
         return reconstructStreamResponse(
           extracted.rawChunks,
@@ -360,6 +466,11 @@ export async function processSpbOutboundZeroLoss(args: {
     }
 
     // Response failed criteria: formulate targeted re-prompt and query upstream again
+    // BUT only if we actually have text and suggestions, and never if extracted.text is empty
+    if (!extracted.text.trim() || !evalResult.suggestedReprompt) {
+      break;
+    }
+
     repromptCount++;
     const currentMessages = Array.isArray(args.body?.messages)
       ? (args.body.messages as Array<Record<string, unknown>>)
@@ -383,6 +494,36 @@ export async function processSpbOutboundZeroLoss(args: {
       currentResponse = nextResponse;
     } catch {
       break;
+    }
+  }
+
+  // Safety fallback: if loop exited via break or error, ALWAYS reconstruct from lastExtracted
+  // because currentResponse stream has already been consumed!
+  if (lastExtracted) {
+    const fallbackEval = lastEvalResult || {
+      isSatisfied: true,
+      satisfactionScore: 1.0,
+      omissions: [],
+      oddities: [],
+      repromptCount,
+    };
+    if (lastExtracted.isStream) {
+      return reconstructStreamResponse(
+        lastExtracted.rawChunks,
+        currentResponse,
+        fallbackEval,
+        repromptCount
+      );
+    } else {
+      const headers = new Headers(currentResponse.headers);
+      headers.set("X-OmniRoute-SPB-Satisfaction", fallbackEval.satisfactionScore.toFixed(2));
+      headers.set("X-OmniRoute-SPB-Reprompt-Count", String(repromptCount));
+      headers.set("X-OmniRoute-SPB-ZeroLoss", fallbackEval.isSatisfied ? "verified" : "partial");
+      return new Response(JSON.stringify(lastExtracted.jsonBody || {}), {
+        status: currentResponse.status,
+        statusText: currentResponse.statusText,
+        headers,
+      });
     }
   }
 

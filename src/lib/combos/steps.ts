@@ -167,12 +167,12 @@ function shouldTreatAsComboRef(
   providerId: string | null,
   options: NormalizeComboStepOptions
 ): boolean {
+  const comboNames = collectComboNames(options.allCombos);
+  if (comboNames.has(target)) return true;
   const isComboProvider = providerId === "combo" || providerId === "auto";
   if (providerId && !isComboProvider) return false;
-  const comboNames = collectComboNames(options.allCombos);
   const cleanTarget = target.replace(/^(combo|auto)\//i, "");
   return (
-    comboNames.has(target) ||
     comboNames.has(cleanTarget) ||
     target === toTrimmedString(options.comboName) ||
     cleanTarget === toTrimmedString(options.comboName)
