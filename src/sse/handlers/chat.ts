@@ -1228,6 +1228,18 @@ async function handleChatImplementation(
             : (uniqueTierModels[0] as any).model
           : null;
 
+    // Preserve the original SPB tier assignment's cacheEnabled and maxTokens
+    // so that downstream model execution respects the tier's caching and token budget.
+    const preservedTierAssignment = spbDecision?.tierAssignment
+      ? { ...spbDecision.tierAssignment }
+      : {
+          tier: activeTier,
+          recommendedModels: uniqueTierModels,
+          maxTokens: 8192,
+          temperature: 0.2,
+          cacheEnabled: true,
+        };
+
     if (effectiveSelectedModel) {
       log.info(
         "SPB",
@@ -1247,13 +1259,7 @@ async function handleChatImplementation(
                 requiresTools: false,
                 promptAnchorHash: "",
               },
-              tierAssignment: {
-                tier: activeTier,
-                recommendedModels: uniqueTierModels,
-                maxTokens: 8192,
-                temperature: 0.2,
-                cacheEnabled: true,
-              },
+              tierAssignment: preservedTierAssignment,
               selectedModel: effectiveSelectedModel,
               checkpointRestored: false,
             },
@@ -1266,7 +1272,6 @@ async function handleChatImplementation(
         strategy: "priority",
         models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
       };
-    } else if (isIncompatibleModality) {
       const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
       log.warn(
         "SPB",
