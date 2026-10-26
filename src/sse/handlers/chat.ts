@@ -1159,7 +1159,7 @@ async function handleChatImplementation(
   if (isSpbActive && (isSpbModel || isIncompatibleModality)) {
     const currentTierConfig = getTierConfig();
     const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
-    const activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
+    let activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
 
     // Guard: Tier 3 models require a guidanceContract from Tier 1/Tier 2
     // to ensure supervised execution of modifications. Without guidance,
@@ -1287,6 +1287,7 @@ async function handleChatImplementation(
         strategy: "priority",
         models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
       };
+    } else if (isIncompatibleModality) {
       const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
       log.warn(
         "SPB",
