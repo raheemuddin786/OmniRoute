@@ -12,15 +12,15 @@ gate). Live-verified 2026-08-17 against OmniRoute 3.8.49 at
 
 ## Working model ids
 
-| Client id | HTTP | Vectors | Dim | Notes |
-| --- | --- | --- | --- | --- |
-| `openrouter/google/gemini-embedding-2` | 200 | batch 2 → 2 | 3072 | Works without a native Gemini key |
-| `openrouter/google/gemini-embedding-2-preview` | 200 | batch 2 → 2 | 3072 | Same space as the non-preview id |
-| `openrouter/google/gemini-embedding-001` | 200 | batch 2 → 2 | 3072 | Listed in `GET /v1/embeddings` |
-| `jina-ai/jina-embeddings-v5-omni-small` | 200 | batch 2 → 2 | 1024 | Canonical Jina omni id |
-| `jina/jina-embeddings-v5-omni-small` | 200 | batch 2 → 2 | 1024 | Alias; response `model` is `jina-ai/...` |
-| `jina-embeddings-v5-omni-small` | 200 | batch 2 → 2 | 1024 | Bare id also resolves |
-| `jina-ai/jina-embeddings-v5-omni-nano` | 200 | 1 → 1 | **768** | Different vector space from small |
+| Client id                                      | HTTP | Vectors     | Dim     | Notes                                    |
+| ---------------------------------------------- | ---- | ----------- | ------- | ---------------------------------------- |
+| `openrouter/google/gemini-embedding-2`         | 200  | batch 2 → 2 | 3072    | Works without a native Gemini key        |
+| `openrouter/google/gemini-embedding-2-preview` | 200  | batch 2 → 2 | 3072    | Same space as the non-preview id         |
+| `openrouter/google/gemini-embedding-001`       | 200  | batch 2 → 2 | 3072    | Listed in `GET /v1/embeddings`           |
+| `jina-ai/jina-embeddings-v5-omni-small`        | 200  | batch 2 → 2 | 1024    | Canonical Jina omni id                   |
+| `jina/jina-embeddings-v5-omni-small`           | 200  | batch 2 → 2 | 1024    | Alias; response `model` is `jina-ai/...` |
+| `jina-embeddings-v5-omni-small`                | 200  | batch 2 → 2 | 1024    | Bare id also resolves                    |
+| `jina-ai/jina-embeddings-v5-omni-nano`         | 200  | 1 → 1       | **768** | Different vector space from small        |
 
 `GET /v1/models` and `GET /v1/embeddings` listed
 `jina-ai/jina-embeddings-v5-omni-small` (1024) and
@@ -166,3 +166,20 @@ without the canonical `{type,source}` schema.
 
 Use `jina-ai/jina-embeddings-v5-omni-small` for text. Do not point Memorix
 `base_url` at `https://api.jina.ai` — keep OmniRoute as the only hop.
+
+## Custom and compatible embedding nodes
+
+When configuring custom or local OpenAI-compatible embedding nodes (e.g., local AI engines,
+self-hosted TEI, or vLLM instances):
+
+1. **Routable prefix resolution**:
+   Custom embedding models are routed using the provider node's assigned prefix:
+   `<prefix>/<model-id>` (for example, `my-local-engine/BAAI/bge-small-en-v1.5`).
+2. **Dynamic discovery in integrations**:
+   Both Qdrant vector memory (`/api/settings/qdrant/embedding-models`) and Semantic Cache
+   (`embeddingOptions.ts`) dynamically query active provider connections and model tables
+   to surface configured embedding models using their routable prefix and configured node name.
+3. **Dashboard capability filters**:
+   Compatible provider nodes configured with the `embeddings` API type automatically resolve to
+   the `embedding` service kind in the Providers Dashboard (`/dashboard/providers`), ensuring
+   they remain visible when applying the Embedding capability filter.

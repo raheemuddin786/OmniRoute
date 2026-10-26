@@ -278,6 +278,7 @@ Main flow modules:
 - Embedding provider registry: `open-sse/config/embeddingRegistry.ts`
 - Image generation handler: `open-sse/handlers/imageGeneration.ts`
 - Image provider registry: `open-sse/config/imageRegistry.ts`
+- Media service kinds resolver: `open-sse/config/mediaServiceKinds.ts` — dynamic capability resolution (embedding, image, stt, tts, llm) for curated and compatible provider nodes
 - Response sanitization: `open-sse/handlers/responseSanitizer.ts`
 - Role normalization: `open-sse/services/roleNormalizer.ts`
 
