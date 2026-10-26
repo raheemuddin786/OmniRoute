@@ -115,14 +115,16 @@ export async function processSmartProxyRouting(
     const intent = classifyIntent(processedMessages, tools);
 
     // 3. Select model tier using dynamic config and tool requirements
-    // Pass isToolResultTurn to allow Tier 1/3 for pure planning/refactoring unless we're mid-tool-execution
+    // Pass isToolResultTurn AND guidanceContract to enforce supervision
+    // Tier 3 will require a guidanceContract for mutation/refactoring phases
     const tierConfig = getTierConfig();
     let tierAssignment = selectModelTier(
       intent.taskPhase,
       intent.complexityScore,
       tierConfig?.tierModels,
       intent.requiresTools,
-      intent.isToolResultTurn
+      intent.isToolResultTurn,
+      intent.guidanceContract
     );
 
     // 4. Check for existing checkpoint & state resumption with safe error handling
@@ -165,12 +167,14 @@ export async function processSmartProxyRouting(
         : null);
 
     // 5. Save new state checkpoint asynchronously / safely
+    // Include guidanceContract in checkpoint for session restore and verification loop
     try {
       saveCheckpoint({
         sessionId,
         promptAnchorHash: intent.promptAnchorHash,
         taskPhase: intent.taskPhase,
         modelTier: tierAssignment.tier,
+        guidanceContract: tierAssignment.guidanceContract,
         statePayload: JSON.stringify({
           messagesCount: messages.length,
           timestamp: Date.now(),

@@ -1161,6 +1161,21 @@ async function handleChatImplementation(
     const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
     const activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
 
+    // Guard: Tier 3 models require a guidanceContract from Tier 1/Tier 2
+    // to ensure supervised execution of modifications. Without guidance,
+    // automatically escalate to Tier 2 resilient execution.
+    const tierAssignment = spbDecision?.tierAssignment ?? {};
+    if (activeTier === "tier_3_local" && !tierAssignment.guidanceContract) {
+      log.warn(
+        "SPB",
+        "Tier 3 execution without guidanceContract - escalating to Tier 2 resilient for supervision"
+      );
+      // Re-route by overriding the decision's tier to Tier 2
+      (spbDecision.tierAssignment as any).tier = "tier_2_resilient";
+      (spbDecision.tierAssignment as any).requiresGuidance = true;
+      activeTier = "tier_2_resilient";
+    }
+
     // Build complete prioritized fallback ladder across tiers:
     // primary tier models first, followed by sibling tier models in fallback order.
     const candidateModels: string[] = [];

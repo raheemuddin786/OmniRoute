@@ -12,6 +12,17 @@ export type TaskPhase =
   | "DETERMINISTIC_ROUTING"
   | "INSPECTION_SYNTHESIS";
 
+export interface GuidanceContract {
+  supervisorTier?: "tier_1_apex" | "tier_2_resilient" | string;
+  taskSpecification?: string;
+  constraints?: string[];
+  instructions?: string[];
+  targetFiles?: string[];
+  verificationCriteria?: string[];
+  createdAt?: number;
+  [key: string]: unknown;
+}
+
 export interface IntentProfile {
   taskPhase: TaskPhase;
   estimatedTokens: number;
@@ -19,6 +30,7 @@ export interface IntentProfile {
   complexityScore: number; // 0.0 to 1.0
   promptAnchorHash: string;
   isToolResultTurn: boolean;
+  guidanceContract?: GuidanceContract;
 }
 
 interface ExtractedContent {
