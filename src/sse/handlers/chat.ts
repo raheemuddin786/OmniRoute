@@ -1600,7 +1600,7 @@ async function handleChatImplementation(
     // because only this layer knows which connectionId was actually selected.
     const { defer: deferContextOverflowWhenCompressible, exclusions: compressionExclusions } =
       await resolveComboContextOverflowDeferral(log, apiKeyInfo);
-    const response = await (handleComboChat as any)({
+    let response = await (handleComboChat as any)({
       body,
       combo,
       deferContextOverflowWhenCompressible,

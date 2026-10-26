@@ -5,6 +5,7 @@ import {
   ClaudeWebExecutor,
   __clearClaudeWebOrgCacheForTesting,
 } from "../../open-sse/executors/claude-web.ts";
+import { normalizeClaudeWebModel } from "../../open-sse/executors/claude-web/payload.ts";
 import type { ExecuteInput } from "../../open-sse/executors/base.ts";
 import { __setTlsFetchOverrideForTesting } from "../../open-sse/services/claudeTlsClient.ts";
 import { applyComboTargetExhaustion } from "../../open-sse/services/combo/targetExhaustion.ts";
@@ -21,6 +22,15 @@ describe("Claude Web Stability & Model Resolution Architecture", () => {
     assert.equal(providerUsesCuratedModelsOnly("claude-web"), true);
     assert.equal(providerUsesCuratedModelsOnly("cw"), false); // alias check
     assert.equal(providerUsesCuratedModelsOnly("chatgpt-web"), true);
+  });
+
+  it("resolves latest Claude 5 models without falling back to default", () => {
+    assert.equal(normalizeClaudeWebModel("claude-opus-5-5"), "claude-opus-5-5");
+    assert.equal(normalizeClaudeWebModel("claude-sonnet-5-5"), "claude-sonnet-5-5");
+    assert.equal(
+      normalizeClaudeWebModel("claude-web/claude-haiku-5-5"),
+      "claude-haiku-4-5-20251001"
+    );
   });
 
   it("caches organizationId across multiple calls to avoid rate-limiting claude.ai/api/organizations", async () => {
