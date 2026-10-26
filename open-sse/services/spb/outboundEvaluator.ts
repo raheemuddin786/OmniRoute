@@ -439,7 +439,7 @@ export async function processSpbOutboundZeroLoss(args: {
       args.tier,
       args.taskPhase,
       args.sessionId,
-      extracted.hasToolCalls || (clientHasTools && extracted.hasToolCalls)
+      extracted.hasToolCalls || clientHasTools
     );
     lastEvalResult = evalResult;
 
