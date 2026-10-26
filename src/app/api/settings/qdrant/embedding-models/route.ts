@@ -36,12 +36,27 @@ function getProviderBaseUrl(providerSpecificData: unknown): string | undefined {
   return undefined;
 }
 
+function getProviderPrefix(
+  providerId: string,
+  conns: ReadonlyArray<Record<string, unknown>>
+): string {
+  const activeConn = conns.find((c) => c.isActive !== false) || conns[0];
+  if (activeConn?.providerSpecificData && typeof activeConn.providerSpecificData === "object") {
+    const psd = activeConn.providerSpecificData as Record<string, unknown>;
+    if (typeof psd.prefix === "string" && psd.prefix.trim().length > 0) {
+      return psd.prefix.trim();
+    }
+  }
+  return providerId;
+}
+
 // Collect all embedding-relevant models for a given provider from DB
 async function getProviderModelsFromDb(
   providerId: string,
-  _conns: ReadonlyArray<Record<string, unknown>>
+  conns: ReadonlyArray<Record<string, unknown>>
 ): Promise<AvailableEmbeddingModelOption[]> {
   const modelsMap = new Map<string, AvailableEmbeddingModelOption>();
+  const prefix = getProviderPrefix(providerId, conns);
 
   // 1. Add synced models from DB
   try {
@@ -55,7 +70,7 @@ async function getProviderModelsFromDb(
       if (isEmbedding) {
         const existing = modelsMap.get(sm.id);
         modelsMap.set(sm.id, {
-          id: `${providerId}/${sm.id}`,
+          id: `${prefix}/${sm.id}`,
           rawId: sm.id,
           name: sm.name || existing?.name || sm.id,
           dimensions: sm.dimensions || existing?.dimensions,
@@ -81,7 +96,7 @@ async function getProviderModelsFromDb(
         if (isEmbedding) {
           const existing = modelsMap.get(cm.id);
           modelsMap.set(cm.id, {
-            id: `${providerId}/${cm.id}`,
+            id: `${prefix}/${cm.id}`,
             rawId: cm.id,
             name: cm.name || existing?.name || cm.id,
             dimensions: cm.dimensions || existing?.dimensions,
@@ -94,6 +109,21 @@ async function getProviderModelsFromDb(
     }
   } catch {
     // Fall through on DB error
+  }
+
+  // 3. Fallback: if provider node specifies a validationModelId in providerSpecificData
+  const activeConn = conns.find((c) => c.isActive !== false) || conns[0];
+  if (activeConn?.providerSpecificData && typeof activeConn.providerSpecificData === "object") {
+    const psd = activeConn.providerSpecificData as Record<string, unknown>;
+    const vModel = typeof psd.validationModelId === "string" ? psd.validationModelId.trim() : "";
+    if (vModel && !modelsMap.has(vModel)) {
+      modelsMap.set(vModel, {
+        id: `${prefix}/${vModel}`,
+        rawId: vModel,
+        name: vModel,
+        supportedInputTypes: ["text"],
+      });
+    }
   }
 
   return Array.from(modelsMap.values());
@@ -111,7 +141,18 @@ export async function GET(request: NextRequest) {
     const connectionsByProvider = new Map<string, typeof activeConnections>();
 
     for (const conn of activeConnections) {
-      const p = conn.provider;
+      // Primary: use the provider field (UUID or string ID)
+      let p = conn.provider as string | undefined;
+      // Fallback: use the prefix from providerSpecificData (e.g. "lc-aieng")
+      if (!p && conn.providerSpecificData) {
+        const psd = conn.providerSpecificData as Record<string, unknown>;
+        p = (psd.prefix as string | undefined) || undefined;
+      }
+      // Also try nodeName as another fallback
+      if (!p && conn.providerSpecificData) {
+        const psd = conn.providerSpecificData as Record<string, unknown>;
+        p = (psd.nodeName as string | undefined) || p;
+      }
       if (!p) continue;
       const list = connectionsByProvider.get(p) || [];
       list.push(conn);

@@ -80,6 +80,13 @@ export async function getEmbeddingOptions(): Promise<EmbeddingProviderOption[]> 
       }
     }
 
+    const psd =
+      activeConn?.providerSpecificData && typeof activeConn.providerSpecificData === "object"
+        ? (activeConn.providerSpecificData as Record<string, unknown>)
+        : undefined;
+    const prefix =
+      typeof psd?.prefix === "string" && psd.prefix.trim() ? psd.prefix.trim() : providerId;
+
     // 2. Add synced models from DB
     try {
       const synced = await getSyncedAvailableModels(providerId);
@@ -93,7 +100,7 @@ export async function getEmbeddingOptions(): Promise<EmbeddingProviderOption[]> 
         if (isEmbedding) {
           const existing = modelsMap.get(sm.id);
           modelsMap.set(sm.id, {
-            id: `${providerId}/${sm.id}`,
+            id: `${prefix}/${sm.id}`,
             rawId: sm.id,
             name: sm.name || existing?.name || sm.id,
             dimensions: sm.dimensions || existing?.dimensions,
@@ -122,7 +129,7 @@ export async function getEmbeddingOptions(): Promise<EmbeddingProviderOption[]> 
           if (isEmbedding) {
             const existing = modelsMap.get(cm.id);
             modelsMap.set(cm.id, {
-              id: `${providerId}/${cm.id}`,
+              id: `${prefix}/${cm.id}`,
               rawId: cm.id,
               name: cm.name || existing?.name || cm.id,
               dimensions: cm.dimensions || existing?.dimensions,
@@ -137,10 +144,19 @@ export async function getEmbeddingOptions(): Promise<EmbeddingProviderOption[]> 
       // Fall through on DB error
     }
 
+    const displayName =
+      typeof psd?.nodeName === "string" && psd.nodeName.trim()
+        ? psd.nodeName.trim()
+        : activeConn?.name && activeConn.name !== "main"
+          ? activeConn.name
+          : curated
+            ? providerId
+            : providerId;
+
     if (modelsMap.size > 0 || curated !== undefined || hasConnection) {
       providerOptions.push({
         id: providerId,
-        name: activeConn?.name || (curated ? providerId : providerId),
+        name: displayName,
         hasConnection,
         baseUrl,
         models: Array.from(modelsMap.values()),
