@@ -137,7 +137,7 @@ export async function getEmbeddingOptions(): Promise<EmbeddingProviderOption[]> 
       // Fall through on DB error
     }
 
-    if (modelsMap.size > 0 || curated !== undefined) {
+    if (modelsMap.size > 0 || curated !== undefined || hasConnection) {
       providerOptions.push({
         id: providerId,
         name: activeConn?.name || (curated ? providerId : providerId),
