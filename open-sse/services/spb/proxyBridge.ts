@@ -24,6 +24,20 @@ import {
   type VerifiedArtifactContract,
   type DecompositionResult,
 } from "./contextPartition.ts";
+import {
+  enhanceInboundPrompt,
+  evaluateRequestNecessity,
+  computePatternHash,
+  type PromptEnhancementResult,
+  type NecessityCheckResult,
+} from "./inboundIntelligence.ts";
+import {
+  evaluateResponseIntent,
+  processSpbOutboundZeroLoss,
+  extractResponseContent,
+  type ResponseEvaluationResult,
+  type ExtractedResponseContent,
+} from "./outboundEvaluator.ts";
 
 export {
   forkSession,
@@ -35,6 +49,16 @@ export {
   type PartitionedContext,
   type VerifiedArtifactContract,
   type DecompositionResult,
+  enhanceInboundPrompt,
+  evaluateRequestNecessity,
+  computePatternHash,
+  evaluateResponseIntent,
+  processSpbOutboundZeroLoss,
+  extractResponseContent,
+  type PromptEnhancementResult,
+  type NecessityCheckResult,
+  type ResponseEvaluationResult,
+  type ExtractedResponseContent,
 };
 
 export interface SpbRoutingContext {
@@ -48,6 +72,9 @@ export interface SpbRoutingDecision {
   tierAssignment: TierAssignment;
   selectedModel: string | null;
   checkpointRestored: boolean;
+  enhancement?: PromptEnhancementResult;
+  necessity?: NecessityCheckResult;
+  enhancedMessages?: Array<{ role: string; content?: unknown }>;
   error?: string;
 }
 
@@ -188,7 +215,33 @@ export async function processSmartProxyRouting(
 
     const latencyMs = Date.now() - startTime;
 
-    // 6. Record telemetry audit
+    // 6. Inbound Intelligence, Prompt Enhancement & Necessity Gate
+    let lastUserIndex = -1;
+    let lastUserText = "";
+    for (let i = processedMessages.length - 1; i >= 0; i--) {
+      if (processedMessages[i]?.role === "user") {
+        lastUserIndex = i;
+        const c = processedMessages[i].content;
+        lastUserText = typeof c === "string" ? c : Array.isArray(c) ? JSON.stringify(c) : "";
+        break;
+      }
+    }
+
+    const enhancement = lastUserText
+      ? enhanceInboundPrompt(lastUserText, tierAssignment.tier, intent.taskPhase, processedMessages)
+      : undefined;
+
+    let enhancedMessages: Array<{ role: string; content?: unknown }> | undefined;
+    if (enhancement && enhancement.enhancedPrompt !== lastUserText && lastUserIndex >= 0) {
+      enhancedMessages = processedMessages.map((m, idx) => {
+        if (idx === lastUserIndex) {
+          return { ...m, content: enhancement.enhancedPrompt };
+        }
+        return m;
+      });
+    }
+
+    // 7. Record telemetry audit
     try {
       recordSpbTelemetry({
         sessionId,
@@ -209,6 +262,9 @@ export async function processSmartProxyRouting(
       tierAssignment,
       selectedModel,
       checkpointRestored,
+      enhancement,
+      necessity: enhancement?.necessity,
+      enhancedMessages,
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);

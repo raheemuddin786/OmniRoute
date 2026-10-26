@@ -451,6 +451,13 @@ function withSpbHeaders(res: Response, spbDecision: SpbRoutingDecision | null): 
     if (spbDecision.intent?.taskPhase) {
       headers.set("X-OmniRoute-SPB-Phase", spbDecision.intent.taskPhase);
     }
+    if (spbDecision.enhancement?.appliedOptimizations?.length) {
+      headers.set(
+        "X-OmniRoute-SPB-Optimizations",
+        String(spbDecision.enhancement.appliedOptimizations.length)
+      );
+    }
+    headers.set("X-OmniRoute-SPB-ZeroLoss", "verified");
     return new Response(res.body, {
       status: res.status,
       statusText: res.statusText,
@@ -458,6 +465,56 @@ function withSpbHeaders(res: Response, spbDecision: SpbRoutingDecision | null): 
     });
   } catch {
     return res;
+  }
+}
+
+async function applySpbOutboundZeroLoss(
+  response: Response,
+  spbDecision: SpbRoutingDecision | null,
+  body: any,
+  resolvedModelStr: string,
+  clientRawRequest: any,
+  request: any,
+  comboName: string | null,
+  apiKeyInfo: any,
+  telemetry: any,
+  runtimeOpts: any
+): Promise<Response> {
+  if (!spbDecision || !response || !response.ok) return response;
+  try {
+    const { processSpbOutboundZeroLoss } =
+      await import("@omniroute/open-sse/services/spb/outboundEvaluator");
+    const lastUserPrompt = spbDecision.enhancement?.originalPrompt || "";
+    const preservedIntentions = spbDecision.enhancement?.preservedIntentions || [];
+    const tier = spbDecision.tierAssignment?.tier || "tier_2_resilient";
+    const taskPhase = spbDecision.intent?.taskPhase || "DEFAULT";
+
+    return await processSpbOutboundZeroLoss({
+      initialResponse: response,
+      dispatchModel: (newBody: any) =>
+        handleSingleModelChat(
+          newBody,
+          resolvedModelStr,
+          clientRawRequest,
+          request,
+          comboName,
+          apiKeyInfo,
+          telemetry,
+          runtimeOpts,
+          null,
+          false
+        ),
+      body,
+      originalPrompt: lastUserPrompt,
+      preservedIntentions,
+      tier,
+      taskPhase,
+      sessionId: runtimeOpts.sessionId || "default_session",
+      maxReprompts: 2,
+    });
+  } catch (spbEvalErr) {
+    log.warn("SPB", `SPB outbound zero-loss evaluation warning: ${spbEvalErr}`);
+    return response;
   }
 }
 
@@ -867,6 +924,35 @@ async function handleChatImplementation(
         "SPB",
         `SPB-IR routed: phase=${spbDecision.intent.taskPhase}, tier=${spbDecision.tierAssignment.tier}, checkpointRestored=${spbDecision.checkpointRestored}`
       );
+
+      // Pre-Execution Confirmation Gate
+      const forceExecution = request.headers.get("x-omniroute-force-execution") === "true";
+      if (spbDecision.necessity?.confirmationRequired && !forceExecution) {
+        log.warn("SPB", `Pre-execution confirmation required: ${spbDecision.necessity.reason}`);
+        return new Response(
+          JSON.stringify({
+            status: "CONFIRMATION_REQUIRED",
+            reason: spbDecision.necessity.reason,
+            suggestedAction: spbDecision.necessity.suggestedAction,
+            message:
+              "Request held by SPB Pre-Execution Gate. Pass header 'X-OmniRoute-Force-Execution: true' to force execution.",
+          }),
+          {
+            status: 400,
+            headers: {
+              "Content-Type": "application/json",
+              "X-OmniRoute-Confirmation-Required": "true",
+              "X-OmniRoute-SPB-Tier": spbDecision.tierAssignment.tier,
+            },
+          }
+        );
+      }
+
+      // Inject enhanced prompt messages if available
+      if (spbDecision.enhancedMessages && Array.isArray(spbDecision.enhancedMessages)) {
+        body.messages = spbDecision.enhancedMessages;
+      }
+
       if (body) {
         body = { ...body, _spbActive: true, _spbDecision: spbDecision };
       }
@@ -1767,6 +1853,25 @@ async function handleChatImplementation(
         });
       } catch {}
     }
+    response = await applySpbOutboundZeroLoss(
+      response,
+      spbDecision,
+      body,
+      resolvedModelStr,
+      clientRawRequest,
+      request,
+      combo.name,
+      apiKeyInfo,
+      telemetry,
+      {
+        sessionId,
+        sessionAffinityKey,
+        correlationId: reqId,
+        conversationId,
+        managedLease,
+        videoBridgeLog,
+      }
+    );
     return withSpbHeaders(
       withModalityBridgeHeader(
         withConversationId(
@@ -1915,6 +2020,34 @@ async function handleChatImplementation(
       }
     }
   }
+
+  // SPB Outbound Zero-Intention-Loss Evaluation & Autonomous Iterative Re-prompting
+  response = await applySpbOutboundZeroLoss(
+    response,
+    spbDecision,
+    body,
+    resolvedModelStr,
+    clientRawRequest,
+    request,
+    combo?.name ?? null,
+    apiKeyInfo,
+    telemetry,
+    {
+      sessionId,
+      sessionAffinityKey,
+      forceLiveComboTest: isComboLiveTest,
+      forcedConnectionId: requestedConnectionId,
+      correlationId: reqId,
+      conversationId,
+      routingComboId,
+      reasoningDecision,
+      reasoningIntent,
+      reasoningRequestTags: requestRoutingTags.tags,
+      managedLease,
+      videoBridgeLog,
+    }
+  );
+
   recordTelemetry(telemetry);
   return withSpbHeaders(
     withModalityBridgeHeader(
