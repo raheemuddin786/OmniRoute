@@ -1021,3 +1021,11 @@ export const ccrEngine: CompressionEngine = {
     return validateCcrConfig(config);
   },
 };
+
+export {
+  expandIncomingCcrMarkers,
+  expandTextCcrMarkers,
+  resolveCcrContent,
+  cleanSpbDirectives,
+  tryUnwrapStringifiedJsonText,
+} from "./expandCcr";

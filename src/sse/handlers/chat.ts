@@ -868,6 +868,17 @@ async function handleChatImplementation(
     touchSession(sessionId);
   }
 
+  // Ingress CCR expansion: hydrate historical [CCR retrieve hash=...] markers (#14800)
+  if (Array.isArray(body?.messages)) {
+    try {
+      const { expandIncomingCcrMarkers } =
+        await import("@omniroute/open-sse/services/compression/engines/ccr/expandCcr");
+      body.messages = expandIncomingCcrMarkers(body.messages, sessionId);
+    } catch (expandErr) {
+      log.warn("CHAT", `CCR ingress expansion warning: ${expandErr}`);
+    }
+  }
+
   // SPB-IR: Intelligent Routing, Intent Classification & Zero-Loss State Checkpointing
   const strategyHeader =
     request.headers.get("x-omniroute-strategy") || request.headers.get("X-OmniRoute-Strategy");

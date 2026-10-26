@@ -13,6 +13,7 @@ import {
   storeBlock,
   DEFAULT_MIN_CHARS,
   RETRIEVAL_RAMP_FACTOR_DEFAULT,
+  expandIncomingCcrMarkers,
 } from "../compression/engines/ccr/index.ts";
 import { forkSession, ForkedSessionContext } from "./branchManager.ts";
 import {
@@ -85,10 +86,11 @@ export async function processSmartProxyRouting(
   const sessionId = context.sessionId || "default_session_" + Date.now();
 
   try {
-    // 1. Defensive payload validation
-    const messages = Array.isArray(context.messages)
+    // 1. Defensive payload validation & CCR ingress hydration
+    const rawMessages = Array.isArray(context.messages)
       ? context.messages
       : [{ role: "user", content: String(context.messages || "") }];
+    const messages = expandIncomingCcrMarkers(rawMessages, sessionId);
     const tools = Array.isArray(context.tools) ? context.tools : undefined;
 
     // 1b. CCR ingress offloading for intent classification only:
@@ -255,12 +257,19 @@ export async function processSmartProxyRouting(
         ? enhanceInboundPrompt(lastUserText, tierAssignment.tier, intent.taskPhase, messages)
         : undefined;
 
+    const isAlreadyExtensivePrompt =
+      lastUserText.length > 300 ||
+      lastUserText.includes("<system-reminder>") ||
+      lastUserText.includes("Role:") ||
+      lastUserText.includes("Task:");
+
     let enhancedMessages: Array<{ role: string; content?: unknown }> | undefined;
     if (
       enhancement &&
       enhancement.enhancedPrompt !== lastUserText &&
       lastUserIndex >= 0 &&
-      !isLastUserArrayContent
+      !isLastUserArrayContent &&
+      !isAlreadyExtensivePrompt
     ) {
       enhancedMessages = messages.map((m, idx) => {
         if (idx === lastUserIndex) {

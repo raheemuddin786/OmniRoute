@@ -12,6 +12,8 @@ import {
   pruneOldToolOutputsForReprompt,
 } from "../../open-sse/services/spb/outboundEvaluator.ts";
 import { processSmartProxyRouting } from "../../open-sse/services/spb/proxyBridge.ts";
+import { expandIncomingCcrMarkers } from "../../open-sse/services/compression/engines/ccr/index.ts";
+import { persistCcrBlock } from "../../src/lib/db/ccrBlocks.ts";
 import {
   saveLearnedOptimization,
   getLearnedOptimization,
@@ -557,4 +559,67 @@ test("processSmartProxyRouting never corrupts large prior messages with CCR mark
   }
   assert.equal(enhanced[0].content, largeGitStatus, "largeGitStatus must remain verbatim");
   assert.equal(enhanced[2].content, largeCodebaseDump, "largeCodebaseDump must remain verbatim");
+});
+
+test("expandIncomingCcrMarkers expands content-addressed CCR markers from durable storage and memory", () => {
+  const blockContent =
+    "Verbatim original content of a massive instruction block that was previously offloaded.";
+  const hash = "abcdef0123456789abcdef01";
+  persistCcrBlock({
+    principalId: "test_principal_session",
+    hash,
+    content: blockContent,
+    bytes: Buffer.byteLength(blockContent),
+    chars: blockContent.length,
+    lines: 1,
+    contentType: "text/plain",
+    source: "compression",
+    createdAt: Date.now(),
+    lastAccessedAt: Date.now(),
+    expiresAt: Date.now() + 86400000,
+  });
+
+  const replayedMessages = [
+    {
+      role: "user",
+      content: `Preamble text… [CCR retrieve hash=${hash} chars=87]`,
+    },
+    {
+      role: "assistant",
+      content: "Understood.",
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `Multi-part instruction… [CCR retrieve hash=${hash} chars=87]`,
+        },
+      ],
+    },
+  ];
+
+  const expanded = expandIncomingCcrMarkers(replayedMessages);
+  assert.equal(expanded[0].content, blockContent);
+  const part = (expanded[2].content as Array<{ type: string; text: string }>)[0];
+  assert.equal(part.text, blockContent);
+});
+
+test("expandIncomingCcrMarkers cleans legacy directive wrappers and unwraps stringified JSON text arrays", () => {
+  const rawTextPart = "System task description for engineering workflow.";
+  const stringifiedJson = JSON.stringify([{ type: "text", text: rawTextPart }]);
+  const poisonedMessage =
+    `[SPB-IR Apex Directive: Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants.]\n\n` +
+    `${stringifiedJson}\n\n` +
+    `[Completion Standard: Output complete, production-ready implementation. Strictly ZERO placeholders, NO '// TODO', and NO truncated code blocks.]`;
+
+  const messages = [{ role: "user", content: poisonedMessage }];
+  const cleaned = expandIncomingCcrMarkers(messages);
+
+  assert.equal(typeof cleaned[0].content, "string");
+  const content = cleaned[0].content as string;
+  assert.ok(!content.includes("SPB-IR Apex Directive"));
+  assert.ok(!content.includes("Completion Standard"));
+  assert.ok(!content.includes('[{"type":"text"'));
+  assert.equal(content, rawTextPart);
 });
