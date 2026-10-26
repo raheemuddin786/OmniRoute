@@ -141,11 +141,29 @@ async function verifyCookieValidity(
   }
 }
 
+interface CachedOrgId {
+  organizationId: string;
+  expiresAt: number;
+}
+const organizationIdCache = new Map<string, CachedOrgId>();
+const ORG_ID_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const MAX_ORG_ID_CACHE_ENTRIES = 500;
+
+export function __clearClaudeWebOrgCacheForTesting(): void {
+  organizationIdCache.clear();
+}
+
 async function getOrganizationId(
   cookieHeader: string,
   deviceId: string | undefined,
   signal?: AbortSignal | null
 ): Promise<OrganizationResolution> {
+  const cacheKey = cookieHeader.trim();
+  const cached = organizationIdCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { organizationId: cached.organizationId, failure: null };
+  }
+
   try {
     const response = await tlsFetchClaude(CLAUDE_WEB_ORGS_URL, {
       method: "GET",
@@ -156,6 +174,7 @@ async function getOrganizationId(
     const sink = currentAppliedProxySink();
     if (sink && response.status >= 400) sink.upstreamStatus = response.status;
     if (response.status === 401) {
+      organizationIdCache.delete(cacheKey);
       return { organizationId: null, failure: "authentication" };
     }
     if (response.status === 403) {
@@ -170,6 +189,7 @@ async function getOrganizationId(
       ) {
         return { organizationId: null, failure: "challenge" };
       }
+      organizationIdCache.delete(cacheKey);
       return { organizationId: null, failure: "authentication" };
     }
     if (response.status !== 200) {
@@ -185,9 +205,18 @@ async function getOrganizationId(
     }
     const record = organization as Record<string, unknown>;
     const identifier = record.uuid ?? record.id;
-    return typeof identifier === "string" && identifier.trim()
-      ? { organizationId: identifier.trim(), failure: null }
-      : { organizationId: null, failure: "unavailable" };
+    if (typeof identifier === "string" && identifier.trim()) {
+      const orgId = identifier.trim();
+      if (organizationIdCache.size >= MAX_ORG_ID_CACHE_ENTRIES) {
+        organizationIdCache.clear();
+      }
+      organizationIdCache.set(cacheKey, {
+        organizationId: orgId,
+        expiresAt: Date.now() + ORG_ID_CACHE_TTL_MS,
+      });
+      return { organizationId: orgId, failure: null };
+    }
+    return { organizationId: null, failure: "unavailable" };
   } catch {
     return { organizationId: null, failure: "unavailable" };
   }

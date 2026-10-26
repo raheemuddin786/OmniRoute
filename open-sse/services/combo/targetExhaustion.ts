@@ -204,7 +204,7 @@ function deriveTargetFailure(
   });
   const isModelScopedClaudeQuota = claudeQuotaScope.scope === "model";
   const isConnectionScopedClaudeQuota =
-    canonicalProvider === "claude" &&
+    (canonicalProvider === "claude" || canonicalProvider === "claude-web") &&
     opts.result.status === 429 &&
     isExplicitClaudeQuota429Text(opts.errorText) &&
     claudeQuotaScope.scope === "connection";
@@ -295,7 +295,7 @@ export function applyComboTargetExhaustion(
   }
 
   if (
-    canonicalProvider === "claude" &&
+    (canonicalProvider === "claude" || canonicalProvider === "claude-web") &&
     result.status === 429 &&
     isExplicitClaudeQuota429Text(errorText)
   ) {
@@ -464,7 +464,10 @@ export function isProviderQuotaExhausted(
   if (requestScopedFailure || isRequestScopedUpstreamFailure(structuredError)) {
     return false;
   }
-  if (canonicalProvider === "claude" && isClaudeMinuteRateLimitText(errorText)) {
+  if (
+    (canonicalProvider === "claude" || canonicalProvider === "claude-web") &&
+    isClaudeMinuteRateLimitText(errorText)
+  ) {
     return false;
   }
 
