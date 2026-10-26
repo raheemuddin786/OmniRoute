@@ -9,6 +9,7 @@ import {
   evaluateResponseIntent,
   extractResponseContent,
   processSpbOutboundZeroLoss,
+  pruneOldToolOutputsForReprompt,
 } from "../../open-sse/services/spb/outboundEvaluator.ts";
 import { processSmartProxyRouting } from "../../open-sse/services/spb/proxyBridge.ts";
 import {
@@ -352,4 +353,53 @@ test("processSpbOutboundZeroLoss autonomously intercepts and re-prompts flawed r
   const json = await finalResponse.json();
   assert.ok(json.choices[0].message.content.includes("export interface Config"));
   assert.ok(!json.choices[0].message.content.includes("TODO"));
+});
+
+test("evaluateResponseIntent detects premature truncation and unclosed code blocks", () => {
+  const truncatedResponse =
+    "Here is the code:\n```typescript\nexport function broken() {\n  return 1;";
+  const result = evaluateResponseIntent(
+    "Write function broken in TypeScript",
+    ["Function"],
+    truncatedResponse,
+    "tier_2_resilient",
+    "CODE_GENERATION",
+    "test_truncation"
+  );
+
+  assert.equal(result.isSatisfied, false);
+  assert.ok(result.oddities.some((o) => o.includes("unclosed code block")));
+});
+
+test("evaluateResponseIntent detects apologetic refusal fillers", () => {
+  const refusalResponse =
+    "As an AI language model, I cannot access your local files or execute code.";
+  const result = evaluateResponseIntent(
+    "Fix bug in auth.ts",
+    ["Bugfix"],
+    refusalResponse,
+    "tier_2_resilient",
+    "CODE_GENERATION",
+    "test_refusal"
+  );
+
+  assert.equal(result.isSatisfied, false);
+  assert.ok(result.oddities.some((o) => o.includes("apologetic refusal filler")));
+});
+
+test("pruneOldToolOutputsForReprompt conserves tokens by pruning historical tool outputs", () => {
+  const messages: Array<Record<string, unknown>> = [
+    { role: "user", content: "Check status" },
+    { role: "tool", content: "A".repeat(2000) }, // old tool output (should be truncated)
+    { role: "assistant", content: "Analyzing" },
+    { role: "tool", content: "B".repeat(1500) }, // recent tool output 2 (kept)
+    { role: "tool", content: "C".repeat(1500) }, // recent tool output 1 (kept)
+    { role: "user", content: "Implement fix" },
+  ];
+
+  const pruned = pruneOldToolOutputsForReprompt(messages);
+  assert.equal(pruned.length, messages.length);
+  assert.ok((pruned[1].content as string).includes("truncated for token conservation"));
+  assert.equal(pruned[3].content, "B".repeat(1500));
+  assert.equal(pruned[4].content, "C".repeat(1500));
 });

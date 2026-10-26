@@ -92,6 +92,25 @@ export function evaluateResponseIntent(
     score -= 0.15;
   }
 
+  // 4. Detect premature truncation (unclosed markdown code blocks)
+  const codeBlockCount = (responseText.match(/```/g) || []).length;
+  if (codeBlockCount % 2 !== 0) {
+    oddities.push(
+      "Response contains an unclosed code block indicating premature truncation or token cutoff."
+    );
+    score -= 0.3;
+  }
+
+  // 5. Detect apologetic or hallucinated refusal fillers
+  if (
+    /\b(As an AI language model|I cannot access your local files|I am unable to execute or implement)\b/i.test(
+      responseText
+    )
+  ) {
+    oddities.push("Response contains an apologetic refusal filler instead of required execution.");
+    score -= 0.4;
+  }
+
   // Clamp score
   score = Math.max(0.0, Math.min(1.0, score));
   const isSatisfied = score >= 0.85 && omissions.length === 0 && oddities.length === 0;
@@ -229,6 +248,30 @@ export async function extractResponseContent(
   };
 }
 
+export function pruneOldToolOutputsForReprompt(
+  messages: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  // Keep the most recent 2 tool outputs intact, truncate older historical tool outputs to 500 chars to conserve tokens
+  let toolCount = 0;
+  const reversed = [...messages].reverse();
+  const prunedReversed = reversed.map((msg) => {
+    if (
+      msg.role === "tool" ||
+      (typeof msg.content === "string" && msg.content.includes("tool_result"))
+    ) {
+      toolCount++;
+      if (toolCount > 2 && typeof msg.content === "string" && msg.content.length > 500) {
+        return {
+          ...msg,
+          content: msg.content.slice(0, 500) + "... [truncated for token conservation]",
+        };
+      }
+    }
+    return msg;
+  });
+  return prunedReversed.reverse();
+}
+
 /**
  * Reconstructs a streaming Response from buffered rawChunks, attaching SPB audit headers.
  */
@@ -318,12 +361,14 @@ export async function processSpbOutboundZeroLoss(args: {
 
     // Response failed criteria: formulate targeted re-prompt and query upstream again
     repromptCount++;
-    const currentMessages = Array.isArray(args.body?.messages) ? [...args.body.messages] : [];
-    const repromptMessages = [
+    const currentMessages = Array.isArray(args.body?.messages)
+      ? (args.body.messages as Array<Record<string, unknown>>)
+      : [];
+    const repromptMessages = pruneOldToolOutputsForReprompt([
       ...currentMessages,
       { role: "assistant", content: extracted.text },
       { role: "user", content: evalResult.suggestedReprompt },
-    ];
+    ]);
 
     try {
       const nextBody = {

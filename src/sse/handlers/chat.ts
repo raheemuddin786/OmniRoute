@@ -926,16 +926,26 @@ async function handleChatImplementation(
       );
 
       // Pre-Execution Confirmation Gate
-      const forceExecution = request.headers.get("x-omniroute-force-execution") === "true";
+      const requestUrl = new URL(request.url);
+      const forceExecution =
+        request.headers.get("x-omniroute-force-execution") === "true" ||
+        requestUrl.searchParams.get("force") === "true";
+
       if (spbDecision.necessity?.confirmationRequired && !forceExecution) {
         log.warn("SPB", `Pre-execution confirmation required: ${spbDecision.necessity.reason}`);
         return new Response(
           JSON.stringify({
-            status: "CONFIRMATION_REQUIRED",
-            reason: spbDecision.necessity.reason,
-            suggestedAction: spbDecision.necessity.suggestedAction,
-            message:
-              "Request held by SPB Pre-Execution Gate. Pass header 'X-OmniRoute-Force-Execution: true' to force execution.",
+            error: {
+              message: `Request held by SPB Pre-Execution Gate: ${spbDecision.necessity.reason}. Suggested: ${spbDecision.necessity.suggestedAction}. Pass header 'X-OmniRoute-Force-Execution: true' or query '?force=true' to proceed.`,
+              type: "confirmation_required",
+              code: "spb_confirmation_required",
+              param: null,
+              details: {
+                status: "CONFIRMATION_REQUIRED",
+                reason: spbDecision.necessity.reason,
+                suggestedAction: spbDecision.necessity.suggestedAction,
+              },
+            },
           }),
           {
             status: 400,
