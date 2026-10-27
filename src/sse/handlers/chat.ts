@@ -1997,12 +1997,12 @@ async function handleChatImplementation(
 
     // 2. If still not ok, try globalFallbackModel if configured
     if (!response.ok) {
-      const fallbackSettings = await getCachedSettings().catch(
+      const fallbackSettings = (await getCachedSettings().catch(
         () => ({}) as Record<string, unknown>
-      );
+      )) as Record<string, unknown>;
       const fallbackModel =
-        typeof (fallbackSettings as any)?.globalFallbackModel === "string"
-          ? (fallbackSettings as any).globalFallbackModel.trim()
+        typeof fallbackSettings?.globalFallbackModel === "string"
+          ? (fallbackSettings.globalFallbackModel as string).trim()
           : null;
       if (fallbackModel && fallbackModel !== resolvedModelStr) {
         log.info(
@@ -2035,8 +2035,57 @@ async function handleChatImplementation(
             log.info("GLOBAL_FALLBACK", `Global fallback "${fallbackModel}" succeeded`);
             response = fallbackResponse;
           }
-        } catch (err: any) {
-          log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log.warn("GLOBAL_FALLBACK", `Global fallback error: ${errMsg}`);
+        }
+      }
+    }
+
+    // 3. Resilient tier automatic recovery if still failing with 429 / 5xx
+    if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+      const tierConfig = getTierConfig();
+      const resilientCandidates = (
+        tierConfig?.tierModels?.resilient || [
+          "resilient/spb-tier-2",
+          "antigravity-tier2-resilient-execution",
+        ]
+      ).filter((m: string) => m !== resolvedModelStr);
+      for (const resModel of resilientCandidates) {
+        log.info(
+          "RESILIENT_FAILOVER",
+          `Model "${resolvedModelStr}" exhausted/failed (${response.status}) — initiating automatic resilient failover to: ${resModel}`
+        );
+        try {
+          const resResponse = await handleSingleModelChat(
+            body,
+            resModel,
+            clientRawRequest,
+            request,
+            null,
+            apiKeyInfo,
+            telemetry,
+            {
+              sessionId,
+              sessionAffinityKey,
+              forceLiveComboTest: isComboLiveTest,
+              forcedConnectionId: null,
+              correlationId: reqId,
+              conversationId,
+              managedLease,
+              videoBridgeLog,
+            },
+            null,
+            false
+          );
+          if (resResponse.ok) {
+            log.info("RESILIENT_FAILOVER", `Resilient failover to "${resModel}" succeeded`);
+            response = resResponse;
+            break;
+          }
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log.warn("RESILIENT_FAILOVER", `Failover attempt to "${resModel}" error: ${errMsg}`);
         }
       }
     }

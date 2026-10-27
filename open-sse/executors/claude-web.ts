@@ -383,7 +383,44 @@ async function errorResponseForTransport(
     if (upstreamRetryAfter) {
       extraHeaders["Retry-After"] = upstreamRetryAfter;
     }
-    return makeErrorResponse(429, "Rate limited by Claude Web API", { extraHeaders });
+    // Determine failure kind for lockout classification
+    let failureKind: "rate_limit" | "quota_exhausted" | "transient" = "rate_limit";
+    if (bodyText) {
+      const lower = String(bodyText).toLowerCase();
+      // Quota exhaustion keywords (daily/monthly limits, billing, credits)
+      const QUOTA_PATTERNS = [
+        /daily.*limit/i,
+        /daily.*quota/i,
+        /per.?day.*limit/i,
+        /monthly.*limit/i,
+        /monthly.*quota/i,
+        /per.?month.*limit/i,
+        /limited\s+to\s+[\d,]+.*(?:calls?|requests?).*per\s+month/i,
+        /quota.*exceed/i,
+        /exceed.*quota/i,
+        /insufficient.*quota/i,
+        /billing.*cap/i,
+        /credit.*exhaust/i,
+        /exhausted.*credits/i,
+        /out of credits/i,
+        /hard.?limit/i,
+        /plan.*limit/i,
+      ];
+      const isQuotaExhausted = QUOTA_PATTERNS.some((p) => p.test(lower));
+      if (isQuotaExhausted) {
+        failureKind = "quota_exhausted";
+      }
+    }
+    const failureKindKey =
+      failureKind === "quota_exhausted"
+        ? "quotaExhausted"
+        : failureKind === "rate_limit"
+          ? "rateLimitExceeded"
+          : "transient";
+    return makeErrorResponse(429, "Rate limited by Claude Web API", {
+      extraHeaders,
+      retryHint: { kind: failureKindKey },
+    });
   }
   if (isClaudeWebChallenge({ ...result, bodyText })) {
     return makeErrorResponse(403, "Claude Web returned a Cloudflare browser challenge", {

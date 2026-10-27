@@ -2783,6 +2783,25 @@ async function handleChatCoreInner({
     }
   };
 
+  const QUOTA_EXHAUSTED_PATTERNS: ReadonlyArray<RegExp> = [
+    /daily.*limit/i,
+    /daily.*quota/i,
+    /per.?day.*limit/i,
+    /monthly.*limit/i,
+    /monthly.*quota/i,
+    /per.?month.*limit/i,
+    /limited\s+to\s+[\d,]+.*(?:calls?|requests?).*per\s+month/i,
+    /quota.*exceed/i,
+    /exceed.*quota/i,
+    /insufficient.*quota/i,
+    /billing.*cap/i,
+    /credit.*exhaust/i,
+    /exhausted.*credits/i,
+    /out of credits/i,
+    /hard.?limit/i,
+    /plan.*limit/i,
+  ];
+
   const applyProviderFailureClassification = async ({
     statusCode,
     message,
@@ -2799,8 +2818,28 @@ async function handleChatCoreInner({
     targetModel: string;
   }) => {
     let errorType = classifyProviderError(statusCode, message, provider);
+
+    // Classify 429 errors based on upstream error body patterns (rate_limit vs quota_exhausted)
+    // This mirrors the classification in the Claude Web executor and ensures consistent
+    // model lockout behavior across all provider types
+    if (statusCode === 429 && upstreamErrorBody !== undefined && upstreamErrorBody !== null) {
+      const errorText = String(upstreamErrorBody).toLowerCase();
+      const isQuotaExhausted = QUOTA_EXHAUSTED_PATTERNS.some((p) => p.test(errorText));
+      if (isQuotaExhausted) {
+        errorType = PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED;
+      } else if (!errorType || errorType === PROVIDER_ERROR_TYPES.RATE_LIMITED) {
+        // Keep existing RATE_LIMITED if not quota exhaustion, or set if unknown
+        errorType = PROVIDER_ERROR_TYPES.RATE_LIMITED;
+      }
+      log?.warn?.(
+        "CLAUDE_WEB_429_CLASSIFICATION",
+        `429 classified as ${errorType}; body patterns matched: ${isQuotaExhausted}`
+      );
+    }
+
     if (statusCode === 429 && isModelScope()) {
       const decision = classifyModelScope429(message, normalizeHeaders(headers));
+      // Model scope decision takes precedence for model-scoped 429s
       errorType =
         decision.kind === "quota_exhausted"
           ? PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED
