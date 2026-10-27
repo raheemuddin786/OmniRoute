@@ -193,7 +193,51 @@ export async function processSmartProxyRouting(
       );
     }
 
-    // 4. Select model tier using dynamic config and tool requirements
+    // 3b. Stagnation detection & auto-recovery loop breaker
+    // Track consecutive read/inspection turns across turns. When an agent repeatedly
+    // performs read-only operations (Read, Grep, Glob, cat, ls) without progressing
+    // to code modification or test execution, we auto-steer to break the loop.
+    const STAGNATION_READ_THRESHOLD = 3;
+    let consecutiveReads: number;
+    let stagnationDetected = false;
+    let stagnationRecovered = false;
+    let isStagnant = false;
+    let autoRecoveryDirective: string | undefined;
+
+    // Calculate consecutiveReads: increment if INSPECTION_SYNTHESIS, reset otherwise
+    const priorConsecutiveReads = existingCheckpoint?.consecutiveReads ?? 0;
+    if (intent.taskPhase === "INSPECTION_SYNTHESIS") {
+      // Active inspection turn — increment the counter
+      consecutiveReads = (priorConsecutiveReads || 0) + 1;
+    } else {
+      // Non-inspection turn (CODE_GENERATION, TESTING_AND_VERIFICATION, etc.) — reset
+      consecutiveReads = 0;
+    }
+
+    // Detect stagnation: >= 3 consecutive read/inspection turns
+    if (consecutiveReads >= STAGNATION_READ_THRESHOLD) {
+      isStagnant = true;
+      stagnationDetected = true;
+      stagnationRecovered = true;
+
+      // Auto-steer taskPhase away from passive inspection to active execution
+      if (intent.taskPhase === "INSPECTION_SYNTHESIS") {
+        // Determine target phase based on original user intent signals
+        if (
+          /\b(test|spec|verify|assert|coverage)\b/i.test(intent.originalPrompt ?? "") ||
+          /\b(test|spec|verify|assert|coverage)\b/i.test(lastUserText || "")
+        ) {
+          intent.taskPhase = "TESTING_AND_VERIFICATION";
+        } else {
+          intent.taskPhase = "CODE_GENERATION";
+        }
+      }
+
+      // Escalate tier assignment to tier_2_resilient to enable tool execution
+      // (Tier 2 has full tool execution authority vs Tier 1 oversight or Tier 3 constraints)
+      // Note: tierConfig and selectModelTier are defined later; we defer tier upgrade
+      // to after tier selection by setting a flag that will be handled downstream.
+    }
     // Pass isToolResultTurn AND guidanceContract to enforce supervision
     // Tier 3 will require a guidanceContract for all phases
     const tierConfig = getTierConfig();
@@ -205,6 +249,21 @@ export async function processSmartProxyRouting(
       intent.isToolResultTurn,
       intent.guidanceContract
     );
+
+    // If stagnation was detected, force tier escalation to tier_2_resilient for active tool execution
+    if (isStagnant && tierAssignment.tier !== "tier_2_resilient") {
+      const resilientModels = tierConfig?.tierModels?.tier_2_resilient;
+      tierAssignment = {
+        tier: "tier_2_resilient",
+        recommendedModels:
+          resilientModels && resilientModels.length > 0
+            ? resilientModels
+            : tierAssignment.recommendedModels,
+        guidanceContract: tierAssignment.guidanceContract,
+        requiresTools: intent.requiresTools,
+        complexityScore: intent.complexityScore,
+      };
+    }
 
     if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
       // Model continuity: only preserve model continuity when the active turn is within the same tier.
@@ -238,7 +297,35 @@ export async function processSmartProxyRouting(
       tierAssignment.guidanceContract ||
       (existingCheckpoint?.guidanceContract as GuidanceContract | undefined);
 
-    if (
+    if (isStagnant) {
+      // Refresh GuidanceContract with anti-stagnation execution constraints
+      const cleanInstruction = cleanUserInstruction(lastUserText) || "Active execution recovery";
+      activeGuidanceContract = {
+        supervisorTier: "tier_2_resilient",
+        taskSpecification: cleanInstruction,
+        constraints: [
+          "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections.",
+          "Immediately perform code modification or test execution using available tools.",
+          "Zero unverified assumptions — all code changes must be tool-verified",
+          "Preserve existing architecture and contracts during modifications",
+        ],
+        instructions: [cleanInstruction],
+        targetFiles: [],
+        verificationCriteria: [
+          "All test and verification suites must pass with zero errors",
+          "No pending read-only inspection cycles remain",
+        ],
+        createdAt: Date.now(),
+      };
+      tierAssignment.guidanceContract = activeGuidanceContract;
+
+      // Inject auto-recovery directive into the inbound prompt to override passive exploration
+      autoRecoveryDirective =
+        "[SPB-IR Auto-Recovery Directive: Active Execution Mandate]\n" +
+        "Autonomous execution loop recovery engaged: Excessive consecutive inspection cycles detected (≥ 3 turns)." +
+        "\nYou are prohibited from performing further read-only inspection calls in this turn." +
+        "\nYou must directly write/edit the solution or execute verification tests immediately.";
+    } else if (
       !activeGuidanceContract &&
       (tierAssignment.tier === "tier_1_apex" || tierAssignment.tier === "tier_2_resilient")
     ) {
@@ -261,7 +348,7 @@ export async function processSmartProxyRouting(
     }
 
     // 6. Save new state checkpoint asynchronously / safely
-    // Include guidanceContract in checkpoint for session restore and verification loop
+    // Include guidanceContract and stagnation tracking in checkpoint for session restore and verification loop
     try {
       saveCheckpoint({
         sessionId,
@@ -269,6 +356,8 @@ export async function processSmartProxyRouting(
         taskPhase: intent.taskPhase,
         modelTier: tierAssignment.tier,
         guidanceContract: activeGuidanceContract,
+        consecutiveReads,
+        stagnationRecovered: stagnationRecovered ? 1 : 0,
         statePayload: JSON.stringify({
           messagesCount: messages.length,
           timestamp: Date.now(),
@@ -364,9 +453,46 @@ export async function processSmartProxyRouting(
         statusCode: 200,
         latencyMs,
         timestamp: Date.now(),
+        stagnationDetected,
+        stagnationRecovered,
       });
     } catch (telemErr) {
       console.warn("[SPB Bridge] Telemetry recording warning:", telemErr);
+    }
+
+    // Inject auto-recovery directive into messages if stagnation was detected
+    if (autoRecoveryDirective) {
+      // If enhancement produced an enhanced prompt, prepend the directive
+      if (enhancement && enhancement.enhancedPrompt) {
+        enhancement.enhancedPrompt = `${autoRecoveryDirective}\n\n${enhancement.enhancedPrompt}`;
+      } else if (lastUserIndex >= 0 && messages[lastUserIndex]) {
+        // Inject directly into the last user message's content
+        const targetMsg = messages[lastUserIndex];
+        if (typeof targetMsg.content === "string") {
+          messages[lastUserIndex] = {
+            ...targetMsg,
+            content: `${autoRecoveryDirective}\n\n${targetMsg.content}`,
+          };
+        } else if (Array.isArray(targetMsg.content)) {
+          let replacedText = false;
+          messages[lastUserIndex] = {
+            ...targetMsg,
+            content: targetMsg.content.map((part) => {
+              if (
+                !replacedText &&
+                part &&
+                typeof part === "object" &&
+                (part as Record<string, unknown>).type === "text" &&
+                typeof (part as Record<string, unknown>).text === "string"
+              ) {
+                replacedText = true;
+                return { ...part, text: `${autoRecoveryDirective}\n\n${part.text}` };
+              }
+              return part;
+            }),
+          };
+        }
+      }
     }
 
     return {

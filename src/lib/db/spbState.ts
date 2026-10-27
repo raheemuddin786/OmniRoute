@@ -13,6 +13,8 @@ export interface SpbStateCheckpoint {
   modelTier: string;
   statePayload: string;
   guidanceContract?: unknown;
+  consecutiveReads?: number;
+  stagnationRecovered?: number;
   createdAt: number;
 }
 
@@ -25,6 +27,8 @@ export interface SpbTelemetryRecord {
   statusCode: number;
   latencyMs: number;
   timestamp: number;
+  stagnationDetected?: boolean;
+  stagnationRecovered?: boolean;
 }
 
 export interface SpbTelemetrySummary {
@@ -88,6 +92,8 @@ export function initSpbStateTable(): void {
         model_tier TEXT NOT NULL,
         state_payload TEXT NOT NULL,
         guidance_contract TEXT,
+        consecutive_reads INTEGER NOT NULL DEFAULT 0,
+        stagnation_recovered INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_spb_anchor ON spb_state_checkpoints(prompt_anchor_hash);
@@ -154,6 +160,34 @@ export function initSpbStateTable(): void {
     } catch {
       // Column already exists or table newly created with it
     }
+    try {
+      db.exec(
+        "ALTER TABLE spb_state_checkpoints ADD COLUMN consecutive_reads INTEGER NOT NULL DEFAULT 0;"
+      );
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec(
+        "ALTER TABLE spb_state_checkpoints ADD COLUMN stagnation_recovered INTEGER NOT NULL DEFAULT 0;"
+      );
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec(
+        "ALTER TABLE spb_telemetry_audit ADD COLUMN stagnation_detected INTEGER NOT NULL DEFAULT 0;"
+      );
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec(
+        "ALTER TABLE spb_telemetry_audit ADD COLUMN stagnation_recovered INTEGER NOT NULL DEFAULT 0;"
+      );
+    } catch {
+      // Column already exists
+    }
 
     _tablesInitialized = true;
   } catch (err) {
@@ -173,21 +207,38 @@ export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
     const guidanceContractStr = checkpoint.guidanceContract
       ? JSON.stringify(checkpoint.guidanceContract)
       : null;
-    db.prepare(
-      `
-      INSERT OR REPLACE INTO spb_state_checkpoints
-      (session_id, prompt_anchor_hash, task_phase, model_tier, state_payload, guidance_contract, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `
-    ).run(
+    // Prepare additional columns if they exist
+    const columns = [
+      "session_id",
+      "prompt_anchor_hash",
+      "task_phase",
+      "model_tier",
+      "state_payload",
+      "guidance_contract",
+      "created_at",
+    ];
+    const values = [
       checkpoint.sessionId,
       checkpoint.promptAnchorHash,
       checkpoint.taskPhase,
       checkpoint.modelTier,
       checkpoint.statePayload,
       guidanceContractStr,
-      checkpoint.createdAt
-    );
+      checkpoint.createdAt,
+    ];
+    if (checkpoint.consecutiveReads !== undefined) {
+      columns.push("consecutive_reads");
+      values.push(checkpoint.consecutiveReads);
+    }
+    if (checkpoint.stagnationRecovered !== undefined) {
+      columns.push("stagnation_recovered");
+      values.push(checkpoint.stagnationRecovered);
+    }
+    db.prepare(
+      `INSERT OR REPLACE INTO spb_state_checkpoints (` +
+        columns.join(", ") +
+        `) VALUES (${values.map(() => "?").join(", ")})`
+    ).run(...values);
     return true;
   } catch (err) {
     console.error("[SPB State] Failed to save checkpoint:", err);
@@ -199,12 +250,21 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
   try {
     initSpbStateTable();
     const db = getDbInstance();
+    const selectColumns = [
+      "session_id",
+      "prompt_anchor_hash",
+      "task_phase",
+      "model_tier",
+      "state_payload",
+      "guidance_contract",
+      "created_at",
+      "consecutive_reads",
+      "stagnation_recovered",
+    ];
     const row = db
       .prepare(
-        `
-      SELECT session_id, prompt_anchor_hash, task_phase, model_tier, state_payload, guidance_contract, created_at
-      FROM spb_state_checkpoints WHERE session_id = ?
-    `
+        `SELECT ${selectColumns.join(", ")}
+      FROM spb_state_checkpoints WHERE session_id = ?`
       )
       .get(sessionId) as
       | {
@@ -215,6 +275,8 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
           state_payload: string;
           guidance_contract?: string | null;
           created_at: number;
+          consecutive_reads?: number;
+          stagnation_recovered?: number;
         }
       | undefined;
 
@@ -229,7 +291,7 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
       }
     }
 
-    return {
+    const checkpoint: SpbStateCheckpoint = {
       sessionId: row.session_id,
       promptAnchorHash: row.prompt_anchor_hash,
       taskPhase: row.task_phase,
@@ -238,6 +300,10 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
       guidanceContract: parsedGuidance,
       createdAt: row.created_at,
     };
+    if (row.consecutive_reads !== undefined) checkpoint.consecutiveReads = row.consecutive_reads;
+    if (row.stagnation_recovered !== undefined)
+      checkpoint.stagnationRecovered = row.stagnation_recovered;
+    return checkpoint;
   } catch (err) {
     console.error("[SPB State] Failed to get checkpoint:", err);
     return null;
@@ -266,8 +332,9 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
     db.prepare(
       `
       INSERT INTO spb_telemetry_audit
-      (session_id, task_phase, model_tier, checkpoint_restored, fallback_triggered, status_code, latency_ms, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (session_id, task_phase, model_tier, checkpoint_restored, fallback_triggered, status_code, latency_ms, timestamp,
+       stagnation_detected, stagnation_recovered)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       record.sessionId,
@@ -277,7 +344,9 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       record.fallbackTriggered ? 1 : 0,
       record.statusCode,
       record.latencyMs,
-      record.timestamp
+      record.timestamp,
+      record.stagnationDetected ? 1 : 0,
+      record.stagnationRecovered ? 1 : 0
     );
   } catch (err) {
     console.error("[SPB State] Failed to record telemetry:", err);

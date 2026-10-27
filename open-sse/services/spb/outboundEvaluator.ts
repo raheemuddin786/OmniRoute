@@ -23,6 +23,7 @@ export interface ResponseEvaluationResult {
   hasCommandDelegation?: boolean;
   claimsExecutionWithoutTools?: boolean;
   hasHallucinatedPaths?: boolean;
+  isStagnantAnalysisLoop?: boolean;
   suggestedReprompt?: string;
   repromptCount: number;
 }
@@ -140,7 +141,8 @@ export function evaluateResponseIntent(
     score -= 0.4;
   }
 
-  // 6. Detect conversational stalling when tools are available but unused
+  // 6. Detect conversational stalling / analysis loop when tools are available but unused
+  let isStagnantAnalysisLoop = false;
   if (
     clientHasTools &&
     !hasToolCalls &&
@@ -154,6 +156,20 @@ export function evaluateResponseIntent(
         "Response offered conversational intent without calling tools or providing complete code."
       );
       score -= 0.35;
+      isStagnantAnalysisLoop = true;
+    }
+    // Also detect explicit "Would you like me to proceed?" or permission-seeking
+    if (
+      /\b(would you like me to|shall i|should i proceed|let me know if|I can proceed|please confirm)\b/i.test(
+        responseText
+      ) &&
+      !hasToolCalls
+    ) {
+      oddities.push(
+        "Response sought user permission for autonomous action instead of executing directly."
+      );
+      score -= 0.3;
+      isStagnantAnalysisLoop = true;
     }
   }
 
@@ -283,6 +299,7 @@ export function evaluateResponseIntent(
     hasCommandDelegation,
     claimsExecutionWithoutTools,
     hasHallucinatedPaths,
+    isStagnantAnalysisLoop,
     suggestedReprompt,
     repromptCount: isSatisfied ? 0 : 1,
   };
