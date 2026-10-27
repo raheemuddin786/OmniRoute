@@ -49,7 +49,10 @@ import { resolveRequestAutoControls } from "@omniroute/open-sse/services/autoCom
 import { isVerifiedNativeCodexRequest } from "@omniroute/open-sse/config/codexIdentity.ts";
 import { resolveCompressionSettings } from "@omniroute/open-sse/handlers/chatCore/compressionSettings.ts";
 import type { CompressionExclusions } from "@omniroute/open-sse/services/compression/exclusions.ts";
-import { resolveComboConfig } from "@omniroute/open-sse/services/comboConfig.ts";
+import {
+  resolveComboConfig,
+  DEFAULT_COMBO_TARGET_TIMEOUT_MS,
+} from "@omniroute/open-sse/services/comboConfig.ts";
 import { injectHandoffIntoBody } from "@omniroute/open-sse/services/contextHandoff.ts";
 import { runWithTransientBackendRetry } from "@omniroute/open-sse/services/transientBackendRetry.ts";
 import {
@@ -1403,10 +1406,14 @@ async function handleChatImplementation(
         models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
         config: {
           targetTimeoutMs:
-            typeof currentTierConfig?.fallbackTimeout === "number" &&
-            currentTierConfig.fallbackTimeout > 0
-              ? Math.max(currentTierConfig.fallbackTimeout, 10000)
-              : 20000,
+            typeof process !== "undefined" &&
+            process.env?.SPB_TARGET_TIMEOUT_MS &&
+            Number(process.env.SPB_TARGET_TIMEOUT_MS) > 0
+              ? Number(process.env.SPB_TARGET_TIMEOUT_MS)
+              : typeof currentTierConfig?.fallbackTimeout === "number" &&
+                  currentTierConfig.fallbackTimeout >= 60000
+                ? currentTierConfig.fallbackTimeout
+                : DEFAULT_COMBO_TARGET_TIMEOUT_MS,
         },
       };
     } else if (isIncompatibleModality) {
@@ -1754,6 +1761,10 @@ async function handleChatImplementation(
       const uniqueCandidates = Array.from(new Set(candidateTierModels));
 
       for (const altModel of uniqueCandidates) {
+        if (request?.signal?.aborted || clientRawRequest?.signal?.aborted) {
+          log.info("SPB_FALLBACK", "Client disconnected (499) — stopping SPB fallback loop");
+          return errorResponse(499, "Request aborted");
+        }
         log.info(
           "SPB_FALLBACK",
           `Combo "${combo.name}" exhausted (${response.status}) — attempting SPB tier fallback: ${altModel}`
@@ -1974,6 +1985,10 @@ async function handleChatImplementation(
         (m: string) => m !== resolvedModelStr
       );
       for (const altModel of candidates) {
+        if (request?.signal?.aborted || clientRawRequest?.signal?.aborted) {
+          log.info("SPB_FALLBACK", "Client disconnected (499) — stopping SPB fallback loop");
+          return errorResponse(499, "Request aborted");
+        }
         log.info(
           "SPB_FALLBACK",
           `Single model "${resolvedModelStr}" failed (${response.status}) — attempting SPB tier fallback: ${altModel}`
