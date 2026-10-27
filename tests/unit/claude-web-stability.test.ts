@@ -124,4 +124,21 @@ describe("Claude Web Stability & Model Resolution Architecture", () => {
     // But the whole provider claude-web must NOT be permanently poisoned, so sibling connection 2 remains eligible
     assert.equal(sets.exhaustedProviders.has("claude-web"), false);
   });
+
+  it("exposes reasoning effort variants for Claude Web models", async () => {
+    const { appendClaudeEffortVariants } =
+      await import("../../open-sse/utils/claudeEffortVariants.ts");
+    const models = [
+      { id: "claude-sonnet-5-5", owned_by: "claude-web" },
+      { id: "claude-fable-5-1", owned_by: "claude-web" },
+    ];
+    const withEffort = appendClaudeEffortVariants(models);
+    const ids = withEffort.map((m) => m.id);
+
+    assert.ok(ids.includes("claude-sonnet-5-5-low"));
+    assert.ok(ids.includes("claude-sonnet-5-5-medium"));
+    assert.ok(ids.includes("claude-sonnet-5-5-high"));
+    assert.ok(ids.includes("claude-sonnet-5-5-xhigh"));
+    assert.ok(ids.includes("claude-fable-5-1-xhigh"));
+  });
 });
