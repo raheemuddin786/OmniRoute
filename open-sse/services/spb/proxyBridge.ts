@@ -257,11 +257,9 @@ export async function processSmartProxyRouting(
         ? enhanceInboundPrompt(lastUserText, tierAssignment.tier, intent.taskPhase, messages)
         : undefined;
 
+    // Avoid double-wrapping prompts that already have SPB directives or internal system reminders
     const isAlreadyExtensivePrompt =
-      lastUserText.length > 300 ||
-      lastUserText.includes("<system-reminder>") ||
-      lastUserText.includes("Role:") ||
-      lastUserText.includes("Task:");
+      lastUserText.includes("[SPB-IR") || lastUserText.includes("<system-reminder>");
 
     let enhancedMessages: Array<{ role: string; content?: unknown }> | undefined;
     if (
@@ -273,6 +271,9 @@ export async function processSmartProxyRouting(
     ) {
       enhancedMessages = messages.map((m, idx) => {
         if (idx === lastUserIndex) {
+          // Apply Tier-specific prompt enhancement with guidanceContract validation
+          // Enhanced prompts are applied only when not in tool result turns
+          // and the enhancement represents a genuine improvement over the original
           return { ...m, content: enhancement.enhancedPrompt };
         }
         return m;

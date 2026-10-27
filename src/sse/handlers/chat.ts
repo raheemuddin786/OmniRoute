@@ -1272,14 +1272,22 @@ async function handleChatImplementation(
     // to ensure supervised execution of modifications. Without guidance,
     // automatically escalate to Tier 2 resilient execution.
     const tierAssignment = spbDecision?.tierAssignment ?? {};
-    if (activeTier === "tier_3_local" && !tierAssignment.guidanceContract) {
+    const taskPhase = spbDecision?.intent?.taskPhase;
+    const isUnguidedMutationTier3 =
+      activeTier === "tier_3_local" &&
+      (tierAssignment.requiresGuidance ||
+        (!tierAssignment.guidanceContract && taskPhase !== "INSPECTION_SYNTHESIS"));
+
+    if (isUnguidedMutationTier3) {
       log.warn(
         "SPB",
         "Tier 3 execution without guidanceContract - escalating to Tier 2 resilient for supervision"
       );
       // Re-route by overriding the decision's tier to Tier 2
       (spbDecision.tierAssignment as any).tier = "tier_2_resilient";
+      (spbDecision.tierAssignment as any).recommendedModels = tierModels.resilient || [];
       (spbDecision.tierAssignment as any).requiresGuidance = true;
+      (spbDecision as any).selectedModel = tierModels.resilient?.[0] || null;
       activeTier = "tier_2_resilient";
     }
 

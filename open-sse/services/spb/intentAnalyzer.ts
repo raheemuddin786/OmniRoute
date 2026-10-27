@@ -227,9 +227,14 @@ export function classifyIntent(
   // - Tool execution feedback (code mutation/tests): Tier 2 (Resilient execution & verification)
   // - Read-only inspection / exploration tool feedback: Tier 3 (Inspection synthesis)
   // - Test verification: Tier 2 (Testing & verification)
-  // - Refactoring: Tier 3 (Fast refactor)
-  // - Formatting / Deterministic: Tier 3 (Deterministic routing)
+  // - Refactoring: Tier 3 (Fast refactor) - requires GuidanceContract from supervisor tiers
+  // - Formatting / Deterministic: Tier 3 (Deterministic routing) - requires GuidanceContract from supervisor tiers
   // - Code generation / Tool execution: Tier 2 (Code generation)
+
+  // THE CRITICAL NEW ARCHITECTURAL CONSTRAINT:
+  // All Tier 3 execution (FAST_REFACTOR, DETERMINISTIC_ROUTING) must have GuidanceContract from supervisor tiers
+  // This prevents unguided code mutations and enforces architectural supervision for ALL Tier 3 operations
+
   if (hasPureArchitectureIntent) {
     taskPhase = "ARCHITECTURAL_PLANNING";
     complexityScore = 0.9;

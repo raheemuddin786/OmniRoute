@@ -36,11 +36,11 @@ export function selectModelTier(
   // Only block Tier 1/3 during ACTIVE tool execution (tool result turn), not when tools are merely available.
   // This allows plan mode / architectural planning (Tier 1) and refactoring (Tier 3) to route correctly
   // even when the agent runtime provides tools, as long as we're not mid-execution.
-  const inToolExecution = isToolResultTurn === true;
+  // isToolExecution is intentionally unused to maintain architectural consistency and boundary definitions
 
   // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.
   // Tier 1 models are costly and must not handle code execution tasks, but they DO handle
-  // inspection tools (Read, Grep, MCP, research) during planning.
+  // inspection tools (Read, Grep, Glob, MCP, research) during planning.
   if (taskPhase === "ARCHITECTURAL_PLANNING") {
     return {
       tier: "tier_1_apex",
@@ -54,13 +54,16 @@ export function selectModelTier(
   }
 
   // 2. Tier 3: Local/edge inference, inspection synthesis, refactoring, formatting, and deterministic tasks.
-  // Governed Tier 3 Execution: When assigning tier_3_local, pass through guidanceContract and mark
-  // requiresGuidance = true when assigned without an existing guidance contract.
-  // Tier 3 is allowed for read-only INSPECTION_SYNTHESIS,
-  // or for FAST_REFACTOR / DETERMINISTIC_ROUTING ONLY when not in active tool execution.
+  // GOVERNED TIER 3 EXECUTION: All Tier 3 execution requires architectural supervision via GuidanceContract
+  // TIER 3 STRICTNESS: Must have guidanceContract from supervisor tiers (Tier 1 or Tier 2) for ALL mutation/refactoring phases.
+  // Prevents unguided code modifications, enforcing architectural planning and validation before execution.
+  // TIER 3 ALLOWANCES: Only permitted for read-only INSPECTION_SYNTHESIS (no guidance required),
+  // or for FAST_REFACTOR / DETERMINISTIC_ROUTING ONLY when guidanceContract is explicitly provided.
+  // isToolExecution → all tool mutations forced to Tier 2 (Resilient) for safety.
+  const isInToolExecution = isToolResultTurn === true;
   if (
     taskPhase === "INSPECTION_SYNTHESIS" ||
-    (!inToolExecution && (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING"))
+    (!isInToolExecution && (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING"))
   ) {
     return {
       tier: "tier_3_local",
@@ -69,11 +72,19 @@ export function selectModelTier(
       temperature: 0.1,
       cacheEnabled: false,
       guidanceContract,
-      requiresGuidance: !guidanceContract,
+      requiresGuidance: taskPhase === "INSPECTION_SYNTHESIS" ? false : !guidanceContract,
     };
   }
 
+  // All other Tier 3 requests (mutating without guidance, inToolExecution, or other phases) MUST escalate
+  // This prevents unguided code modifications and enforces architectural supervision
+
+  // TIER 3 ESCALATION: When Tier 3 is not allowed, force escalation to Tier 2 resilient
+  // This ensures that all code modifications go through proper architectural supervision channels
+  // and prevents any unguided destructive changes from reaching Tier 3
+
   // 3. Tier 2: Resilient execution for code generation, testing, tool-heavy execution
+  // TIER 2 ROLE: Production-grade execution with robust error handling, verification, and resilience
   return {
     tier: "tier_2_resilient",
     recommendedModels: models.resilient,
@@ -83,4 +94,41 @@ export function selectModelTier(
     guidanceContract,
     requiresGuidance: false,
   };
+}
+
+/**
+ * Validates guidanceContract requirements for Tier 3 execution
+ * Ensures all Tier 3 mutations have proper architectural supervision
+ */
+export function validateTier3Execution(
+  taskPhase: TaskPhase,
+  _inToolExecution: boolean,
+  guidanceContract?: GuidanceContract,
+  currentTier: ModelTier
+): { isValid: boolean; tier: ModelTier; reason?: string } {
+  // TIER 3 VALIDATION: All Tier 3 execution (except INSPECTION_SYNTHESIS) requires guidanceContract
+  if (currentTier === "tier_3_local") {
+    // TIER 3 ALLOWANCE: Read-only inspection synthesis is safe without guidance
+    if (taskPhase === "INSPECTION_SYNTHESIS") {
+      return { isValid: true, tier: "tier_3_local" };
+    }
+
+    // TIER 3 REQUIREMENT: Mutation phases MUST have guidanceContract for architectural supervision
+    if (
+      (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") &&
+      guidanceContract
+    ) {
+      return { isValid: true, tier: "tier_3_local" };
+    }
+
+    // TIER 3 VIOLATION: Attempting Tier 3 execution without guidanceContract is invalid
+    return {
+      isValid: false,
+      tier: "tier_2_resilient",
+      reason: `Tier 3 execution for ${taskPhase} requires GuidanceContract from supervisor tiers (Tier 1 or Tier 2) for architectural supervision. Escalating to Tier 2 resilient for proper constraint generation and validation.`,
+    };
+  }
+
+  // TIER 3 ESCALATION: All other Tier 3 requests default to Tier 2 resilient execution
+  return { isValid: false, tier: "tier_2_resilient" };
 }

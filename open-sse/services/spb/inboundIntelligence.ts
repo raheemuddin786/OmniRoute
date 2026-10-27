@@ -9,7 +9,7 @@
  * 4. In-flight token conservation, anchor deduplication, and context optimization.
  */
 
-import { TaskPhase } from "./intentAnalyzer.ts";
+import { TaskPhase, type GuidanceContract } from "./intentAnalyzer.ts";
 import { ModelTier } from "./tieredRegistry.ts";
 import { getLearnedOptimization } from "../../../src/lib/db/spbState.ts";
 import { createHash } from "node:crypto";
@@ -39,6 +39,42 @@ export interface PromptEnhancementResult {
   necessity: NecessityCheckResult;
   preservedIntentions: string[];
   anchors: ContextualAnchors;
+}
+
+/**
+ * Validates that all Tier 3 execution has proper guidanceContract enforcement
+ * Prevents unguided code mutations by ensuring architectural supervision
+ */
+export function validateTier3GuidanceContract(
+  tierAssignment: { tier: string },
+  taskPhase: TaskPhase,
+  guidanceContract?: GuidanceContract
+): { isValid: boolean; reason?: string } {
+  // Tier 3 execution MUST have guidanceContract for ALL mutation/refactoring phases
+  const isTier3 = tierAssignment.tier === "tier_3_local";
+  const isMutationPhase = taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING";
+
+  if (isTier3 && isMutationPhase) {
+    if (!guidanceContract) {
+      return {
+        isValid: false,
+        reason:
+          "Tier 3 mutation phases require GuidanceContract from supervisor tiers for architectural supervision and validation",
+      };
+    }
+
+    // Validate that guidanceContract contains required architectural constraints
+    if (!guidanceContract.supervisorTier || !guidanceContract.taskSpecification) {
+      return {
+        isValid: false,
+        reason:
+          "GuidanceContract missing required architectural constraints (supervisorTier, taskSpecification)",
+      };
+    }
+  }
+
+  // All other configurations are valid
+  return { isValid: true };
 }
 
 /**
@@ -262,14 +298,14 @@ export function enhanceInboundPrompt(
 
     case "tier_2_resilient": {
       tierPreamble =
-        "[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries.]";
+        "[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries. Never delete or overwrite working implementations without explicit architectural specification.]";
       appliedOptimizations.push("Tier 2 Resilient Implementation & Error Boundary Enforcement");
       break;
     }
 
     case "tier_3_local": {
       tierPreamble =
-        "[SPB-IR Local Directive: Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations.]";
+        "[SPB-IR Local Directive: Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations. Strictly preserve all existing code and architecture.]";
       appliedOptimizations.push("Tier 3 Surgical Scope & Deterministic Boundary Confinement");
       break;
     }
