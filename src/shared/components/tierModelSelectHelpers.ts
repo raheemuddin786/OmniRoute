@@ -157,10 +157,21 @@ export function detectComboCapabilities(combo: {
         m.toLowerCase().startsWith("ollama") ||
         m.toLowerCase().startsWith("local")
     );
-  const nameMatchesLocal =
-    LOCAL_MODEL_FAMILY_REGEX.test(comboName) || /local|edge|ollama|offline/i.test(comboName);
 
-  const isLocalEngine = allLocal || nameMatchesLocal;
+  const hasLocalMember = memberModelStrings.some(
+    (m) =>
+      LOCAL_MODEL_FAMILY_REGEX.test(m) ||
+      m.toLowerCase().startsWith("ollama") ||
+      m.toLowerCase().startsWith("local") ||
+      /(flash|lite|mini|free|small|turbo|fast|haiku|edge)/i.test(m)
+  );
+
+  const nameMatchesLocal =
+    LOCAL_MODEL_FAMILY_REGEX.test(comboName) ||
+    /local|edge|ollama|offline|fast|speed|quick|mini|lite|free|refactor|small/i.test(comboName) ||
+    /local|edge|ollama|offline|fast|speed|quick|mini|lite|free|refactor|small/i.test(comboDesc);
+
+  const isLocalEngine = allLocal || hasLocalMember || nameMatchesLocal;
 
   const hasToolCalling = !memberModelStrings.every((m) =>
     /(embedding|tts|rerank|diffusion|whisper)/i.test(m)
