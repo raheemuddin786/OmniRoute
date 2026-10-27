@@ -1401,6 +1401,13 @@ async function handleChatImplementation(
         type: "spb",
         strategy: "priority",
         models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
+        config: {
+          targetTimeoutMs:
+            typeof currentTierConfig?.fallbackTimeout === "number" &&
+            currentTierConfig.fallbackTimeout > 0
+              ? Math.max(currentTierConfig.fallbackTimeout, 10000)
+              : 20000,
+        },
       };
     } else if (isIncompatibleModality) {
       const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
