@@ -336,6 +336,7 @@ export async function processSmartProxyRouting(
         cleanUserInstruction(lastUserText) || "Supervised autonomous execution";
       activeGuidanceContract = {
         supervisorTier: tierAssignment.tier,
+        origin: tierAssignment.tier === "tier_1_apex" ? "supervisor" : "auto",
         taskSpecification: cleanInstruction,
         constraints: [
           "Zero unverified assumptions",

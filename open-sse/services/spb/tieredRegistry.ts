@@ -62,12 +62,20 @@ export function selectModelTier(
   // INSPECTION_SYNTHESIS involving code review, model analysis, or deterministic task assessment
   // ALWAYS requires guidanceContract. isToolExecution → all tool mutations forced to Tier 2 (Resilient) for safety.
   const isInToolExecution = isToolResultTurn === true;
+  const isSupervisedCodeGen =
+    taskPhase === "CODE_GENERATION" &&
+    !!guidanceContract &&
+    (guidanceContract.origin === "supervisor" || guidanceContract.supervisorTier === "tier_1_apex");
+
   console.log(
-    `[SPB TieredRegistry] Evaluating taskPhase: ${taskPhase}, isInToolExecution: ${isInToolExecution}, guidanceContract present: ${!!guidanceContract}`
+    `[SPB TieredRegistry] Evaluating taskPhase: ${taskPhase}, isInToolExecution: ${isInToolExecution}, guidanceContract present: ${!!guidanceContract}, isSupervisedCodeGen: ${isSupervisedCodeGen}`
   );
   if (
     taskPhase === "INSPECTION_SYNTHESIS" ||
-    (!isInToolExecution && (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING"))
+    (!isInToolExecution &&
+      (taskPhase === "FAST_REFACTOR" ||
+        taskPhase === "DETERMINISTIC_ROUTING" ||
+        isSupervisedCodeGen))
   ) {
     console.log(
       `[SPB TieredRegistry] Routing taskPhase ${taskPhase} to tier_3_local (guidanceContract: ${!!guidanceContract})`

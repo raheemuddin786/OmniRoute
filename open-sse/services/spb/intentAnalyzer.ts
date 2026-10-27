@@ -14,6 +14,7 @@ export type TaskPhase =
 
 export interface GuidanceContract {
   supervisorTier?: "tier_1_apex" | "tier_2_resilient" | string;
+  origin?: "supervisor" | "auto";
   taskSpecification?: string;
   constraints?: string[];
   instructions?: string[];

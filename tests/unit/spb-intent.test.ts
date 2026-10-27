@@ -384,7 +384,7 @@ test("SPB session transitions smoothly from Tier 1 planning to Tier 2 execution 
   });
   assert.equal(turn1.tierAssignment.tier, "tier_1_apex");
 
-  // Turn 2: Execution / Code Generation (Must transition to Tier 2, NOT trapped in Tier 1)
+  // Turn 2: Execution / Code Generation with GuidanceContract from checkpoint — reaches Tier 3
   const turn2 = await processSmartProxyRouting({
     sessionId,
     messages: [
@@ -399,7 +399,11 @@ test("SPB session transitions smoothly from Tier 1 planning to Tier 2 execution 
       },
     ],
   });
-  assert.equal(turn2.tierAssignment.tier, "tier_2_resilient");
+  assert.equal(turn2.tierAssignment.tier, "tier_3_local");
+  assert.ok(
+    turn2.tierAssignment.guidanceContract,
+    "GuidanceContract must be present for Tier 3 CODE_GENERATION"
+  );
   assert.equal(turn2.checkpointRestored, false); // Tier transition cleanly decouples from Tier 1 apex model
 
   // Turn 3: Refactor / Clean up (Must transition to Tier 3 Local, NOT trapped in Tier 1)
