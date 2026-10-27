@@ -1280,8 +1280,7 @@ async function handleChatImplementation(
     const tierAssignment = spbDecision?.tierAssignment ?? {};
     const _taskPhase = spbDecision?.intent?.taskPhase; // All Tier 3 phases require guidance, no phase exemptions
     const isUnguidedMutationTier3 =
-      activeTier === "tier_3_local" &&
-      (tierAssignment.requiresGuidance || !tierAssignment.guidanceContract);
+      activeTier === "tier_3_local" && !tierAssignment.guidanceContract;
 
     if (isUnguidedMutationTier3) {
       log.warn(

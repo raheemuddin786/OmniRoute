@@ -110,18 +110,9 @@ export function validateTier3Execution(
   guidanceContract?: GuidanceContract,
   currentTier: ModelTier
 ): { isValid: boolean; tier: ModelTier; reason?: string } {
-  // TIER 3 VALIDATION: All Tier 3 execution (except INSPECTION_SYNTHESIS) requires guidanceContract
+  // TIER 3 VALIDATION: All Tier 3 execution requires guidanceContract
   if (currentTier === "tier_3_local") {
-    // TIER 3 ALLOWANCE: Read-only inspection synthesis is safe without guidance
-    if (taskPhase === "INSPECTION_SYNTHESIS") {
-      return { isValid: true, tier: "tier_3_local" };
-    }
-
-    // TIER 3 REQUIREMENT: Mutation phases MUST have guidanceContract for architectural supervision
-    if (
-      (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING") &&
-      guidanceContract
-    ) {
+    if (guidanceContract) {
       return { isValid: true, tier: "tier_3_local" };
     }
 

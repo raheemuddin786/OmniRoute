@@ -20,6 +20,9 @@ export interface ResponseEvaluationResult {
   satisfactionScore: number; // 0.0 to 1.0
   omissions: string[];
   oddities: string[];
+  hasCommandDelegation?: boolean;
+  claimsExecutionWithoutTools?: boolean;
+  hasHallucinatedPaths?: boolean;
   suggestedReprompt?: string;
   repromptCount: number;
 }
@@ -157,22 +160,28 @@ export function evaluateResponseIntent(
   // 7. Detect command delegation to user when autonomous execution was commanded
   // Patterns that indicate the model is suggesting the user run commands manually
   // instead of executing them autonomously via tools.
+  const isAutonomousPrompt =
+    /\b(autonomous|execute|run|verify|test|capture|screenshot|implement|build|fix)\b/i.test(
+      originalPrompt
+    );
+
   const commandDelegationPatterns = [
-    // Direct commands to run in terminal / shell
-    /\\b(?:you can run|run the following|execute the command|open your terminal and run|run this command|try running)\\b/i,
-    // Package managers with run/test/install invoked as user instruction
-    /\\b(?:npm (?:run|test|install)|npx |yarn |pnpm |cargo |pytest |mvn |gradlew)\\b/i,
-    // Shell-style commands being suggested back to user
-    /\\b(?:\\$ .*|cd .*|git .*)\\b/i,
+    // Direct commands telling the user to run in terminal / shell
+    /\b(?:you can run|please run|run the following|try running|execute the command|open your terminal and run|run this command)\b/i,
+    /\b(?:in your terminal|in the terminal|from the terminal|on your terminal)\b/i,
+    // Explicit instructions to execute package manager commands manually
+    /\b(?:run|execute)\s+(?:npm|npx|yarn|pnpm|cargo|pytest|mvn|make|bash|vitest|playwright)\b/i,
     // "I cannot execute" followed by suggesting user do it
-    /\\bI (?:cannot|can not|am unable to) (?:execute|run|run this|take on this task)\\b/i,
+    /\bI (?:cannot|can not|am unable to) (?:execute|run|run this|take on this task)\b/i,
     // "As an AI" refusal patterns where model deflects execution
-    /\\bAs an AI (?:language model|I cannot|I'm unable)\\b/i,
+    /\bAs an AI (?:language model|I cannot|I'm unable)\b/i,
   ];
 
-  const hasCommandDelegation = commandDelegationPatterns.some((pattern) =>
-    pattern.test(responseText)
-  );
+  const hasCommandDelegation =
+    isAutonomousPrompt &&
+    clientHasTools &&
+    !hasToolCalls &&
+    commandDelegationPatterns.some((pattern) => pattern.test(responseText));
 
   if (hasCommandDelegation) {
     oddities.push(
@@ -183,17 +192,32 @@ export function evaluateResponseIntent(
     score -= 0.4;
   }
 
-  // 8. Detect hallucinated or non-existent file paths in responses
-  // Patterns that suggest the model invented paths that don't match the repo structure
+  // 8. Detect false completion claims when execution was requested but no tools were invoked
+  let claimsExecutionWithoutTools = false;
+  if (
+    clientHasTools &&
+    !hasToolCalls &&
+    /\b(run|execute|capture|screenshot|verify|test)\b/i.test(originalPrompt)
+  ) {
+    claimsExecutionWithoutTools =
+      /\b(I have (?:run|executed|captured|verified|tested)|successfully (?:run|executed|captured|verified|tested)|screenshot (?:has been |is )?saved|all tests? passed)\b/i.test(
+        responseText
+      );
+    if (claimsExecutionWithoutTools) {
+      oddities.push(
+        "Response claimed test execution, screenshot capture, or verification without invoking any execution tools."
+      );
+      score -= 0.45;
+    }
+  }
+
+  // 9. Detect hallucinated or placeholder file paths in responses
+  // Patterns that suggest the model invented placeholder paths that don't match the repo structure
   // or made claims about files that cannot be verified via tool output.
   const hallucinatedPathPatterns = [
     // Generic placeholder paths commonly hallucinated
-    /\/[a-zA-Z0-9_-]{3,}\/\.\.\/.[a-zA-Z0-9_-]{3,}/,
-    /\/tmp\/[a-zA-Z0-9_\-]{3,}/,
-    /\/var\/tmp\/[a-zA-Z0-9_\-]{3,}/,
-    /\b[SD]rive [C-Z]:\/[a-zA-Z0-9_\-]{3,}(?![^ ]*\.[a-zA-Z]{2,4}(?:\s|$))/,
-    // Paths that don't reference actual repo structure but claim existence
-    /\b(?:src|app|open-sse|tests|docs)\/\.[a-zA-Z0-9_\-]{3,}(?![^ ]*\.[a-zA-Z]{2,4}(?:\s|$))/,
+    /(?:\/path\/to\/|\/dummy\/|\/fake\/|\[insert path\]|<path-to-|<file-path>)/i,
+    /\b[A-Za-z]:\/(?:path|dummy|fake)\//i,
   ];
 
   const hasHallucinatedPaths = hallucinatedPathPatterns.some((pattern) =>
@@ -256,6 +280,9 @@ export function evaluateResponseIntent(
     satisfactionScore: score,
     omissions,
     oddities,
+    hasCommandDelegation,
+    claimsExecutionWithoutTools,
+    hasHallucinatedPaths,
     suggestedReprompt,
     repromptCount: isSatisfied ? 0 : 1,
   };

@@ -653,3 +653,184 @@ test("expandIncomingCcrMarkers cleans legacy directive wrappers and unwraps stri
   assert.ok(!content.includes('[{"type":"text"'));
   assert.equal(content, rawTextPart);
 });
+
+test("evaluateResponseIntent detects command delegation and penalizes satisfaction score", async () => {
+  const { evaluateResponseIntent } =
+    await import("../../open-sse/services/spb/outboundEvaluator.ts");
+
+  const delegatingResponse =
+    "To verify the changes, you can run the following command in your terminal:\n```bash\nnpm run test:e2e\n```\nLet me know if you encounter any issues.";
+  const evalResult = evaluateResponseIntent(
+    "Run end-to-end tests and verify the UI",
+    ["run", "test"],
+    delegatingResponse,
+    "tier_3_local",
+    "TESTING_AND_VERIFICATION",
+    "test_session_delegation",
+    false,
+    true
+  );
+
+  assert.equal(evalResult.hasCommandDelegation, true);
+  assert.ok(
+    evalResult.satisfactionScore < 0.7,
+    `Score ${evalResult.satisfactionScore} should be heavily penalized for command delegation`
+  );
+  assert.ok(
+    evalResult.oddities.some((o) => o.includes("delegates command execution to the user")),
+    "Should record delegation oddity"
+  );
+  assert.ok(
+    evalResult.suggestedReprompt?.includes("delegates command execution"),
+    "Should include delegation in suggested reprompt"
+  );
+});
+
+test("evaluateResponseIntent detects false execution claims without tool calls", async () => {
+  const { evaluateResponseIntent } =
+    await import("../../open-sse/services/spb/outboundEvaluator.ts");
+
+  const falseClaimResponse =
+    "I have executed the test suite, verified the logs, and taken the screenshot of the dashboard. Everything is working as expected.";
+  const evalResult = evaluateResponseIntent(
+    "Execute tests and capture screenshots",
+    ["execute", "screenshot"],
+    falseClaimResponse,
+    "tier_3_local",
+    "TESTING_AND_VERIFICATION",
+    "test_session_false_claim",
+    false,
+    true
+  );
+
+  assert.equal(evalResult.claimsExecutionWithoutTools, true);
+  assert.ok(
+    evalResult.satisfactionScore < 0.7,
+    `Score ${evalResult.satisfactionScore} should be penalized for false execution claims`
+  );
+});
+
+test("evaluateResponseIntent detects hallucinated placeholder paths", async () => {
+  const { evaluateResponseIntent } =
+    await import("../../open-sse/services/spb/outboundEvaluator.ts");
+
+  const hallucinatedResponse =
+    "You can find the test results at /path/to/results.json and the config at /your/workspace/config.yaml";
+  const evalResult = evaluateResponseIntent(
+    "Find the test results",
+    ["results"],
+    hallucinatedResponse,
+    "tier_3_local",
+    "INSPECTION_SYNTHESIS",
+    "test_session_hallucination",
+    false,
+    false
+  );
+
+  assert.equal(evalResult.hasHallucinatedPaths, true);
+  assert.ok(
+    evalResult.satisfactionScore < 0.75,
+    `Score ${evalResult.satisfactionScore} should be penalized for hallucinated paths`
+  );
+});
+
+test("normalizeInterleavedSystemMessages consolidates fragmented directives into a single leading system message", async () => {
+  const { normalizeInterleavedSystemMessages } =
+    await import("../../open-sse/services/spb/inboundIntelligence.ts");
+
+  const fragmentedMessages = [
+    { role: "system", content: "SessionStart: initial session instructions" },
+    { role: "user", content: "Run the build" },
+    { role: "assistant", content: "Running the build now..." },
+    {
+      role: "user",
+      content:
+        "english-only output style is active. Remember to follow the specific guidelines for this style.",
+    },
+    { role: "user", content: "Now run the unit tests" },
+  ];
+
+  const normalized = normalizeInterleavedSystemMessages(fragmentedMessages);
+
+  // First message must be the consolidated system message
+  assert.equal(normalized[0].role, "system");
+  const sysContent = normalized[0].content as string;
+  assert.ok(sysContent.includes("SessionStart: initial session instructions"));
+  assert.ok(sysContent.includes("english-only output style is active"));
+
+  // The inline system directive should not be kept as a user message
+  const userMessages = normalized.filter((m) => m.role === "user");
+  assert.equal(userMessages.length, 2);
+  assert.equal(userMessages[0].content, "Run the build");
+  assert.equal(userMessages[1].content, "Now run the unit tests");
+});
+
+test("processSmartProxyRouting synthesizes and propagates GuidanceContract across turns", async () => {
+  const { getCheckpoint } = await import("../../src/lib/db/spbState.ts");
+  const sessionId = "spb_guidance_contract_test_" + Date.now();
+
+  // Turn 1: Resilient code generation turn establishes a supervisor GuidanceContract
+  const turn1 = await processSmartProxyRouting({
+    sessionId,
+    messages: [{ role: "user", content: "Implement the authentication handler in src/auth.ts" }],
+  });
+
+  assert.ok(turn1.tierAssignment.guidanceContract, "Turn 1 must synthesize a GuidanceContract");
+  const contract = turn1.tierAssignment.guidanceContract as Record<string, unknown>;
+  assert.equal(contract.supervisorTier, "tier_2_resilient");
+
+  // Verify checkpoint persisted the contract
+  const checkpoint = getCheckpoint(sessionId);
+  assert.ok(checkpoint, "Checkpoint must be persisted in database");
+  assert.ok(checkpoint?.guidanceContract, "Checkpoint must store guidanceContract");
+
+  // Turn 2: Subsequent refactor/format turn inherits the guidance contract and routes to tier_3_local safely
+  const turn2 = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: "Implement the authentication handler in src/auth.ts" },
+      { role: "assistant", content: "Authentication handler implemented." },
+      { role: "user", content: "Clean up, format, and lint the helper function" },
+    ],
+  });
+
+  assert.ok(
+    turn2.tierAssignment.guidanceContract,
+    "Turn 2 must restore the supervisor GuidanceContract"
+  );
+  assert.equal(turn2.tierAssignment.tier, "tier_3_local");
+});
+
+test("processSmartProxyRouting enhances array-based user content blocks with role directives", async () => {
+  const sessionId = "spb_array_content_enhancement_" + Date.now();
+
+  const decision = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Fix the race condition in the cache provider",
+          },
+        ] as unknown as string,
+      },
+    ],
+  });
+
+  assert.ok(decision.enhancedMessages, "Expected enhancedMessages for array content");
+  const enhancedContent = decision.enhancedMessages![0].content as Array<{
+    type: string;
+    text: string;
+  }>;
+  assert.ok(Array.isArray(enhancedContent), "Enhanced content must remain an array of blocks");
+  assert.ok(
+    enhancedContent[0].text.includes("[Role Directive:"),
+    "Enhanced array block must contain Role Directive"
+  );
+  assert.ok(
+    enhancedContent[0].text.includes("Fix the race condition"),
+    "Original instruction must be preserved"
+  );
+});

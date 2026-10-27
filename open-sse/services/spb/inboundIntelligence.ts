@@ -275,14 +275,6 @@ export function enhanceInboundPrompt(
   const roleDirective = assignRoleDirective(tier, taskPhase, anchors);
   appliedOptimizations.push(`Role Assignment: ${roleDirective.assignedRole}`);
 
-  // Normalize and consolidate system/interleaved messages so lightweight models don't get context-confused
-  const normalizedMessages = normalizeInterleavedSystemMessages(messages);
-  // Prepend consolidated system directives after the tier preamble so the model receives a
-  // single coherent system directive at the start, followed by clean conversational context.
-  const normalizedSystemBlock =
-    normalizedMessages.length > 0
-      ? `\n[Normalized System Directives: Consolidated from ${normalizedMessages.length} interleaved system/inline directives]`
-      : "";
   // Retrieve learned optimization if available in memory/DB
   const patternHash = computePatternHash(prompt, taskPhase);
   const learnedOpt = getLearnedOptimization(patternHash);
@@ -333,8 +325,8 @@ export function enhanceInboundPrompt(
     }
   }
 
-  // Construct structured zero-intention-loss prompt
-  let enhancedText = `${tierPreamble}\n\n`;
+  // Construct structured zero-intention-loss prompt with explicit role assignment
+  let enhancedText = `${tierPreamble}\n[Role Directive: ${roleDirective.assignedRole}]\n${roleDirective.roleScope}\n\n`;
 
   // Attach context anchors if helpful and not already in prompt
   if (anchors.referencedFiles.length > 0 && !resolvedPrompt.includes(anchors.referencedFiles[0])) {
@@ -343,9 +335,6 @@ export function enhanceInboundPrompt(
   }
 
   enhancedText += resolvedPrompt;
-
-  // Integrate normalized system directives if any were consolidated
-  enhancedText += normalizedSystemBlock;
 
   // Append strict zero-omission completion mandate
   const zeroOmissionMandate =
@@ -377,7 +366,7 @@ export function enhanceInboundPrompt(
  * user intent. This prevents premature stoppage, hallucinated file paths, and command delegation
  * to the user when autonomous execution is required.
  */
-function assignRoleDirective(
+export function assignRoleDirective(
   tier: ModelTier,
   taskPhase: TaskPhase,
   _anchors: ContextualAnchors
@@ -396,12 +385,11 @@ function assignRoleDirective(
           "MANDATORY: Execute all commands and tests autonomously using available tools. " +
           "NEVER output instructions asking the user to manually run commands (e.g., npm run test:e2e, $ test, git). " +
           "NEVER halt prematurely before capturing all evidence, test outputs, and status proofs. " +
-          "If a test or verification pipeline must be invoked, invoke it via tools (bash, MCP, browser) or report the exact command ";
-        "as a hallucinated path rather than echoing it back to the user for manual execution. " +
-          "Your scope includes: running verification pipelines, capturing live inspection outputs, preserving intent-adherence scores, ";
-        ("and generating concise completion summaries with actual evidence.");
+          "If a test or verification pipeline must be invoked, invoke it via tools (bash, MCP, browser). " +
+          "Your scope includes: running verification pipelines, capturing live inspection outputs, preserving intent-adherence scores, " +
+          "and generating concise completion summaries backed by verified execution output.";
 
-        return { assignedRole: assignedRole, roleScope: roleScope };
+        return { assignedRole, roleScope };
       }
       // Default Tier 3 surgical refactor / formatting
       assignedRole = "Precision Surgical Refactoring Engineer";
@@ -410,7 +398,7 @@ function assignRoleDirective(
         "Strictly preserve all existing code and architecture. Never output manual terminal commands to the user when task requires autonomous execution. " +
         "If the user requests an E2E test run or screenshot capture, invoke the verification pipeline via tools rather than echoing commands back.";
 
-      return { assignedRole: assignedRole, roleScope: roleScope };
+      return { assignedRole, roleScope };
 
     case "tier_2_resilient":
       if (taskPhase === "CODE_GENERATION" || taskPhase === "TESTING_AND_VERIFICATION") {
@@ -457,7 +445,7 @@ function assignRoleDirective(
  * so the model receives a single coherent system directive at the start, followed by clean
  * conversational context.
  */
-function normalizeInterleavedSystemMessages(
+export function normalizeInterleavedSystemMessages(
   messages: Array<{ role: string; content?: unknown }>
 ): Array<{ role: string; content?: unknown }> {
   // Consolidate any system-role messages or inline system directive strings found mid-array
@@ -479,29 +467,26 @@ function normalizeInterleavedSystemMessages(
   // First pass: collect all system messages and inline system directives
   for (const msg of messages) {
     if (msg.role === "system") {
-      // Real system message — keep as-is at front
+      const text =
+        typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
       if (leadingSystemText === null) {
-        leadingSystemText = String(msg.content || "");
+        leadingSystemText = text;
       } else {
-        leadingSystemText += " " + (msg.content || "");
+        leadingSystemText += "\n\n" + text;
       }
-    } else if (msg.role === "user" || msg.role === "assistant") {
-      // Non-system message — stop collecting leading system text
-      break;
-    } else {
-      // Unknown role — check content for system directive patterns
-      const content = msg.content;
-      if (typeof content === "string") {
-        const lower = content.toLowerCase();
-        let isSystemDir = false;
-        for (const pattern of systemDirectivePatterns) {
-          if (pattern.test(lower)) {
-            isSystemDir = true;
-            break;
-          }
+    } else if (typeof msg.content === "string") {
+      let isSystemDir = false;
+      for (const pattern of systemDirectivePatterns) {
+        if (pattern.test(msg.content.trim())) {
+          isSystemDir = true;
+          break;
         }
-        if (isSystemDir && leadingSystemText === null) {
-          leadingSystemText = String(content);
+      }
+      if (isSystemDir) {
+        if (leadingSystemText === null) {
+          leadingSystemText = msg.content.trim();
+        } else {
+          leadingSystemText += "\n\n" + msg.content.trim();
         }
       }
     }
@@ -515,28 +500,19 @@ function normalizeInterleavedSystemMessages(
     });
   }
 
-  // Now add the remaining messages (non-system, preserving their order)
-  // Skip any messages already accounted for in the leading system block
-  const seenIds = new Set<string>();
+  // Now add the remaining non-system messages, preserving order
   for (const msg of messages) {
-    const key = `${msg.role}:${msg.content}`;
-    if (seenIds.has(key)) continue;
-    seenIds.add(key);
-
-    // Skip system messages that were already consolidated
     if (msg.role === "system") continue;
 
-    // Skip content that was already captured in leading system text
-    if (msg.role !== "system" && typeof msg.content === "string") {
-      const lower = msg.content.toLowerCase();
-      let alreadyCaptured = false;
+    if (typeof msg.content === "string") {
+      let isSystemDir = false;
       for (const pattern of systemDirectivePatterns) {
-        if (pattern.test(lower)) {
-          alreadyCaptured = true;
+        if (pattern.test(msg.content.trim())) {
+          isSystemDir = true;
           break;
         }
       }
-      if (!alreadyCaptured) {
+      if (!isSystemDir) {
         consolidated.push(msg);
       }
     } else {

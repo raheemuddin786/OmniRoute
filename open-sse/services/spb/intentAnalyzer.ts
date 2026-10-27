@@ -90,7 +90,7 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
   };
 }
 
-function cleanUserInstruction(text: string): string {
+export function cleanUserInstruction(text: string): string {
   // Strip <system-reminder>...</system-reminder> blocks injected by agent environments
   const cleaned = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "").trim();
   if (

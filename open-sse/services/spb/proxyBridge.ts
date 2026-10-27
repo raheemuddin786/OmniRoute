@@ -4,7 +4,12 @@
  * telemetry auditing, and autonomous zero-loss fallback recovery with full fault tolerance.
  */
 
-import { classifyIntent, IntentProfile } from "./intentAnalyzer.ts";
+import {
+  classifyIntent,
+  IntentProfile,
+  cleanUserInstruction,
+  GuidanceContract,
+} from "./intentAnalyzer.ts";
 import { selectModelTier, TierAssignment } from "./tieredRegistry.ts";
 import { getTierConfig } from "../tierResolver.ts";
 import { saveCheckpoint, getCheckpoint, recordSpbTelemetry } from "../../../src/lib/db/spbState.ts";
@@ -28,6 +33,7 @@ import {
   enhanceInboundPrompt,
   evaluateRequestNecessity,
   computePatternHash,
+  normalizeInterleavedSystemMessages,
   type PromptEnhancementResult,
   type NecessityCheckResult,
 } from "./inboundIntelligence.ts";
@@ -52,6 +58,7 @@ export {
   enhanceInboundPrompt,
   evaluateRequestNecessity,
   computePatternHash,
+  normalizeInterleavedSystemMessages,
   evaluateResponseIntent,
   processSpbOutboundZeroLoss,
   extractResponseContent,
@@ -140,81 +147,7 @@ export async function processSmartProxyRouting(
     // 2. Classify intent with error boundary (using classification messages)
     const intent = classifyIntent(classificationMessages, tools);
 
-    // 3. Select model tier using dynamic config and tool requirements
-    // Pass isToolResultTurn AND guidanceContract to enforce supervision
-    // Tier 3 will require a guidanceContract for mutation/refactoring phases
-    const tierConfig = getTierConfig();
-    let tierAssignment = selectModelTier(
-      intent.taskPhase,
-      intent.complexityScore,
-      tierConfig?.tierModels,
-      intent.requiresTools,
-      intent.isToolResultTurn,
-      intent.guidanceContract
-    );
-
-    // 4. Check for existing checkpoint & state resumption with safe error handling
-    let checkpointRestored = false;
-    let existingCheckpoint = null;
-    let restoredModel: string | null = null;
-    try {
-      existingCheckpoint = getCheckpoint(sessionId);
-      if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
-        // Model continuity: only preserve model continuity when the active turn is within the same tier.
-        // Never force execution, code generation, testing, or refactoring into Tier 1.
-        if (existingCheckpoint.modelTier === tierAssignment.tier) {
-          checkpointRestored = true;
-          if (existingCheckpoint.statePayload) {
-            try {
-              const parsed = JSON.parse(existingCheckpoint.statePayload);
-              if (
-                typeof parsed.modelName === "string" &&
-                tierAssignment.recommendedModels.includes(parsed.modelName)
-              ) {
-                restoredModel = parsed.modelName;
-              }
-            } catch {
-              // Ignore corrupted payload JSON
-            }
-          }
-        }
-      }
-    } catch (dbErr) {
-      console.warn(
-        "[SPB Bridge] Checkpoint retrieval warning (proceeding without checkpoint):",
-        dbErr
-      );
-    }
-
-    const selectedModel =
-      restoredModel ||
-      (tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
-        ? tierAssignment.recommendedModels[0]
-        : null);
-
-    // 5. Save new state checkpoint asynchronously / safely
-    // Include guidanceContract in checkpoint for session restore and verification loop
-    try {
-      saveCheckpoint({
-        sessionId,
-        promptAnchorHash: intent.promptAnchorHash,
-        taskPhase: intent.taskPhase,
-        modelTier: tierAssignment.tier,
-        guidanceContract: tierAssignment.guidanceContract,
-        statePayload: JSON.stringify({
-          messagesCount: messages.length,
-          timestamp: Date.now(),
-          modelName: selectedModel,
-        }),
-        createdAt: Date.now(),
-      });
-    } catch (dbSaveErr) {
-      console.warn("[SPB Bridge] Checkpoint save warning:", dbSaveErr);
-    }
-
-    const latencyMs = Date.now() - startTime;
-
-    // 6. Inbound Intelligence, Prompt Enhancement & Necessity Gate
+    // Extract latest user content & detect structured payload format
     let lastUserIndex = -1;
     let lastUserText = "";
     let isLastUserArrayContent = false;
@@ -244,6 +177,112 @@ export async function processSmartProxyRouting(
       }
     }
 
+    // 3. Check for existing checkpoint & state resumption with safe error handling
+    let checkpointRestored = false;
+    let existingCheckpoint = null;
+    let restoredModel: string | null = null;
+    try {
+      existingCheckpoint = getCheckpoint(sessionId);
+      if (existingCheckpoint?.guidanceContract && !intent.guidanceContract) {
+        intent.guidanceContract = existingCheckpoint.guidanceContract as GuidanceContract;
+      }
+    } catch (dbErr) {
+      console.warn(
+        "[SPB Bridge] Checkpoint retrieval warning (proceeding without checkpoint):",
+        dbErr
+      );
+    }
+
+    // 4. Select model tier using dynamic config and tool requirements
+    // Pass isToolResultTurn AND guidanceContract to enforce supervision
+    // Tier 3 will require a guidanceContract for all phases
+    const tierConfig = getTierConfig();
+    let tierAssignment = selectModelTier(
+      intent.taskPhase,
+      intent.complexityScore,
+      tierConfig?.tierModels,
+      intent.requiresTools,
+      intent.isToolResultTurn,
+      intent.guidanceContract
+    );
+
+    if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
+      // Model continuity: only preserve model continuity when the active turn is within the same tier.
+      // Never force execution, code generation, testing, or refactoring into Tier 1.
+      if (existingCheckpoint.modelTier === tierAssignment.tier) {
+        checkpointRestored = true;
+        if (existingCheckpoint.statePayload) {
+          try {
+            const parsed = JSON.parse(existingCheckpoint.statePayload);
+            if (
+              typeof parsed.modelName === "string" &&
+              tierAssignment.recommendedModels.includes(parsed.modelName)
+            ) {
+              restoredModel = parsed.modelName;
+            }
+          } catch {
+            // Ignore corrupted payload JSON
+          }
+        }
+      }
+    }
+
+    const selectedModel =
+      restoredModel ||
+      (tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
+        ? tierAssignment.recommendedModels[0]
+        : null);
+
+    // 5. Synthesize or propagate guidanceContract across session turns
+    let activeGuidanceContract: GuidanceContract | undefined =
+      tierAssignment.guidanceContract ||
+      (existingCheckpoint?.guidanceContract as GuidanceContract | undefined);
+
+    if (
+      !activeGuidanceContract &&
+      (tierAssignment.tier === "tier_1_apex" || tierAssignment.tier === "tier_2_resilient")
+    ) {
+      const cleanInstruction =
+        cleanUserInstruction(lastUserText) || "Supervised autonomous execution";
+      activeGuidanceContract = {
+        supervisorTier: tierAssignment.tier,
+        taskSpecification: cleanInstruction,
+        constraints: [
+          "Zero unverified assumptions",
+          "Preserve existing architecture and contracts",
+          "Execute all required tool operations autonomously without delegating commands to the user",
+        ],
+        instructions: [cleanInstruction],
+        targetFiles: [],
+        verificationCriteria: ["All test and verification suites must pass with zero errors"],
+        createdAt: Date.now(),
+      };
+      tierAssignment.guidanceContract = activeGuidanceContract;
+    }
+
+    // 6. Save new state checkpoint asynchronously / safely
+    // Include guidanceContract in checkpoint for session restore and verification loop
+    try {
+      saveCheckpoint({
+        sessionId,
+        promptAnchorHash: intent.promptAnchorHash,
+        taskPhase: intent.taskPhase,
+        modelTier: tierAssignment.tier,
+        guidanceContract: activeGuidanceContract,
+        statePayload: JSON.stringify({
+          messagesCount: messages.length,
+          timestamp: Date.now(),
+          modelName: selectedModel,
+        }),
+        createdAt: Date.now(),
+      });
+    } catch (dbSaveErr) {
+      console.warn("[SPB Bridge] Checkpoint save warning:", dbSaveErr);
+    }
+
+    const latencyMs = Date.now() - startTime;
+
+    // 7. Inbound Intelligence, Prompt Enhancement & Necessity Gate
     // Never enforce confirmation gates or overwrite structured content on tool result turns
     // or when the message consists of tool execution outputs. Doing so alters tool schemas and halts autonomous agent runs.
     const isToolTurn = intent.isToolResultTurn || (isLastUserArrayContent && !lastUserText.trim());
@@ -253,27 +292,65 @@ export async function processSmartProxyRouting(
         ? enhanceInboundPrompt(lastUserText, tierAssignment.tier, intent.taskPhase, messages)
         : undefined;
 
-    // Avoid double-wrapping prompts that already have SPB directives or internal system reminders
+    // Avoid double-wrapping prompts that already have SPB directives or role assignments
     const isAlreadyExtensivePrompt =
-      lastUserText.includes("[SPB-IR") || lastUserText.includes("<system-reminder>");
+      lastUserText.includes("[SPB-IR") || lastUserText.includes("[Role Directive:");
 
     let enhancedMessages: Array<{ role: string; content?: unknown }> | undefined;
     if (
       enhancement &&
       enhancement.enhancedPrompt !== lastUserText &&
       lastUserIndex >= 0 &&
-      !isLastUserArrayContent &&
       !isAlreadyExtensivePrompt
     ) {
       enhancedMessages = messages.map((m, idx) => {
         if (idx === lastUserIndex) {
-          // Apply Tier-specific prompt enhancement with guidanceContract validation
-          // Enhanced prompts are applied only when not in tool result turns
-          // and the enhancement represents a genuine improvement over the original
-          return { ...m, content: enhancement.enhancedPrompt };
+          if (typeof m.content === "string") {
+            return { ...m, content: enhancement.enhancedPrompt };
+          }
+          if (Array.isArray(m.content)) {
+            let replacedText = false;
+            const updatedContent = m.content.map((part) => {
+              if (
+                !replacedText &&
+                part &&
+                typeof part === "object" &&
+                (part as Record<string, unknown>).type === "text" &&
+                typeof (part as Record<string, unknown>).text === "string"
+              ) {
+                replacedText = true;
+                return { ...part, text: enhancement.enhancedPrompt };
+              }
+              return part;
+            });
+            return { ...m, content: updatedContent };
+          }
         }
         return m;
       });
+    }
+
+    // 8. Normalization of interleaved system directives for edge models
+    if (tierAssignment.tier === "tier_3_local") {
+      if (enhancedMessages !== undefined) {
+        enhancedMessages = normalizeInterleavedSystemMessages(
+          enhancedMessages as Array<{ role: string; content?: unknown }>
+        );
+      } else {
+        const hasInterleavedSystem = messages.some(
+          (m, idx) =>
+            (m.role === "system" && idx > 0) ||
+            (typeof m.content === "string" &&
+              /^(?:SessionStart:|english-only output style is active|Attribution for git commits|You are powered by the model)/.test(
+                m.content.trim()
+              ))
+        );
+        if (hasInterleavedSystem) {
+          enhancedMessages = normalizeInterleavedSystemMessages(
+            messages as Array<{ role: string; content?: unknown }>
+          );
+        }
+      }
     }
 
     // 7. Record telemetry audit

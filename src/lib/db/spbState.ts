@@ -12,6 +12,7 @@ export interface SpbStateCheckpoint {
   taskPhase: string;
   modelTier: string;
   statePayload: string;
+  guidanceContract?: unknown;
   createdAt: number;
 }
 
@@ -86,6 +87,7 @@ export function initSpbStateTable(): void {
         task_phase TEXT NOT NULL,
         model_tier TEXT NOT NULL,
         state_payload TEXT NOT NULL,
+        guidance_contract TEXT,
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_spb_anchor ON spb_state_checkpoints(prompt_anchor_hash);
@@ -145,6 +147,14 @@ export function initSpbStateTable(): void {
       );
       CREATE INDEX IF NOT EXISTS idx_spb_gate_session ON spb_confirmation_gates(session_id);
     `);
+
+    // Ensure guidance_contract column exists for backward-compatible upgrades
+    try {
+      db.exec("ALTER TABLE spb_state_checkpoints ADD COLUMN guidance_contract TEXT;");
+    } catch {
+      // Column already exists or table newly created with it
+    }
+
     _tablesInitialized = true;
   } catch (err) {
     console.error("[SPB State] Failed to initialize tables:", err);
@@ -160,11 +170,14 @@ export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
   try {
     initSpbStateTable();
     const db = getDbInstance();
+    const guidanceContractStr = checkpoint.guidanceContract
+      ? JSON.stringify(checkpoint.guidanceContract)
+      : null;
     db.prepare(
       `
       INSERT OR REPLACE INTO spb_state_checkpoints
-      (session_id, prompt_anchor_hash, task_phase, model_tier, state_payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      (session_id, prompt_anchor_hash, task_phase, model_tier, state_payload, guidance_contract, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       checkpoint.sessionId,
@@ -172,6 +185,7 @@ export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
       checkpoint.taskPhase,
       checkpoint.modelTier,
       checkpoint.statePayload,
+      guidanceContractStr,
       checkpoint.createdAt
     );
     return true;
@@ -188,7 +202,7 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
     const row = db
       .prepare(
         `
-      SELECT session_id, prompt_anchor_hash, task_phase, model_tier, state_payload, created_at
+      SELECT session_id, prompt_anchor_hash, task_phase, model_tier, state_payload, guidance_contract, created_at
       FROM spb_state_checkpoints WHERE session_id = ?
     `
       )
@@ -199,11 +213,21 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
           task_phase: string;
           model_tier: string;
           state_payload: string;
+          guidance_contract?: string | null;
           created_at: number;
         }
       | undefined;
 
     if (!row) return null;
+
+    let parsedGuidance: unknown = undefined;
+    if (row.guidance_contract) {
+      try {
+        parsedGuidance = JSON.parse(row.guidance_contract);
+      } catch {
+        parsedGuidance = undefined;
+      }
+    }
 
     return {
       sessionId: row.session_id,
@@ -211,6 +235,7 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
       taskPhase: row.task_phase,
       modelTier: row.model_tier,
       statePayload: row.state_payload,
+      guidanceContract: parsedGuidance,
       createdAt: row.created_at,
     };
   } catch (err) {
