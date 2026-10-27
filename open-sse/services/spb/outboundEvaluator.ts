@@ -51,7 +51,8 @@ export function evaluateResponseIntent(
   tier: ModelTier,
   taskPhase: TaskPhase,
   sessionId: string = "default_session",
-  hasToolCalls: boolean = false
+  hasToolCalls: boolean = false,
+  clientHasTools: boolean = false
 ): ResponseEvaluationResult {
   // If the model produced tool calls, it is an active intermediate turn in an autonomous execution loop.
   // Never flag tool calls as omissions or reprompt them.
@@ -128,12 +129,29 @@ export function evaluateResponseIntent(
 
   // 5. Detect apologetic or hallucinated refusal fillers
   if (
-    /\b(As an AI language model|I cannot access your local files|I am unable to execute or implement)\b/i.test(
+    /\b(As an AI language model|I cannot access your local files|I am unable to execute or implement|I can(?:not|'t) take on this task|I am unable to fulfill|I'm not able to act on this)\b/i.test(
       responseText
     )
   ) {
     oddities.push("Response contains an apologetic refusal filler instead of required execution.");
     score -= 0.4;
+  }
+
+  // 6. Detect conversational stalling when tools are available but unused
+  if (
+    clientHasTools &&
+    !hasToolCalls &&
+    /\b(autonomous|execute|implement|modify|create|build|run|task)\b/i.test(originalPrompt)
+  ) {
+    if (
+      /\b(let me|want me to|should I|let's|I will start by|kick that off)\b/i.test(responseText) &&
+      !responseText.includes("```")
+    ) {
+      oddities.push(
+        "Response offered conversational intent without calling tools or providing complete code."
+      );
+      score -= 0.35;
+    }
   }
 
   // Clamp score
@@ -224,6 +242,12 @@ export async function extractResponseContent(
       // Detect tool calls in JSON
       if (Array.isArray(firstChoiceMsg?.tool_calls) && firstChoiceMsg.tool_calls.length > 0) {
         hasToolCalls = true;
+        for (const tc of firstChoiceMsg.tool_calls as Array<Record<string, unknown>>) {
+          const fn = tc.function as Record<string, unknown> | undefined;
+          if (fn && (fn.arguments === "" || fn.arguments === undefined)) {
+            fn.arguments = "{}";
+          }
+        }
       }
       if (choices?.[0]?.finish_reason === "tool_calls") {
         hasToolCalls = true;
@@ -431,7 +455,7 @@ export async function processSpbOutboundZeroLoss(args: {
     const extracted = await extractResponseContent(currentResponse);
     lastExtracted = extracted;
 
-    // If the model produced tool calls or client provided tools and tool calls occurred, mark satisfied immediately
+    // If the model produced tool calls, mark satisfied immediately; otherwise evaluate whether it stalled
     const evalResult = evaluateResponseIntent(
       args.originalPrompt,
       args.preservedIntentions,
@@ -439,7 +463,8 @@ export async function processSpbOutboundZeroLoss(args: {
       args.tier,
       args.taskPhase,
       args.sessionId,
-      extracted.hasToolCalls || clientHasTools
+      extracted.hasToolCalls,
+      clientHasTools
     );
     lastEvalResult = evalResult;
 
