@@ -154,6 +154,61 @@ export function evaluateResponseIntent(
     }
   }
 
+  // 7. Detect command delegation to user when autonomous execution was commanded
+  // Patterns that indicate the model is suggesting the user run commands manually
+  // instead of executing them autonomously via tools.
+  const commandDelegationPatterns = [
+    // Direct commands to run in terminal / shell
+    /\\b(?:you can run|run the following|execute the command|open your terminal and run|run this command|try running)\\b/i,
+    // Package managers with run/test/install invoked as user instruction
+    /\\b(?:npm (?:run|test|install)|npx |yarn |pnpm |cargo |pytest |mvn |gradlew)\\b/i,
+    // Shell-style commands being suggested back to user
+    /\\b(?:\\$ .*|cd .*|git .*)\\b/i,
+    // "I cannot execute" followed by suggesting user do it
+    /\\bI (?:cannot|can not|am unable to) (?:execute|run|run this|take on this task)\\b/i,
+    // "As an AI" refusal patterns where model deflects execution
+    /\\bAs an AI (?:language model|I cannot|I'm unable)\\b/i,
+  ];
+
+  const hasCommandDelegation = commandDelegationPatterns.some((pattern) =>
+    pattern.test(responseText)
+  );
+
+  if (hasCommandDelegation) {
+    oddities.push(
+      "Response delegates command execution to the user instead of running verification pipeline or capturing evidence autonomously. " +
+        "When E2E test runs, screenshot capture, or live verification was commanded, " +
+        "the model must execute via tools or report exact tool outputs rather than echoing manual commands back to the user."
+    );
+    score -= 0.4;
+  }
+
+  // 8. Detect hallucinated or non-existent file paths in responses
+  // Patterns that suggest the model invented paths that don't match the repo structure
+  // or made claims about files that cannot be verified via tool output.
+  const hallucinatedPathPatterns = [
+    // Generic placeholder paths commonly hallucinated
+    /\/[a-zA-Z0-9_-]{3,}\/\.\.\/.[a-zA-Z0-9_-]{3,}/,
+    /\/tmp\/[a-zA-Z0-9_\-]{3,}/,
+    /\/var\/tmp\/[a-zA-Z0-9_\-]{3,}/,
+    /\b[SD]rive [C-Z]:\/[a-zA-Z0-9_\-]{3,}(?![^ ]*\.[a-zA-Z]{2,4}(?:\s|$))/,
+    // Paths that don't reference actual repo structure but claim existence
+    /\b(?:src|app|open-sse|tests|docs)\/\.[a-zA-Z0-9_\-]{3,}(?![^ ]*\.[a-zA-Z]{2,4}(?:\s|$))/,
+  ];
+
+  const hasHallucinatedPaths = hallucinatedPathPatterns.some((pattern) =>
+    pattern.test(responseText)
+  );
+
+  if (hasHallucinatedPaths) {
+    oddities.push(
+      "Response contains hallucinated or non-existent file paths. " +
+        "All file paths referenced in completions must be verifiable via repo structure or tool output. " +
+        "Never invent paths; if a path cannot be confirmed, report that verification is required rather than hallucinating."
+    );
+    score -= 0.35;
+  }
+
   // Clamp score
   score = Math.max(0.0, Math.min(1.0, score));
   const isSatisfied = score >= 0.85 && omissions.length === 0 && oddities.length === 0;
