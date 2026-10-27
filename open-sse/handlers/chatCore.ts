@@ -2823,7 +2823,9 @@ async function handleChatCoreInner({
     // This mirrors the classification in the Claude Web executor and ensures consistent
     // model lockout behavior across all provider types
     if (statusCode === 429 && upstreamErrorBody !== undefined && upstreamErrorBody !== null) {
-      const errorText = String(upstreamErrorBody).toLowerCase();
+      const errorText = typeof upstreamErrorBody === "string"
+        ? upstreamErrorBody.toLowerCase()
+        : JSON.stringify(upstreamErrorBody).toLowerCase();
       const isQuotaExhausted = QUOTA_EXHAUSTED_PATTERNS.some((p) => p.test(errorText));
       if (isQuotaExhausted) {
         errorType = PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED;
