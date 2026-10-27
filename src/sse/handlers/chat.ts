@@ -1274,12 +1274,14 @@ async function handleChatImplementation(
     // Guard: Tier 3 models require a guidanceContract from Tier 1/Tier 2
     // to ensure supervised execution of modifications. Without guidance,
     // automatically escalate to Tier 2 resilient execution.
+    // INSPECTION_SYNTHESIS is NOT exempted - ALL Tier 3 phases require guidanceContract
+    // to enforce architectural supervision and prevent hallucinated file paths or
+    // premature termination of execution.
     const tierAssignment = spbDecision?.tierAssignment ?? {};
-    const taskPhase = spbDecision?.intent?.taskPhase;
+    const _taskPhase = spbDecision?.intent?.taskPhase; // All Tier 3 phases require guidance, no phase exemptions
     const isUnguidedMutationTier3 =
       activeTier === "tier_3_local" &&
-      (tierAssignment.requiresGuidance ||
-        (!tierAssignment.guidanceContract && taskPhase !== "INSPECTION_SYNTHESIS"));
+      (tierAssignment.requiresGuidance || !tierAssignment.guidanceContract);
 
     if (isUnguidedMutationTier3) {
       log.warn(

@@ -528,6 +528,36 @@ test("processSpbOutboundZeroLoss reconstructs consumed streaming body on upstrea
   assert.ok(totalChunks > 0, "Reconstructed stream must emit data chunks rather than empty body");
 });
 
+test("validateTier3GuidanceContract strictly enforces guidance for INSPECTION_SYNTHESIS", async () => {
+  const { validateTier3GuidanceContract } =
+    await import("../../open-sse/services/spb/inboundIntelligence.ts");
+  const { selectModelTier } = await import("../../open-sse/services/spb/tieredRegistry.ts");
+
+  // 1. Rejects Tier 3 INSPECTION_SYNTHESIS without guidance contract
+  const validationResult = validateTier3GuidanceContract(
+    { tier: "tier_3_local" },
+    "INSPECTION_SYNTHESIS"
+  );
+  assert.equal(validationResult.isValid, false);
+  assert.ok(validationResult.reason?.includes("INSPECTION_SYNTHESIS is NOT exempted"));
+
+  // 2. selectModelTier flags requiresGuidance: true for INSPECTION_SYNTHESIS
+  const tierAssignment = selectModelTier("INSPECTION_SYNTHESIS", 0.5);
+  assert.equal(tierAssignment.tier, "tier_3_local");
+  assert.equal(tierAssignment.requiresGuidance, true);
+
+  // 3. Accepts when valid guidanceContract is present
+  const validGuidanceResult = validateTier3GuidanceContract(
+    { tier: "tier_3_local" },
+    "INSPECTION_SYNTHESIS",
+    {
+      supervisorTier: "tier_2_resilient",
+      taskSpecification: "Verify test suite run without mutation",
+    }
+  );
+  assert.equal(validGuidanceResult.isValid, true);
+});
+
 test("processSmartProxyRouting never corrupts large prior messages with CCR markers in enhancedMessages", async () => {
   const sessionId = "spb_ccr_corruption_guard_" + Date.now();
   const largeCodebaseDump =

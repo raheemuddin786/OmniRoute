@@ -46,20 +46,27 @@ export interface PromptEnhancementResult {
  * Prevents unguided code mutations by ensuring architectural supervision
  */
 export function validateTier3GuidanceContract(
-  tierAssignment: { tier: string },
-  taskPhase: TaskPhase,
+  _tierAssignment: { tier: string },
+  _taskPhase: TaskPhase,
   guidanceContract?: GuidanceContract
 ): { isValid: boolean; reason?: string } {
-  // Tier 3 execution MUST have guidanceContract for ALL mutation/refactoring phases
-  const isTier3 = tierAssignment.tier === "tier_3_local";
-  const isMutationPhase = taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING";
+  // Tier 3 execution MUST have guidanceContract for ALL phases
+  // including INSPECTION_SYNTHESIS when it involves code/model analysis or modifications.
+  // Only truly read-only inspection (no code analysis, model evaluation, or task assessment)
+  // may proceed without guidanceContract, but this is explicitly disallowed below.
+  const isTier3 = _tierAssignment.tier === "tier_3_local";
 
-  if (isTier3 && isMutationPhase) {
+  // All Tier 3 phases require guidanceContract - no exemptions
+  const requiresGuidanceForTier3 = true;
+
+  if (isTier3 && requiresGuidanceForTier3) {
     if (!guidanceContract) {
       return {
         isValid: false,
         reason:
-          "Tier 3 mutation phases require GuidanceContract from supervisor tiers for architectural supervision and validation",
+          "Tier 3 execution requires GuidanceContract from supervisor tiers for architectural supervision and validation. " +
+          "INSPECTION_SYNTHESIS is NOT exempted - all Tier 3 phases require guidanceContract to " +
+          "prevent unguided code modifications, hallucinated file paths, and premature termination.",
       };
     }
 
@@ -68,7 +75,8 @@ export function validateTier3GuidanceContract(
       return {
         isValid: false,
         reason:
-          "GuidanceContract missing required architectural constraints (supervisorTier, taskSpecification)",
+          "GuidanceContract missing required architectural constraints (supervisorTier, taskSpecification). " +
+          "Tier 3 execution without proper guidance risks unguided modifications and execution failures.",
       };
     }
   }

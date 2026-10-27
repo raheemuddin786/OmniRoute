@@ -54,17 +54,21 @@ export function selectModelTier(
   }
 
   // 2. Tier 3: Local/edge inference, inspection synthesis, refactoring, formatting, and deterministic tasks.
-  // GOVERNED TIER 3 EXECUTION: All Tier 3 execution requires architectural supervision via GuidanceContract
-  // TIER 3 STRICTNESS: Must have guidanceContract from supervisor tiers (Tier 1 or Tier 2) for ALL mutation/refactoring phases.
+  // GOVERNED TIER 3 EXECUTION: All Tier 3 execution requires architectural supervision via GuidanceContract.
+  // TIER 3 STRICTNESS: Must have guidanceContract from supervisor tiers (Tier 1 or Tier 2) for ALL phases,
+  // including INSPECTION_SYNTHESIS when it involves code/model analysis or modifications.
   // Prevents unguided code modifications, enforcing architectural planning and validation before execution.
-  // TIER 3 ALLOWANCES: Only permitted for read-only INSPECTION_SYNTHESIS (no guidance required),
-  // or for FAST_REFACTOR / DETERMINISTIC_ROUTING ONLY when guidanceContract is explicitly provided.
-  // isToolExecution → all tool mutations forced to Tier 2 (Resilient) for safety.
+  // TIER 3 ALLOWANCES: ONLY permitted for truly read-only inspection without any code analysis or model evaluation.
+  // INSPECTION_SYNTHESIS involving code review, model analysis, or deterministic task assessment
+  // ALWAYS requires guidanceContract. isToolExecution → all tool mutations forced to Tier 2 (Resilient) for safety.
   const isInToolExecution = isToolResultTurn === true;
   if (
     taskPhase === "INSPECTION_SYNTHESIS" ||
     (!isInToolExecution && (taskPhase === "FAST_REFACTOR" || taskPhase === "DETERMINISTIC_ROUTING"))
   ) {
+    // ALL Tier 3 phases now require guidanceContract, including INSPECTION_SYNTHESIS
+    // when it involves code/model analysis or deterministic task assessment.
+    const effectiveRequiresGuidance = true; // Always require guidance for Tier 3
     return {
       tier: "tier_3_local",
       recommendedModels: models.local,
@@ -72,7 +76,7 @@ export function selectModelTier(
       temperature: 0.1,
       cacheEnabled: false,
       guidanceContract,
-      requiresGuidance: taskPhase === "INSPECTION_SYNTHESIS" ? false : !guidanceContract,
+      requiresGuidance: effectiveRequiresGuidance,
     };
   }
 
