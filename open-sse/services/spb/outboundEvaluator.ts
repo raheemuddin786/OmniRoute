@@ -389,60 +389,67 @@ export async function extractResponseContent(
   const decoder = new TextDecoder();
 
   if (response.body) {
-    const reader = response.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        rawChunks.push(value);
-        const chunkStr = decoder.decode(value, { stream: true });
-        const lines = chunkStr.split("\n");
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data:")) continue;
-          const dataStr = trimmed.slice("data:".length).trim();
-          if (dataStr === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(dataStr);
-            // OpenAI delta
-            if (parsed.choices?.[0]?.delta?.content) {
-              accumulatedText += parsed.choices[0].delta.content;
-            }
-            // Anthropic delta
-            else if (parsed.type === "content_block_delta" && parsed.delta?.text) {
-              accumulatedText += parsed.delta.text;
-            }
-            // Gemini candidate
-            else if (parsed.candidates?.[0]?.content?.parts?.[0]?.text) {
-              accumulatedText += parsed.candidates[0].content.parts[0].text;
-            }
+    try {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          rawChunks.push(value);
+          const chunkStr = decoder.decode(value, { stream: true });
+          const lines = chunkStr.split("\n");
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const dataStr = trimmed.slice("data:".length).trim();
+            if (dataStr === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(dataStr);
+              // OpenAI delta
+              if (parsed.choices?.[0]?.delta?.content) {
+                accumulatedText += parsed.choices[0].delta.content;
+              }
+              // Anthropic delta
+              else if (parsed.type === "content_block_delta" && parsed.delta?.text) {
+                accumulatedText += parsed.delta.text;
+              }
+              // Gemini candidate
+              else if (parsed.candidates?.[0]?.content?.parts?.[0]?.text) {
+                accumulatedText += parsed.candidates[0].content.parts[0].text;
+              }
 
-            // OpenAI tool calls
-            if (
-              (Array.isArray(parsed.choices?.[0]?.delta?.tool_calls) &&
-                parsed.choices[0].delta.tool_calls.length > 0) ||
-              parsed.choices?.[0]?.finish_reason === "tool_calls"
-            ) {
-              hasToolCalls = true;
+              // OpenAI tool calls
+              if (
+                (Array.isArray(parsed.choices?.[0]?.delta?.tool_calls) &&
+                  parsed.choices[0].delta.tool_calls.length > 0) ||
+                parsed.choices?.[0]?.finish_reason === "tool_calls"
+              ) {
+                hasToolCalls = true;
+              }
+              // Anthropic tool_use
+              else if (
+                (parsed.type === "content_block_start" &&
+                  parsed.content_block?.type === "tool_use") ||
+                (parsed.type === "message_delta" && parsed.delta?.stop_reason === "tool_use") ||
+                parsed.type === "tool_use"
+              ) {
+                hasToolCalls = true;
+              }
+              // Gemini functionCall
+              else if (parsed.candidates?.[0]?.content?.parts?.[0]?.functionCall) {
+                hasToolCalls = true;
+              }
+            } catch {
+              // Non-JSON frame
             }
-            // Anthropic tool_use
-            else if (
-              (parsed.type === "content_block_start" &&
-                parsed.content_block?.type === "tool_use") ||
-              (parsed.type === "message_delta" && parsed.delta?.stop_reason === "tool_use") ||
-              parsed.type === "tool_use"
-            ) {
-              hasToolCalls = true;
-            }
-            // Gemini functionCall
-            else if (parsed.candidates?.[0]?.content?.parts?.[0]?.functionCall) {
-              hasToolCalls = true;
-            }
-          } catch {
-            // Non-JSON frame
           }
         }
       }
+    } catch (streamErr: unknown) {
+      const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+      console.warn(
+        `[SPB Outbound ZeroLoss] Stream reading interrupted or aborted (${errMsg}). Preserving ${rawChunks.length} accumulated chunks.`
+      );
     }
   }
 
@@ -566,6 +573,9 @@ export async function processSpbOutboundZeroLoss(args: {
       clientHasTools
     );
     lastEvalResult = evalResult;
+    console.log(
+      `[SPB Outbound ZeroLoss] Session ${args.sessionId} | Phase: ${args.taskPhase} | Tier: ${args.tier} | Satisfaction: ${evalResult.satisfactionScore.toFixed(2)} | Satisfied: ${evalResult.isSatisfied} | Omissions: ${evalResult.omissions.length} | RepromptCount: ${repromptCount}`
+    );
 
     // If response satisfies 100% of intention criteria, max iterations reached, or tool call generated
     if (evalResult.isSatisfied || repromptCount >= maxReprompts || extracted.hasToolCalls) {

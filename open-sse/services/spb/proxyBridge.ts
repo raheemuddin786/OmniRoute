@@ -249,6 +249,9 @@ export async function processSmartProxyRouting(
       intent.isToolResultTurn,
       intent.guidanceContract
     );
+    console.log(
+      `[SPB Bridge] Session ${sessionId} | TaskPhase: ${intent.taskPhase} | Selected Tier: ${tierAssignment.tier} | GuidanceContract present: ${!!intent.guidanceContract}`
+    );
 
     // If stagnation was detected, force tier escalation to tier_2_resilient for active tool execution
     if (isStagnant && tierAssignment.tier !== "tier_2_resilient") {

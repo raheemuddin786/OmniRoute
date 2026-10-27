@@ -50,6 +50,9 @@ export function validateTier3GuidanceContract(
   _taskPhase: TaskPhase,
   guidanceContract?: GuidanceContract
 ): { isValid: boolean; reason?: string } {
+  console.log(
+    `[SPB InboundIntelligence] validateTier3GuidanceContract | Tier: ${_tierAssignment.tier} | Phase: ${_taskPhase} | GuidanceContract present: ${!!guidanceContract}`
+  );
   // Tier 3 execution MUST have guidanceContract for ALL phases
   // including INSPECTION_SYNTHESIS when it involves code/model analysis or modifications.
   // Only truly read-only inspection (no code analysis, model evaluation, or task assessment)
