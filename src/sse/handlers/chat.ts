@@ -1739,8 +1739,9 @@ async function handleChatImplementation(
     comboPreselectedCredentials.clear();
 
     // ── SPB Tier & Global Fallback Provider (#689) ───────────────────────────
-    // If combo exhausted all models, try SPB tier fallbacks and global fallback before giving up.
-    if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+    // If combo exhausted all models, try SPB tier fallbacks only when SPB was explicitly active,
+    // and try global fallback before giving up.
+    if (isSpbActive && !response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
       // 1. If SPB is active or recommended alternative tier models exist, attempt tier fallback
       const currentTierConfig = getTierConfig();
       const candidateTierModels = [
@@ -1967,8 +1968,8 @@ async function handleChatImplementation(
 
   // If a single model attempt failed with 429 (quota/rate-limit) or 5xx, try fallback:
   if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
-    // 1. If SPB recommended alternative tier models, attempt fallback across remaining models
-    if (spbDecision?.tierAssignment?.recommendedModels?.length) {
+    // 1. If SPB is active and recommended alternative tier models, attempt fallback across remaining models
+    if (isSpbActive && spbDecision?.tierAssignment?.recommendedModels?.length) {
       const candidates = spbDecision.tierAssignment.recommendedModels.filter(
         (m: string) => m !== resolvedModelStr
       );
@@ -2058,7 +2059,8 @@ async function handleChatImplementation(
     }
 
     // 3. Resilient tier automatic recovery if still failing with 429 / 5xx
-    if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+    // ONLY when SPB is explicitly active for this request (e.g. auto/spb requested)
+    if (isSpbActive && !response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
       const tierConfig = getTierConfig();
       const resilientCandidates = (
         tierConfig?.tierModels?.resilient || [
