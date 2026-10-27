@@ -404,7 +404,12 @@ function shouldTreatAsExactModelId(modelStr: string | null) {
 // which normalizeCrossProxyModelId reads on every call. The flag is part of the key
 // so an env toggle cannot return a stale parse. Callers receive a copy: the cache
 // must not alias a mutated result into the next request.
-export const PARSE_MODEL_CACHE_LIMIT = 2048;
+export const PARSE_MODEL_CACHE_LIMIT =
+  typeof process !== "undefined" &&
+  process.env?.PARSE_MODEL_CACHE_LIMIT &&
+  Number(process.env.PARSE_MODEL_CACHE_LIMIT) > 0
+    ? Number(process.env.PARSE_MODEL_CACHE_LIMIT)
+    : 16384;
 export const parseModelCache = boundedMap<ParsedModel>(
   "parse-model-cache",
   PARSE_MODEL_CACHE_LIMIT,

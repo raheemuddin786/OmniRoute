@@ -15,6 +15,7 @@ import {
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { isQuotaExhaustedForRequest } from "@/domain/quotaCache";
 import { getCircuitBreaker } from "@/shared/utils/circuitBreaker";
+import { isProviderBlocked } from "@omniroute/open-sse/services/tokenRefresh/circuitBreaker.ts";
 
 /**
  * True when a provider connection can actually authenticate upstream.
@@ -63,6 +64,14 @@ export function isProviderConnectionUsable(
 ): boolean {
   if (hasTerminalConnectionStatus(connection)) {
     return false;
+  }
+
+  if (provider) {
+    try {
+      if (isProviderBlocked(provider)) {
+        return false;
+      }
+    } catch {}
   }
 
   if (connection.rateLimitedUntil && isAccountUnavailable(connection.rateLimitedUntil)) {
@@ -223,6 +232,12 @@ export async function hasUsableCredentialsForModel(
   try {
     const breaker = getCircuitBreaker(provider);
     if (breaker?.getStatus?.()?.state === "OPEN") {
+      return false;
+    }
+  } catch {}
+
+  try {
+    if (isProviderBlocked(provider)) {
       return false;
     }
   } catch {}

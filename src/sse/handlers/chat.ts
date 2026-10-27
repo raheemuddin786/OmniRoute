@@ -1829,30 +1829,62 @@ async function handleChatImplementation(
           `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
         );
         try {
-          const fallbackResponse = await runWithTransientBackendRetry(
-            () =>
-              handleSingleModelChat(
+          const fallbackCombo = await getComboByName(fallbackModel).catch(() => null);
+          const fallbackResponse = fallbackCombo
+            ? await (handleComboChat as any)({
                 body,
-                fallbackModel,
-                clientRawRequest,
-                request,
-                combo.name,
-                apiKeyInfo,
-                telemetry,
-                {
-                  sessionId,
-                  sessionAffinityKey,
-                  emergencyFallbackTried: true,
-                  forceLiveComboTest: isComboLiveTest,
-                  conversationId,
-                  managedLease,
-                  videoBridgeLog,
-                },
-                combo.strategy,
-                true
-              ),
-            { signal: signal ?? undefined, source: "global-fallback" }
-          );
+                combo: fallbackCombo,
+                endpointPath: new URL(request.url).pathname,
+                requestHeaders: request.headers,
+                handleSingleModel: (b: any, m: string) =>
+                  handleSingleModelChat(
+                    b,
+                    m,
+                    clientRawRequest,
+                    request,
+                    fallbackCombo.name ?? fallbackModel,
+                    apiKeyInfo,
+                    telemetry,
+                    {
+                      sessionId,
+                      sessionAffinityKey,
+                      emergencyFallbackTried: true,
+                      forceLiveComboTest: isComboLiveTest,
+                      conversationId,
+                      managedLease,
+                      videoBridgeLog,
+                    },
+                    fallbackCombo.strategy,
+                    true
+                  ),
+                sessionId,
+                sessionAffinityKey,
+                log,
+              })
+            : await runWithTransientBackendRetry(
+                () =>
+                  handleSingleModelChat(
+                    body,
+                    fallbackModel,
+                    clientRawRequest,
+                    request,
+                    combo.name,
+                    apiKeyInfo,
+                    telemetry,
+                    {
+                      sessionId,
+                      sessionAffinityKey,
+                      emergencyFallbackTried: true,
+                      forceLiveComboTest: isComboLiveTest,
+                      conversationId,
+                      managedLease,
+                      videoBridgeLog,
+                    },
+                    combo.strategy,
+                    true
+                  ),
+                { signal: signal ?? undefined, source: "global-fallback" }
+              );
           if (fallbackResponse.ok) {
             log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
             recordTelemetry(telemetry);
@@ -2041,27 +2073,61 @@ async function handleChatImplementation(
           `Single model "${resolvedModelStr}" failed (${response.status}) — attempting global fallback: ${fallbackModel}`
         );
         try {
-          const fallbackResponse = await handleSingleModelChat(
-            body,
-            fallbackModel,
-            clientRawRequest,
-            request,
-            null,
-            apiKeyInfo,
-            telemetry,
-            {
-              sessionId,
-              sessionAffinityKey,
-              forceLiveComboTest: isComboLiveTest,
-              forcedConnectionId: null,
-              correlationId: reqId,
-              conversationId,
-              managedLease,
-              videoBridgeLog,
-            },
-            null,
-            false
-          );
+          const fallbackCombo = await getComboByName(fallbackModel).catch(() => null);
+          const fallbackResponse = fallbackCombo
+            ? await (handleComboChat as any)({
+                body,
+                combo: fallbackCombo,
+                endpointPath: clientRawRequest?.endpoint || new URL(request.url).pathname,
+                requestHeaders: clientRawRequest?.headers || request.headers,
+                handleSingleModel: (b: any, m: string) =>
+                  handleSingleModelChat(
+                    b,
+                    m,
+                    clientRawRequest,
+                    request,
+                    fallbackCombo.name ?? fallbackModel,
+                    apiKeyInfo,
+                    telemetry,
+                    {
+                      sessionId,
+                      sessionAffinityKey,
+                      emergencyFallbackTried: true,
+                      forceLiveComboTest: isComboLiveTest,
+                      forcedConnectionId: null,
+                      correlationId: reqId,
+                      conversationId,
+                      managedLease,
+                      videoBridgeLog,
+                    },
+                    fallbackCombo.strategy,
+                    true
+                  ),
+                sessionId,
+                sessionAffinityKey,
+                log,
+              })
+            : await handleSingleModelChat(
+                body,
+                fallbackModel,
+                clientRawRequest,
+                request,
+                null,
+                apiKeyInfo,
+                telemetry,
+                {
+                  sessionId,
+                  sessionAffinityKey,
+                  forceLiveComboTest: isComboLiveTest,
+                  forcedConnectionId: null,
+                  correlationId: reqId,
+                  conversationId,
+                  managedLease,
+                  videoBridgeLog,
+                },
+                null,
+                false
+              );
           if (fallbackResponse.ok) {
             log.info("GLOBAL_FALLBACK", `Global fallback "${fallbackModel}" succeeded`);
             response = fallbackResponse;
