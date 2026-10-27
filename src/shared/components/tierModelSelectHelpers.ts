@@ -147,7 +147,7 @@ export function detectComboCapabilities(combo: {
   const isApexReasoning = hasApexMember || nameMatchesApex;
 
   const hasResilientMember = memberModelStrings.some((m) => RESILIENT_EXECUTION_REGEX.test(m));
-  const isResilient = memberModelStrings.length >= 1 || hasResilientMember;
+  const isResilient = hasResilientMember;
 
   const allLocal =
     memberModelStrings.length > 0 &&
