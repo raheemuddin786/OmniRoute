@@ -55,7 +55,7 @@ export const claude_webProvider: RegistryEntry = {
       name: "Claude Sonnet 5.5 (web)",
       toolCalling: true,
       supportsReasoning: true,
-      supportedThinkingEfforts: ["low", "medium", "high", "max"],
+      supportedThinkingEfforts: ["low", "medium", "high", "xhigh", "max"],
       supportsVision: true,
       contextLength: 1000000,
       maxOutputTokens: 128000,
