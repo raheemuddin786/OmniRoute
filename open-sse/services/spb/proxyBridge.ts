@@ -10,7 +10,6 @@ import { getTierConfig } from "../tierResolver.ts";
 import { saveCheckpoint, getCheckpoint, recordSpbTelemetry } from "../../../src/lib/db/spbState.ts";
 import {
   maybeCcrReplace,
-  storeBlock,
   DEFAULT_MIN_CHARS,
   RETRIEVAL_RAMP_FACTOR_DEFAULT,
   expandIncomingCcrMarkers,
@@ -99,15 +98,13 @@ export async function processSmartProxyRouting(
     const classificationMessages = await Promise.all(
       messages.map(async (msg) => {
         if (typeof msg.content === "string" && msg.content.length >= DEFAULT_MIN_CHARS) {
-          const { text, replaced, hash } = maybeCcrReplace(
+          const { text, replaced } = maybeCcrReplace(
             msg.content,
             DEFAULT_MIN_CHARS,
             sessionId,
             RETRIEVAL_RAMP_FACTOR_DEFAULT
           );
-          if (replaced && hash) {
-            // Store the original content for later retrieval
-            storeBlock(msg.content, sessionId, { source: "compression" });
+          if (replaced) {
             return { ...msg, content: text };
           }
         } else if (Array.isArray(msg.content)) {
@@ -121,14 +118,13 @@ export async function processSmartProxyRouting(
                 typeof part.text === "string" &&
                 part.text.length >= DEFAULT_MIN_CHARS
               ) {
-                const { text, replaced, hash } = maybeCcrReplace(
+                const { text, replaced } = maybeCcrReplace(
                   part.text,
                   DEFAULT_MIN_CHARS,
                   sessionId,
                   RETRIEVAL_RAMP_FACTOR_DEFAULT
                 );
-                if (replaced && hash) {
-                  storeBlock(part.text, sessionId, { source: "compression" });
+                if (replaced) {
                   return { ...part, text };
                 }
               }
