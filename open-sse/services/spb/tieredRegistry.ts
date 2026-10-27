@@ -113,8 +113,8 @@ export function selectModelTier(
 export function validateTier3Execution(
   taskPhase: TaskPhase,
   _inToolExecution: boolean,
-  guidanceContract?: GuidanceContract,
-  currentTier: ModelTier
+  guidanceContract: GuidanceContract | undefined,
+  currentTier: ModelTier = "tier_3_local"
 ): { isValid: boolean; tier: ModelTier; reason?: string } {
   // TIER 3 VALIDATION: All Tier 3 execution requires guidanceContract
   if (currentTier === "tier_3_local") {
