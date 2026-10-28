@@ -305,24 +305,24 @@ export function enhanceInboundPrompt(
 
   // Synthesize Tier-Specific Prompt Contract
   let tierPreamble = "";
+  const repositoryTruthDirective =
+    "ARCHITECTURAL GROUNDING: Always treat the existing repository file system, types, and architecture as the authoritative source of truth. Ground all decisions and code in existing patterns before taking action.";
+
   switch (tier) {
     case "tier_1_apex": {
-      tierPreamble =
-        "[SPB-IR Apex Directive: Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants.]";
+      tierPreamble = `[SPB-IR Apex Directive: Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. ${repositoryTruthDirective}]`;
       appliedOptimizations.push("Tier 1 Apex Architectural Invariant Framing");
       break;
     }
 
     case "tier_2_resilient": {
-      tierPreamble =
-        "[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries. Never delete or overwrite working implementations without explicit architectural specification.]";
+      tierPreamble = `[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries. Never delete or overwrite working implementations without explicit architectural specification. ${repositoryTruthDirective}]`;
       appliedOptimizations.push("Tier 2 Resilient Implementation & Error Boundary Enforcement");
       break;
     }
 
     case "tier_3_local": {
-      tierPreamble =
-        "[SPB-IR Local Directive: Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations. Strictly preserve all existing code and architecture.]";
+      tierPreamble = `[SPB-IR Local Directive: Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations. Strictly preserve all existing code and architecture. ${repositoryTruthDirective}]`;
       appliedOptimizations.push("Tier 3 Surgical Scope & Deterministic Boundary Confinement");
       break;
     }
