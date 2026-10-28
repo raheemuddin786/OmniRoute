@@ -59,6 +59,8 @@ export function selectModelTier(
   // including INSPECTION_SYNTHESIS when it involves code/model analysis or modifications.
   // Prevents unguided code modifications, enforcing architectural planning and validation before execution.
   // TIER 3 ALLOWANCES: ONLY permitted for truly read-only inspection without any code analysis or model evaluation.
+  // This ensures that each tier's execution environment meets strict safety and architectural validation criteria.
+  // TIER 3 SELECTION: Any Tier 3 execution must have an active guidanceContract to enforce supervision and prevent unguided actions.
   // INSPECTION_SYNTHESIS involving code review, model analysis, or deterministic task assessment
   // ALWAYS requires guidanceContract. isToolExecution → all tool mutations forced to Tier 2 (Resilient) for safety.
   const isInToolExecution = isToolResultTurn === true;
@@ -140,4 +142,103 @@ export function validateTier3Execution(
 
   // TIER 3 ESCALATION: All other Tier 3 requests default to Tier 2 resilient execution
   return { isValid: false, tier: "tier_2_resilient" };
+}
+
+/**
+ * Enhanced stagnation detection with comprehensive recovery mechanism
+ */
+export function detectAndRecoverFromStagnation(
+  _sessionId: string,
+  taskPhase: TaskPhase,
+  consecutiveReads: number,
+  existingCheckpoint?: {
+    consecutiveReads?: number;
+    modelTier?: string;
+    guidanceContract?: GuidanceContract;
+  }
+): {
+  isStagnant: boolean;
+  recoveryDirective?: string;
+  newTaskPhase?: TaskPhase;
+  escalationTier?: "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
+} {
+  const STAGNATION_THRESHOLD = 3;
+  let isStagnant = false;
+  let recoveryDirective: string | undefined;
+  let newTaskPhase: TaskPhase | undefined;
+  let escalationTier: "tier_1_apex" | "tier_2_resilient" | "tier_3_local" | undefined;
+
+  // Detect stagnation based on consecutive read/inspection turns
+  if (consecutiveReads >= STAGNATION_THRESHOLD && taskPhase === "INSPECTION_SYNTHESIS") {
+    isStagnant = true;
+
+    // Generate recovery directive to break the loop
+    recoveryDirective =
+      "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections.";
+    const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
+    newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
+
+    // Escalate tier assignment to tier_2_resilient to enable tool execution
+    // (Tier 2 has full tool execution authority vs Tier 1 oversight or Tier 3 constraints)
+    escalationTier = "tier_2_resilient";
+
+    // Update the checkpoint with the reset counter to prevent immediate re-triggering
+    if (existingCheckpoint) {
+      existingCheckpoint = {
+        ...existingCheckpoint,
+        consecutiveReads: 0,
+      };
+    }
+  }
+
+  return {
+    isStagnant,
+    recoveryDirective,
+    newTaskPhase,
+    escalationTier,
+  };
+}
+
+/**
+ * Enhanced stagnation recovery mechanism
+ * Provides immediate recovery from repetitive inspection loops
+ * with structured escalation to tier_2_resilient execution
+ */
+export function escalateFromStagnation(
+  sessionId: string,
+  taskPhase: TaskPhase,
+  _priorStagnationDetected: boolean,
+  consecutiveReads: number,
+  existingCheckpoint?: {
+    consecutiveReads?: number;
+    modelTier?: string;
+    guidanceContract?: GuidanceContract;
+  }
+): { newTaskPhase: TaskPhase; escalationTier: "tier_2_resilient"; recoveryDirective: string } {
+  // Determine target phase based on original user intent signals
+  const recoveryDirective =
+    "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections.";
+
+  // escalate to CODE_GENERATION or TESTING_AND_VERIFICATION based on content
+  const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
+  const newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
+
+  // Update the checkpoint with the reset counter to prevent immediate re-triggering
+  if (existingCheckpoint) {
+    existingCheckpoint = {
+      ...existingCheckpoint,
+      consecutiveReads: 0,
+    };
+  }
+
+  // Record the recovery action
+  console.log(
+    `[SPB Bridge] Session ${sessionId} | Stagnation recovery engaged: ${taskPhase} → ${newTaskPhase} (${consecutiveReads} reads)`
+  );
+
+  return {
+    newTaskPhase,
+    escalationTier: "tier_2_resilient",
+    recoveryDirective,
+  };
 }

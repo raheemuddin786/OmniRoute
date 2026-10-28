@@ -231,6 +231,14 @@ export async function processSmartProxyRouting(
         } else {
           intent.taskPhase = "CODE_GENERATION";
         }
+        autoRecoveryDirective =
+          "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections."; // Reset consecutiveReads counter to break the stagnation loop - allow re-inspection after execution
+        consecutiveReads = 0;
+        // Update the checkpoint with the reset counter to prevent immediate re-triggering
+        existingCheckpoint = {
+          ...existingCheckpoint,
+          consecutiveReads: 0,
+        };
       }
 
       // Escalate tier assignment to tier_2_resilient to enable tool execution
@@ -253,6 +261,33 @@ export async function processSmartProxyRouting(
       `[SPB Bridge] Session ${sessionId} | TaskPhase: ${intent.taskPhase} | Selected Tier: ${tierAssignment.tier} | GuidanceContract present: ${!!intent.guidanceContract}`
     );
 
+    // Enhanced stagnation detection with immediate recovery
+    const STAGNATION_DETECTION = {
+      threshold: 3,
+      consecutiveReads,
+      isStagnant: consecutiveReads >= 3 && intent.taskPhase === "INSPECTION_SYNTHESIS",
+    };
+
+    if (STAGNATION_DETECTION.isStagnant) {
+      // Trigger immediate recovery - escalate to tier_2_resilient to break inspection loop
+      const resilientModels = tierConfig?.tierModels?.tier_2_resilient;
+      tierAssignment = {
+        tier: "tier_2_resilient",
+        recommendedModels:
+          resilientModels && resilientModels.length > 0
+            ? resilientModels
+            : tierAssignment.recommendedModels,
+        guidanceContract: tierAssignment.guidanceContract || intent.guidanceContract,
+        requiresTools: intent.requiresTools,
+        complexityScore: intent.complexityScore,
+      };
+      // Reset consecutiveReads to prevent immediate re-triggering
+      consecutiveReads = 0;
+      console.log(
+        `[SPB Bridge] Session ${sessionId} | Enhanced Stagnation Recovery: Escalating from ${intent.taskPhase} to tier_2_resilient, resetting consecutive reads to ${consecutiveReads}`
+      );
+    }
+
     // If stagnation was detected, force tier escalation to tier_2_resilient for active tool execution
     if (isStagnant && tierAssignment.tier !== "tier_2_resilient") {
       const resilientModels = tierConfig?.tierModels?.tier_2_resilient;
@@ -266,6 +301,9 @@ export async function processSmartProxyRouting(
         requiresTools: intent.requiresTools,
         complexityScore: intent.complexityScore,
       };
+      console.log(
+        `[SPB Bridge] Session ${sessionId} | Stagnation detected: ${consecutiveReads} consecutive reads. Escalating to tier_2_resilient to break loop.`
+      );
     }
 
     if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
