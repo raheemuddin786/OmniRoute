@@ -32,6 +32,7 @@ export interface IntentProfile {
   promptAnchorHash: string;
   isToolResultTurn: boolean;
   guidanceContract?: GuidanceContract;
+  originalPrompt?: string; // preserved context for recovery and debugging
 }
 
 interface ExtractedContent {
@@ -167,6 +168,14 @@ export function classifyIntent(
     }
   }
 
+  // CRITICAL FIX: preserve comprehensive intent beyond just latest human text
+  // track the original prompt anchor from the FIRST user message for context preservation
+  const firstUserMessage = userMessages[0];
+  const firstUserExtracted = firstUserMessage ? extractMessageContent(firstUserMessage) : null;
+  const originalPromptText = firstUserExtracted
+    ? cleanUserInstruction(firstUserExtracted.userText)
+    : "";
+
   const targetText = activeHumanText;
 
   // Detect code modification / mutation tools from tool results or user text
@@ -210,7 +219,6 @@ export function classifyIntent(
 
   // Compute prompt anchor hash for cache preservation
   const systemMessages = messages.filter((m) => m.role === "system");
-  const firstUserMessage = userMessages[0];
   const anchorPayload = {
     system: systemMessages.map((m) =>
       typeof m.content === "string" ? m.content : JSON.stringify(m.content || "")
@@ -271,6 +279,7 @@ export function classifyIntent(
     complexityScore,
     promptAnchorHash,
     isToolResultTurn,
+    originalPrompt: originalPromptText || "",
   };
 }
 

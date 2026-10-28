@@ -68,6 +68,9 @@ export {
   type ExtractedResponseContent,
 };
 
+// Stagnation recovery exports
+export { detectAndRecoverFromStagnation, escalateFromStagnation } from "./tieredRegistry.ts";
+
 export interface SpbRoutingContext {
   sessionId?: string;
   messages: Array<{ role: string; content?: string }>;
@@ -193,11 +196,10 @@ export async function processSmartProxyRouting(
       );
     }
 
-    // 3b. Stagnation detection & auto-recovery loop breaker
+    // 3b. Integrated stagnation detection and recovery with unified escalation
     // Track consecutive read/inspection turns across turns. When an agent repeatedly
     // performs read-only operations (Read, Grep, Glob, cat, ls) without progressing
     // to code modification or test execution, we auto-steer to break the loop.
-    const STAGNATION_READ_THRESHOLD = 3;
     let consecutiveReads: number;
     let stagnationDetected = false;
     let stagnationRecovered = false;
@@ -214,38 +216,28 @@ export async function processSmartProxyRouting(
       consecutiveReads = 0;
     }
 
-    // Detect stagnation: >= 3 consecutive read/inspection turns
-    if (consecutiveReads >= STAGNATION_READ_THRESHOLD) {
-      isStagnant = true;
+    // Detect stagnation using the unified recovery mechanism
+    const stagnationRecovery = detectAndRecoverFromStagnation(
+      sessionId,
+      intent.taskPhase,
+      consecutiveReads,
+      existingCheckpoint
+    );
+
+    isStagnant = stagnationRecovery.isStagnant;
+    if (isStagnant) {
       stagnationDetected = true;
       stagnationRecovered = true;
 
-      // Auto-steer taskPhase away from passive inspection to active execution
-      if (intent.taskPhase === "INSPECTION_SYNTHESIS") {
-        // Determine target phase based on original user intent signals
-        if (
-          /\b(test|spec|verify|assert|coverage)\b/i.test(intent.originalPrompt ?? "") ||
-          /\b(test|spec|verify|assert|coverage)\b/i.test(lastUserText || "")
-        ) {
-          intent.taskPhase = "TESTING_AND_VERIFICATION";
-        } else {
-          intent.taskPhase = "CODE_GENERATION";
-        }
-        autoRecoveryDirective =
-          "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections."; // Reset consecutiveReads counter to break the stagnation loop - allow re-inspection after execution
-        consecutiveReads = 0;
-        // Update the checkpoint with the reset counter to prevent immediate re-triggering
-        existingCheckpoint = {
-          ...existingCheckpoint,
-          consecutiveReads: 0,
-        };
+      // Apply the recovery directive and task phase changes
+      if (stagnationRecovery.recoveryDirective) {
+        autoRecoveryDirective = stagnationRecovery.recoveryDirective;
       }
-
-      // Escalate tier assignment to tier_2_resilient to enable tool execution
-      // (Tier 2 has full tool execution authority vs Tier 1 oversight or Tier 3 constraints)
-      // Note: tierConfig and selectModelTier are defined later; we defer tier upgrade
-      // to after tier selection by setting a flag that will be handled downstream.
+      if (stagnationRecovery.newTaskPhase) {
+        intent.taskPhase = stagnationRecovery.newTaskPhase;
+      }
     }
+
     // Pass isToolResultTurn AND guidanceContract to enforce supervision
     // Tier 3 will require a guidanceContract for all phases
     const tierConfig = getTierConfig();
@@ -257,22 +249,12 @@ export async function processSmartProxyRouting(
       intent.isToolResultTurn,
       intent.guidanceContract
     );
-    console.log(
-      `[SPB Bridge] Session ${sessionId} | TaskPhase: ${intent.taskPhase} | Selected Tier: ${tierAssignment.tier} | GuidanceContract present: ${!!intent.guidanceContract}`
-    );
 
-    // Enhanced stagnation detection with immediate recovery
-    const STAGNATION_DETECTION = {
-      threshold: 3,
-      consecutiveReads,
-      isStagnant: consecutiveReads >= 3 && intent.taskPhase === "INSPECTION_SYNTHESIS",
-    };
-
-    if (STAGNATION_DETECTION.isStagnant) {
-      // Trigger immediate recovery - escalate to tier_2_resilient to break inspection loop
+    // If stagnation recovery specified an escalation tier, enforce it immediately
+    if (isStagnant && stagnationRecovery.escalationTier) {
       const resilientModels = tierConfig?.tierModels?.tier_2_resilient;
       tierAssignment = {
-        tier: "tier_2_resilient",
+        tier: stagnationRecovery.escalationTier,
         recommendedModels:
           resilientModels && resilientModels.length > 0
             ? resilientModels
@@ -281,30 +263,13 @@ export async function processSmartProxyRouting(
         requiresTools: intent.requiresTools,
         complexityScore: intent.complexityScore,
       };
-      // Reset consecutiveReads to prevent immediate re-triggering
-      consecutiveReads = 0;
       console.log(
-        `[SPB Bridge] Session ${sessionId} | Enhanced Stagnation Recovery: Escalating from ${intent.taskPhase} to tier_2_resilient, resetting consecutive reads to ${consecutiveReads}`
+        `[SPB Bridge] Session ${sessionId} | Stagnation recovery tier applied: ${tierAssignment.tier}`
       );
     }
-
-    // If stagnation was detected, force tier escalation to tier_2_resilient for active tool execution
-    if (isStagnant && tierAssignment.tier !== "tier_2_resilient") {
-      const resilientModels = tierConfig?.tierModels?.tier_2_resilient;
-      tierAssignment = {
-        tier: "tier_2_resilient",
-        recommendedModels:
-          resilientModels && resilientModels.length > 0
-            ? resilientModels
-            : tierAssignment.recommendedModels,
-        guidanceContract: tierAssignment.guidanceContract,
-        requiresTools: intent.requiresTools,
-        complexityScore: intent.complexityScore,
-      };
-      console.log(
-        `[SPB Bridge] Session ${sessionId} | Stagnation detected: ${consecutiveReads} consecutive reads. Escalating to tier_2_resilient to break loop.`
-      );
-    }
+    console.log(
+      `[SPB Bridge] Session ${sessionId} | TaskPhase: ${intent.taskPhase} | Selected Tier: ${tierAssignment.tier} | GuidanceContract present: ${!!intent.guidanceContract}`
+    );
 
     if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
       // Model continuity: only preserve model continuity when the active turn is within the same tier.
@@ -327,6 +292,14 @@ export async function processSmartProxyRouting(
       }
     }
 
+    // Normalize guidanceContract after tier selection (ensure consistent structure)
+    let normalizedGuidanceContract: GuidanceContract | undefined = undefined;
+    if (tierAssignment.guidanceContract) {
+      normalizedGuidanceContract = tierAssignment.guidanceContract;
+    } else if (intent.guidanceContract) {
+      normalizedGuidanceContract = intent.guidanceContract;
+    }
+
     const selectedModel =
       restoredModel ||
       (tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
@@ -335,7 +308,7 @@ export async function processSmartProxyRouting(
 
     // 5. Synthesize or propagate guidanceContract across session turns
     let activeGuidanceContract: GuidanceContract | undefined =
-      tierAssignment.guidanceContract ||
+      normalizedGuidanceContract ||
       (existingCheckpoint?.guidanceContract as GuidanceContract | undefined);
 
     if (isStagnant) {
