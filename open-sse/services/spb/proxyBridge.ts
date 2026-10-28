@@ -10,7 +10,12 @@ import {
   cleanUserInstruction,
   GuidanceContract,
 } from "./intentAnalyzer.ts";
-import { selectModelTier, TierAssignment } from "./tieredRegistry.ts";
+import {
+  selectModelTier,
+  TierAssignment,
+  detectAndRecoverFromStagnation,
+  escalateFromStagnation,
+} from "./tieredRegistry.ts";
 import { getTierConfig } from "../tierResolver.ts";
 import { saveCheckpoint, getCheckpoint, recordSpbTelemetry } from "../../../src/lib/db/spbState.ts";
 import {
@@ -66,10 +71,9 @@ export {
   type NecessityCheckResult,
   type ResponseEvaluationResult,
   type ExtractedResponseContent,
+  detectAndRecoverFromStagnation,
+  escalateFromStagnation,
 };
-
-// Stagnation recovery exports
-export { detectAndRecoverFromStagnation, escalateFromStagnation } from "./tieredRegistry.ts";
 
 export interface SpbRoutingContext {
   sessionId?: string;
