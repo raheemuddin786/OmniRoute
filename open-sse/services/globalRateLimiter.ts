@@ -292,21 +292,35 @@ export function inspectErrorResponse(params: {
 
     // Default fallback cooldown if no hint detected
     if (cooldownMs <= 0) {
-      cooldownMs = 60_000; // 1 minute default
+      cooldownMs = isQuotaExhausted ? 3_600_000 : 60_000; // 1 hr for quota exhaustion, 1 min for transient rate limit
     }
 
     // Determine whether this is model-specific or provider-wide
+    const isAccountWideQuota =
+      lowerText.includes("free-models-per-day") ||
+      lowerText.includes("out of credits") ||
+      lowerText.includes("billing") ||
+      lowerText.includes("insufficient_quota");
     const isModelQuota =
-      hasPerModelQuota(provider, model) ||
-      lowerText.includes("per-model") ||
-      lowerText.includes("model limit");
+      !isAccountWideQuota &&
+      (hasPerModelQuota(provider, model) ||
+        lowerText.includes("per-model") ||
+        lowerText.includes("model limit"));
     const isConcurrency = looksLikeConcurrencyLimit(errorText);
     const isQuotaExhausted = looksLikeQuotaExhausted(errorText);
+
+    if (isQuotaExhausted && cooldownMs < 3_600_000) {
+      cooldownMs = 3_600_000; // 1 hour minimum for quota exhaustion (e.g. daily limit hit)
+      retryAfterSeconds = 3600;
+    }
 
     if (isConcurrency) {
       scope = "transient";
       reason = "concurrency_limit_hit";
       cooldownMs = Math.min(cooldownMs, 2_000); // Concurrency limits clear rapidly
+    } else if (isAccountWideQuota) {
+      scope = "provider";
+      reason = isQuotaExhausted ? "provider_quota_exhausted" : "provider_rate_limit_exceeded";
     } else if (isModelQuota) {
       scope = "model";
       reason = isQuotaExhausted ? "model_quota_exhausted" : "model_rate_limit_exceeded";
@@ -339,8 +353,8 @@ export function inspectErrorResponse(params: {
   const isModelSpecific = scope === "model";
   const targetKey = buildRateLimitKey(provider, connectionId, model, scope);
 
-  // Apply explicit grace period of 1 to 2 minutes
-  const gracePeriodMs = isPermanent ? 0 : resolveConfiguredGracePeriodMs();
+  // Apply explicit grace period of 1 to 2 minutes (skip for concurrency limits and permanent blocks)
+  const gracePeriodMs = isPermanent || isConcurrency ? 0 : resolveConfiguredGracePeriodMs();
   const totalBlockMs = isBlocked ? cooldownMs + gracePeriodMs : 0;
   const now = Date.now();
   const unblockTimestamp = isBlocked ? now + totalBlockMs : now;

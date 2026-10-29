@@ -1437,6 +1437,10 @@ export function parseRetryAfterFromBody(responseBody: unknown): {
 
   // Classify by error message keywords
   const reason = classifyErrorText(msg || errorType);
+  const isQuota = looksLikeQuotaExhausted(msg || errorType);
+  if (isQuota) {
+    return { retryAfterMs: 3_600_000, reason: RateLimitReason.QUOTA_EXHAUSTED };
+  }
   return { retryAfterMs: null, reason };
 }
 
