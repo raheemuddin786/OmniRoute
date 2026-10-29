@@ -47,6 +47,40 @@ export interface GovernanceMetrics {
   conclusionReviews: number;
   repromptCount?: number;
   reviewDiscrepancies: number;
+  wastedTokensTotal?: number;
+  upstreamErrors?: {
+    statusCode: number;
+    errorSummary: string;
+    impactedTokens: number;
+    sessionIds: string[];
+    recommendation: string;
+    occurrences: number;
+  }[];
+  rateLimitEvents?: {
+    provider: string;
+    model: string;
+    totalRateLimitHits: number;
+    quotaResetTime?: number;
+    creditsNeeded?: number;
+    messages: string[];
+    wastedTokens: number;
+  }[];
+  translationFailures?: {
+    upstreamProvider: string;
+    errorPattern: string;
+    tokensWasted: number;
+    recoveryStrategy: string;
+    preventionRule: string;
+    affectedSessions: string[];
+    firstOccurred: number;
+  }[];
+  providerHealth?: {
+    provider: string;
+    model: string;
+    errorRate: number;
+    lastErrorAt?: number;
+    healthy: boolean;
+  }[];
   spbVsNonSpbComparison: {
     spbEfficiencyScore: number;
     spbLatencyMs: number;
@@ -547,6 +581,124 @@ export function SmartProxyActivitySection() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upstream Errors, Rate Limits & Token Wastage Diagnostics */}
+      {governance && (
+        <div className="space-y-4">
+          {/* Token Wastage Banner */}
+          <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-rose-500/20 pb-2 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-rose-400 text-[20px]">
+                  report_problem
+                </span>
+                <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider">
+                  Token Wastage & Upstream Diagnostic Telemetry
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/15 text-rose-400">
+                  Total Wasted: {((governance.wastedTokensTotal || 0) / 1000).toFixed(1)}k tokens
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Malformed translation failures */}
+              <div className="rounded border border-rose-500/20 bg-background/60 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-foreground">
+                    Malformed Choices (502)
+                  </span>
+                  <span className="text-[10px] font-semibold text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded">
+                    {governance.translationFailures?.length || 0} incidents
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Upstream returned malformed response with empty choices. SPB automatically
+                  captured and reprompted.
+                </p>
+                <div className="mt-2 text-[10px] text-rose-300 font-mono">
+                  Wasted:{" "}
+                  {(
+                    (governance.translationFailures?.reduce((acc, f) => acc + f.tokensWasted, 0) ||
+                      0) / 1000
+                  ).toFixed(1)}
+                  k tokens
+                </div>
+              </div>
+
+              {/* Rate limit events */}
+              <div className="rounded border border-amber-500/20 bg-background/60 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-foreground">Rate Limits (429)</span>
+                  <span className="text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                    {governance.rateLimitEvents?.reduce(
+                      (acc, r) => acc + r.totalRateLimitHits,
+                      0
+                    ) || 0}{" "}
+                    hits
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Free tier model quotas exhausted. Upgrade credits or adapt model routing tier
+                  weights.
+                </p>
+                <div className="mt-2 text-[10px] text-amber-300 font-mono">
+                  Add 10 credits to unlock 1000 free model requests
+                </div>
+              </div>
+
+              {/* Stagnation Repetitive Loops */}
+              <div className="rounded border border-indigo-500/20 bg-background/60 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-foreground">Stagnation Recovery</span>
+                  <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                    {governance.stagnationRecoveryRate} recovered
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Autonomous loops detected and broken. Repetitive read tool invocations redirected
+                  to Tier 2 execution.
+                </p>
+                <div className="mt-2 text-[10px] text-emerald-400 font-mono">
+                  100% autonomous mitigation
+                </div>
+              </div>
+            </div>
+
+            {/* Error List Table */}
+            {governance.upstreamErrors && governance.upstreamErrors.length > 0 && (
+              <div className="mt-4 border-t border-rose-500/20 pt-3">
+                <div className="text-[11px] font-medium text-muted-foreground mb-2">
+                  Upstream Error Breakdown & Recommended Actions:
+                </div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {governance.upstreamErrors.slice(0, 5).map((err, idx) => (
+                    <div
+                      key={idx}
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px] p-2 rounded bg-background/40 border border-border/50"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-rose-500/20 text-rose-300">
+                          {err.statusCode}
+                        </span>
+                        <span className="text-foreground truncate max-w-xs sm:max-w-md">
+                          {err.errorSummary}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-muted-foreground shrink-0">
+                        <span>{err.occurrences}x</span>
+                        <span className="text-indigo-400 text-[10px]">{err.recommendation}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

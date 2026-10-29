@@ -123,6 +123,40 @@ export interface EnhancedGovernanceMetrics {
   conclusionReviews: number;
   repromptCount: number;
   reviewDiscrepancies: number;
+  wastedTokensTotal: number;
+  upstreamErrors?: {
+    statusCode: number;
+    errorSummary: string;
+    impactedTokens: number;
+    sessionIds: string[];
+    recommendation: string;
+    occurrences: number;
+  }[];
+  rateLimitEvents?: {
+    provider: string;
+    model: string;
+    totalRateLimitHits: number;
+    quotaResetTime?: number;
+    creditsNeeded?: number;
+    messages: string[];
+    wastedTokens: number;
+  }[];
+  translationFailures?: {
+    upstreamProvider: string;
+    errorPattern: string;
+    tokensWasted: number;
+    recoveryStrategy: string;
+    preventionRule: string;
+    affectedSessions: string[];
+    firstOccurred: number;
+  }[];
+  providerHealth?: {
+    provider: string;
+    model: string;
+    errorRate: number;
+    lastErrorAt?: number;
+    healthy: boolean;
+  }[];
   spbVsNonSpbComparison: {
     spbEfficiencyScore: number;
     spbLatencyMs: number;
@@ -618,6 +652,195 @@ export function getEnhancedGovernanceMetrics(
     const repromptCount = Number(evalRow?.total_reprompts || 0);
     const conclusionReviews = Number(evalRow?.total_evals || 0);
 
+    // 4. Query SPB Error and Waste Analytics
+    let wastedTokensTotal = 0;
+    const upstreamErrors: EnhancedGovernanceMetrics["upstreamErrors"] = [];
+    const rateLimitEvents: EnhancedGovernanceMetrics["rateLimitEvents"] = [];
+    const translationFailures: EnhancedGovernanceMetrics["translationFailures"] = [];
+    const providerHealth: EnhancedGovernanceMetrics["providerHealth"] = [];
+
+    try {
+      const errorRows = db
+        .prepare(
+          `SELECT
+             status,
+             model,
+             provider,
+             error_summary,
+             session_tag,
+             tokens_in,
+             tokens_out,
+             timestamp
+           FROM call_logs
+           WHERE timestamp >= ? AND timestamp <= ?
+             AND (combo_name LIKE 'SPB %' OR combo_name LIKE '%spb%' OR requested_model LIKE '%spb%' OR model LIKE '%spb%')
+             AND status != 200`
+        )
+        .all(startIso, endIso) as Array<{
+        status: number;
+        model: string | null;
+        provider: string | null;
+        error_summary: string | null;
+        session_tag: string | null;
+        tokens_in: number | null;
+        tokens_out: number | null;
+        timestamp: string;
+      }>;
+
+      const errorGroups = new Map<
+        string,
+        {
+          statusCode: number;
+          errorSummary: string;
+          impactedTokens: number;
+          sessionIds: Set<string>;
+          occurrences: number;
+          recommendation: string;
+        }
+      >();
+
+      const rateLimitGroups = new Map<
+        string,
+        {
+          provider: string;
+          model: string;
+          hits: number;
+          messages: Set<string>;
+          tokens: number;
+        }
+      >();
+
+      const providerStats = new Map<
+        string,
+        {
+          provider: string;
+          model: string;
+          totalErrors: number;
+          lastErrorAt: number;
+        }
+      >();
+
+      for (const row of errorRows) {
+        const tokensWasted = Number(row.tokens_in || 0) + Number(row.tokens_out || 0);
+        wastedTokensTotal += tokensWasted;
+
+        const summary = row.error_summary || `HTTP ${row.status} error`;
+        const providerName = row.provider || "upstream";
+        const modelName = row.model || "unknown";
+
+        // Provider health aggregation
+        const provKey = `${providerName}:${modelName}`;
+        const pStat = providerStats.get(provKey) || {
+          provider: providerName,
+          model: modelName,
+          totalErrors: 0,
+          lastErrorAt: 0,
+        };
+        pStat.totalErrors += 1;
+        pStat.lastErrorAt = Math.max(pStat.lastErrorAt, new Date(row.timestamp).getTime());
+        providerStats.set(provKey, pStat);
+
+        // Group upstream errors
+        const errKey = `${row.status}:${summary.slice(0, 80)}`;
+        let errGroup = errorGroups.get(errKey);
+        if (!errGroup) {
+          let rec = "Review upstream credentials and provider network stability.";
+          if (row.status === 429) {
+            rec = "Exceeded free daily request quota. Configure paid credits or switch model tier.";
+          } else if (row.status === 502 && summary.includes("empty_choices")) {
+            rec =
+              "Malformed choices from upstream. Automated zero-loss reprompt or resilient tier fallback triggered.";
+          } else if (row.status === 499) {
+            rec =
+              "Client terminated connection before completion. Verify agent execution timeouts.";
+          }
+          errGroup = {
+            statusCode: row.status,
+            errorSummary: summary,
+            impactedTokens: 0,
+            sessionIds: new Set<string>(),
+            occurrences: 0,
+            recommendation: rec,
+          };
+          errorGroups.set(errKey, errGroup);
+        }
+        errGroup.impactedTokens += tokensWasted;
+        errGroup.occurrences += 1;
+        if (row.session_tag) {
+          errGroup.sessionIds.add(row.session_tag);
+        }
+
+        // Categorize Rate Limits (429)
+        if (row.status === 429) {
+          const rlKey = `${providerName}:${modelName}`;
+          let rl = rateLimitGroups.get(rlKey);
+          if (!rl) {
+            rl = {
+              provider: providerName,
+              model: modelName,
+              hits: 0,
+              messages: new Set<string>(),
+              tokens: 0,
+            };
+            rateLimitGroups.set(rlKey, rl);
+          }
+          rl.hits += 1;
+          rl.tokens += tokensWasted;
+          rl.messages.add(summary);
+        }
+
+        // Categorize Malformed Translations (502 empty choices)
+        if (
+          row.status === 502 &&
+          (summary.includes("empty_choices") || summary.includes("malformed"))
+        ) {
+          translationFailures.push({
+            upstreamProvider: providerName,
+            errorPattern: summary,
+            tokensWasted,
+            recoveryStrategy: "Escalated to Tier 2 Resilient with GuidanceContract",
+            preventionRule: "Enforce non-empty choice array filter before downstream yield",
+            affectedSessions: row.session_tag ? [row.session_tag] : [],
+            firstOccurred: new Date(row.timestamp).getTime(),
+          });
+        }
+      }
+
+      for (const grp of errorGroups.values()) {
+        upstreamErrors.push({
+          statusCode: grp.statusCode,
+          errorSummary: grp.errorSummary,
+          impactedTokens: grp.impactedTokens,
+          sessionIds: Array.from(grp.sessionIds).slice(0, 5),
+          recommendation: grp.recommendation,
+          occurrences: grp.occurrences,
+        });
+      }
+
+      for (const rl of rateLimitGroups.values()) {
+        rateLimitEvents.push({
+          provider: rl.provider,
+          model: rl.model,
+          totalRateLimitHits: rl.hits,
+          messages: Array.from(rl.messages),
+          wastedTokens: rl.tokens,
+          creditsNeeded: rl.messages.some((m) => m.includes("10 credits")) ? 10 : undefined,
+        });
+      }
+
+      for (const ps of providerStats.values()) {
+        providerHealth.push({
+          provider: ps.provider,
+          model: ps.model,
+          errorRate: Math.min(100, Math.round((ps.totalErrors / (spbReqs || 1)) * 100)),
+          lastErrorAt: ps.lastErrorAt,
+          healthy: ps.totalErrors < 10,
+        });
+      }
+    } catch (e) {
+      console.error("[SPB State] Failed to aggregate error and wastage metrics:", e);
+    }
+
     return {
       sessionId: options.sessionId || "all",
       timestamp: Date.now(),
@@ -634,6 +857,11 @@ export function getEnhancedGovernanceMetrics(
       conclusionReviews,
       repromptCount,
       reviewDiscrepancies: 0,
+      wastedTokensTotal,
+      upstreamErrors,
+      rateLimitEvents,
+      translationFailures,
+      providerHealth,
       spbVsNonSpbComparison: {
         spbEfficiencyScore: spbReqs > 0 ? 0.92 : 0,
         spbLatencyMs: Math.round(spbLatency),
@@ -658,6 +886,11 @@ export function getEnhancedGovernanceMetrics(
       conclusionReviews: 0,
       repromptCount: 0,
       reviewDiscrepancies: 0,
+      wastedTokensTotal: 0,
+      upstreamErrors: [],
+      rateLimitEvents: [],
+      translationFailures: [],
+      providerHealth: [],
       spbVsNonSpbComparison: {
         spbEfficiencyScore: 0,
         spbLatencyMs: 0,

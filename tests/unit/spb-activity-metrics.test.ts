@@ -154,4 +154,9 @@ test("SPB Governance & Intent Evaluations: records evaluations and computes gove
   assert.equal(typeof gov.stagnationRecoveryRate, "number");
   assert.ok(gov.stagnationRecoveryRate >= 1);
   assert.ok(gov.conclusionReviews >= 1);
+  assert.equal(typeof gov.wastedTokensTotal, "number");
+  assert.ok(Array.isArray(gov.upstreamErrors));
+  assert.ok(Array.isArray(gov.rateLimitEvents));
+  assert.ok(Array.isArray(gov.translationFailures));
+  assert.ok(Array.isArray(gov.providerHealth));
 });
