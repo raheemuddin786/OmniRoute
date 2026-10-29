@@ -260,10 +260,6 @@ export function isDeferredTool(name: string): boolean {
     "ScheduleWakeup",
     "Workflow",
     "Skill",
-    "Read",
-    "Write",
-    "Edit",
-    "Bash",
   ]);
   return deferredToolNames.has(name);
 }

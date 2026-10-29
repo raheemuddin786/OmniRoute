@@ -42,17 +42,11 @@ import {
   injectGovernanceIntervention,
   consumeLoopIntervention,
 } from "../../governance/loopIntervention.ts";
-import {
-  enforceToolCallRejections,
-  extractEchoedToolCalls,
-} from "../../governance/toolRejectionEnforcer.ts";
+import { enforceToolCallRejections } from "../../governance/toolRejectionEnforcer.ts";
 import { getToolRejectionLedger } from "../../governance/toolRejectionLedger.ts";
 import { recordGovernanceAudit, hashPromptMessages } from "../../governance/auditBus.ts";
 import { resolveGovernanceIdentity, type GovernanceIdentity } from "../../governance/identity.ts";
-import {
-  type ToolCallValidationContext,
-  isDeferredTool,
-} from "../../governance/toolSchemaValidator.ts";
+import type { ToolCallValidationContext } from "../../governance/toolSchemaValidator.ts";
 
 const log = logger("GOVERNANCE");
 
@@ -232,21 +226,7 @@ export function applyGovernanceIngress<T>(input: GovernanceIngressInput): T {
 
   // ── 2. Tool-call rejection enforcement ──
   try {
-    // Check if any echoed tool calls are deferred (Agent, ToolSearch, etc.)
-    const callsToCheck = extractEchoedToolCalls(body);
-    const hasDeferredAgentCalls = callsToCheck.some(
-      (call) => call.name && isDeferredTool(call.name)
-    );
-
-    if (!hasDeferredAgentCalls) {
-      body = applyRejectionEnforcement(input, body);
-    } else {
-      // Allow deferred Agent tools to pass through to their harness
-      log.debug("deferred Agent tool call detected, skipping governance enforcement", {
-        sessionId: input.sessionId,
-        toolNames: callsToCheck.map((c) => c.name).filter(Boolean),
-      });
-    }
+    body = applyRejectionEnforcement(input, body);
   } catch (err) {
     log.error("tool-call rejection enforcement failed (fail-open)", {
       error: err instanceof Error ? err.message : String(err),

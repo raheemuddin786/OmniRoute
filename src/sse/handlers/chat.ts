@@ -949,8 +949,17 @@ async function handleChatImplementation(
         Array.isArray(body?.tools) ||
         (Array.isArray(body?.messages) &&
           body.messages.some(
-            (m: { role?: string; content?: unknown }) =>
-              m.role === "tool" || (typeof m.content === "object" && m.content !== null)
+            (m: { role?: string; content?: unknown; tool_calls?: unknown }) =>
+              m.role === "tool" ||
+              (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) ||
+              (Array.isArray(m.content) &&
+                m.content.some(
+                  (b: unknown) =>
+                    b !== null &&
+                    typeof b === "object" &&
+                    ((b as { type?: string }).type === "tool_use" ||
+                      (b as { type?: string }).type === "tool_result")
+                ))
           ));
 
       if (spbDecision.necessity?.confirmationRequired && !forceExecution && !hasToolsOrToolCalls) {
