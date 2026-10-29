@@ -39,6 +39,7 @@ import {
   evaluateRequestNecessity,
   computePatternHash,
   normalizeInterleavedSystemMessages,
+  extractContextAnchors,
   type PromptEnhancementResult,
   type NecessityCheckResult,
 } from "./inboundIntelligence.ts";
@@ -358,6 +359,7 @@ export async function processSmartProxyRouting(
     ) {
       const cleanInstruction =
         cleanUserInstruction(lastUserText) || "Supervised autonomous execution";
+      const anchors = extractContextAnchors(messages);
       activeGuidanceContract = {
         supervisorTier: tierAssignment.tier,
         origin: tierAssignment.tier === "tier_1_apex" ? "supervisor" : "auto",
@@ -368,8 +370,13 @@ export async function processSmartProxyRouting(
           "Execute all required tool operations autonomously without delegating commands to the user",
         ],
         instructions: [cleanInstruction],
-        targetFiles: [],
-        verificationCriteria: ["All test and verification suites must pass with zero errors"],
+        targetFiles: anchors.referencedFiles,
+        verificationCriteria: [
+          "All test and verification suites must pass with zero errors",
+          ...(anchors.diagnosedErrors.length > 0
+            ? [`Remediate diagnosed error: ${anchors.diagnosedErrors[0]}`]
+            : []),
+        ],
         createdAt: Date.now(),
       };
       tierAssignment.guidanceContract = activeGuidanceContract;
@@ -538,16 +545,32 @@ export async function processSmartProxyRouting(
       // Prompt Cache Preservation & Boundary Injection
       // 1. Ensure system messages carry cache_control breakpoint
       for (const m of finalMessages) {
-        if (m.role === "system" && !m.cache_control) {
-          m.cache_control = { type: "ephemeral" };
+        if (m.role === "system") {
+          if (!m.cache_control) {
+            m.cache_control = { type: "ephemeral" };
+          }
+          if (Array.isArray(m.content) && m.content.length > 0) {
+            const lastBlock = m.content[m.content.length - 1];
+            if (lastBlock && typeof lastBlock === "object") {
+              (lastBlock as Record<string, unknown>).cache_control = { type: "ephemeral" };
+            }
+          }
         }
       }
 
       // 2. Mark preceding turn before active user turn to freeze prefix cache
       if (lastUserIndex > 0) {
         const precedingTurn = finalMessages[lastUserIndex - 1];
-        if (precedingTurn && !precedingTurn.cache_control) {
-          precedingTurn.cache_control = { type: "ephemeral" };
+        if (precedingTurn) {
+          if (!precedingTurn.cache_control) {
+            precedingTurn.cache_control = { type: "ephemeral" };
+          }
+          if (Array.isArray(precedingTurn.content) && precedingTurn.content.length > 0) {
+            const lastBlock = precedingTurn.content[precedingTurn.content.length - 1];
+            if (lastBlock && typeof lastBlock === "object") {
+              (lastBlock as Record<string, unknown>).cache_control = { type: "ephemeral" };
+            }
+          }
         }
       }
 

@@ -16,6 +16,7 @@ export interface TierAssignment {
   maxTokens: number;
   temperature: number;
   cacheEnabled: boolean;
+  reasoningEffort?: "low" | "medium" | "high";
   guidanceContract?: GuidanceContract;
   requiresGuidance?: boolean;
 }
@@ -78,6 +79,7 @@ export function selectModelTier(
       maxTokens: apexMaxTokens,
       temperature: 0.2,
       cacheEnabled: true,
+      reasoningEffort: "high",
       guidanceContract,
       requiresGuidance: false,
     };
@@ -121,6 +123,7 @@ export function selectModelTier(
       maxTokens: localMaxTokens,
       temperature: 0.1,
       cacheEnabled: false,
+      reasoningEffort: "low",
       guidanceContract,
       requiresGuidance: effectiveRequiresGuidance,
     };
@@ -141,6 +144,7 @@ export function selectModelTier(
     maxTokens: resilientMaxTokens,
     temperature: 0.2,
     cacheEnabled: true,
+    reasoningEffort: "medium",
     guidanceContract,
     requiresGuidance: false,
   };

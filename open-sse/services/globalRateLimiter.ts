@@ -290,6 +290,9 @@ export function inspectErrorResponse(params: {
       }
     }
 
+    const isQuotaExhausted = looksLikeQuotaExhausted(errorText);
+    const isConcurrency = looksLikeConcurrencyLimit(errorText);
+
     // Default fallback cooldown if no hint detected
     if (cooldownMs <= 0) {
       cooldownMs = isQuotaExhausted ? 3_600_000 : 60_000; // 1 hr for quota exhaustion, 1 min for transient rate limit
@@ -306,8 +309,6 @@ export function inspectErrorResponse(params: {
       (hasPerModelQuota(provider, model) ||
         lowerText.includes("per-model") ||
         lowerText.includes("model limit"));
-    const isConcurrency = looksLikeConcurrencyLimit(errorText);
-    const isQuotaExhausted = looksLikeQuotaExhausted(errorText);
 
     if (isQuotaExhausted && cooldownMs < 3_600_000) {
       cooldownMs = 3_600_000; // 1 hour minimum for quota exhaustion (e.g. daily limit hit)
@@ -354,7 +355,8 @@ export function inspectErrorResponse(params: {
   const targetKey = buildRateLimitKey(provider, connectionId, model, scope);
 
   // Apply explicit grace period of 1 to 2 minutes (skip for concurrency limits and permanent blocks)
-  const gracePeriodMs = isPermanent || isConcurrency ? 0 : resolveConfiguredGracePeriodMs();
+  const isConcurrencyLimit = reason === "concurrency_limit_hit";
+  const gracePeriodMs = isPermanent || isConcurrencyLimit ? 0 : resolveConfiguredGracePeriodMs();
   const totalBlockMs = isBlocked ? cooldownMs + gracePeriodMs : 0;
   const now = Date.now();
   const unblockTimestamp = isBlocked ? now + totalBlockMs : now;

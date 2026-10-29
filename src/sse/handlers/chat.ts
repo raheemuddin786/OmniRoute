@@ -1000,6 +1000,12 @@ async function handleChatImplementation(
           _spbActive: true,
           _spbDecision: spbDecision,
           ...(spbDecision.cacheControl ? { cacheControl: spbDecision.cacheControl } : {}),
+          ...(body.max_tokens === undefined && spbDecision.tierAssignment?.maxTokens
+            ? { max_tokens: spbDecision.tierAssignment.maxTokens }
+            : {}),
+          ...(body.reasoning_effort === undefined && spbDecision.tierAssignment?.reasoningEffort
+            ? { reasoning_effort: spbDecision.tierAssignment.reasoningEffort }
+            : {}),
         };
       }
     } catch (spbErr) {
