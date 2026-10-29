@@ -350,8 +350,9 @@ export async function processSmartProxyRouting(
         "\nYou are prohibited from performing further read-only inspection calls in this turn." +
         "\nYou must directly write/edit the solution or execute verification tests immediately.";
     } else if (
-      !activeGuidanceContract &&
-      (tierAssignment.tier === "tier_1_apex" || tierAssignment.tier === "tier_2_resilient")
+      intent.taskPhase === "ARCHITECTURAL_PLANNING" ||
+      (!activeGuidanceContract &&
+        (tierAssignment.tier === "tier_1_apex" || tierAssignment.tier === "tier_2_resilient"))
     ) {
       const cleanInstruction =
         cleanUserInstruction(lastUserText) || "Supervised autonomous execution";
@@ -481,6 +482,9 @@ export async function processSmartProxyRouting(
         stagnationDetected,
         stagnationRecovered,
       });
+      console.log(
+        `[SPB Bridge Execution] Session: ${sessionId} | Turn: ${intent.isToolResultTurn ? "tool_result" : "human_prompt"} | Phase: ${intent.taskPhase} | Tier: ${tierAssignment.tier} | Stagnation: ${stagnationRecovered ? "recovered" : stagnationDetected ? "detected" : "none"} | Contract: ${activeGuidanceContract ? "present" : "none"}`
+      );
     } catch (telemErr) {
       console.warn("[SPB Bridge] Telemetry recording warning:", telemErr);
     }

@@ -40,6 +40,47 @@ export interface SpbTelemetrySummary {
   lastRoutedAt: string | null;
 }
 
+export interface SpbActivityFilterOptions {
+  limit?: number;
+  offset?: number;
+  timeRange?: string; // "1h" | "6h" | "24h" | "7d" | "30d" | "all"
+  startTime?: number;
+  endTime?: number;
+  tier?: string;
+  taskPhase?: string;
+  sessionId?: string;
+}
+
+export interface SpbActivityRecord {
+  id: number;
+  sessionId: string;
+  taskPhase: string;
+  modelTier: string;
+  checkpointRestored: boolean;
+  fallbackTriggered: boolean;
+  statusCode: number;
+  latencyMs: number;
+  timestamp: number;
+  stagnationDetected: boolean;
+  stagnationRecovered: boolean;
+  satisfactionScore?: number;
+  repromptCount?: number;
+}
+
+export interface SpbDetailedMetrics {
+  totalRoutes: number;
+  tierDistribution: Record<string, number>;
+  phaseDistribution: Record<string, number>;
+  avgLatencyMs: number;
+  stagnationRecoveredCount: number;
+  fallbacksTriggeredCount: number;
+  checkpointsRestoredCount: number;
+  timeRange: {
+    startTime: number;
+    endTime: number;
+  };
+}
+
 export interface LearnedOptimization {
   id?: number;
   patternHash: string;
@@ -107,9 +148,14 @@ export function initSpbStateTable(): void {
         fallback_triggered INTEGER NOT NULL,
         status_code INTEGER NOT NULL,
         latency_ms INTEGER NOT NULL,
-        timestamp INTEGER NOT NULL
+        timestamp INTEGER NOT NULL,
+        stagnation_detected INTEGER NOT NULL DEFAULT 0,
+        stagnation_recovered INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_spb_telemetry_time ON spb_telemetry_audit(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_spb_telemetry_tier ON spb_telemetry_audit(model_tier);
+      CREATE INDEX IF NOT EXISTS idx_spb_telemetry_phase ON spb_telemetry_audit(task_phase);
+      CREATE INDEX IF NOT EXISTS idx_spb_telemetry_session ON spb_telemetry_audit(session_id);
 
       CREATE TABLE IF NOT EXISTS spb_learned_optimizations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -413,6 +459,243 @@ export function getSpbTelemetrySummary(): SpbTelemetrySummary {
   } catch (err) {
     console.error("[SPB State] Failed to build telemetry summary:", err);
     return defaultSummary;
+  }
+}
+
+function resolveTimeRangeBounds(
+  timeRange?: string,
+  startTime?: number,
+  endTime?: number
+): { start: number; end: number } {
+  const now = Date.now();
+  let start = startTime ?? 0;
+  const end = endTime ?? now;
+
+  if (timeRange && !startTime) {
+    switch (timeRange) {
+      case "1h":
+        start = now - 60 * 60 * 1000;
+        break;
+      case "6h":
+        start = now - 6 * 60 * 60 * 1000;
+        break;
+      case "24h":
+        start = now - 24 * 60 * 60 * 1000;
+        break;
+      case "7d":
+        start = now - 7 * 24 * 60 * 60 * 1000;
+        break;
+      case "30d":
+        start = now - 30 * 24 * 60 * 60 * 1000;
+        break;
+      case "all":
+      default:
+        start = 0;
+        break;
+    }
+  }
+
+  return { start, end };
+}
+
+export function getSpbActivityRecords(options: SpbActivityFilterOptions = {}): {
+  records: SpbActivityRecord[];
+  total: number;
+} {
+  try {
+    initSpbStateTable();
+    const db = getDbInstance();
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+    const offset = Math.max(options.offset ?? 0, 0);
+    const { start, end } = resolveTimeRangeBounds(
+      options.timeRange,
+      options.startTime,
+      options.endTime
+    );
+
+    const conditions: string[] = ["a.timestamp >= ?", "a.timestamp <= ?"];
+    const params: (string | number)[] = [start, end];
+
+    if (options.tier && options.tier !== "all") {
+      conditions.push("a.model_tier = ?");
+      params.push(options.tier);
+    }
+
+    if (options.taskPhase && options.taskPhase !== "all") {
+      conditions.push("a.task_phase = ?");
+      params.push(options.taskPhase);
+    }
+
+    if (options.sessionId && options.sessionId.trim().length > 0) {
+      conditions.push("a.session_id LIKE ?");
+      params.push(`%${options.sessionId.trim()}%`);
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const totalRow = db
+      .prepare(`SELECT COUNT(*) AS total FROM spb_telemetry_audit a WHERE ${whereClause}`)
+      .get(...params) as { total: number } | undefined;
+    const total = totalRow?.total ?? 0;
+
+    const rows = db
+      .prepare(
+        `SELECT
+           a.id,
+           a.session_id,
+           a.task_phase,
+           a.model_tier,
+           a.checkpoint_restored,
+           a.fallback_triggered,
+           a.status_code,
+           a.latency_ms,
+           a.timestamp,
+           a.stagnation_detected,
+           a.stagnation_recovered,
+           e.satisfaction_score,
+           e.reprompt_count
+         FROM spb_telemetry_audit a
+         LEFT JOIN (
+           SELECT session_id, satisfaction_score, reprompt_count, MAX(evaluated_at)
+           FROM spb_intent_evaluations
+           GROUP BY session_id
+         ) e ON e.session_id = a.session_id
+         WHERE ${whereClause}
+         ORDER BY a.timestamp DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, limit, offset) as Array<Record<string, unknown>>;
+
+    const records: SpbActivityRecord[] = rows.map((r) => ({
+      id: Number(r.id),
+      sessionId: String(r.session_id),
+      taskPhase: String(r.task_phase),
+      modelTier: String(r.model_tier),
+      checkpointRestored: Boolean(r.checkpoint_restored),
+      fallbackTriggered: Boolean(r.fallback_triggered),
+      statusCode: Number(r.status_code),
+      latencyMs: Number(r.latency_ms),
+      timestamp: Number(r.timestamp),
+      stagnationDetected: Boolean(r.stagnation_detected),
+      stagnationRecovered: Boolean(r.stagnation_recovered),
+      satisfactionScore:
+        r.satisfaction_score !== null && r.satisfaction_score !== undefined
+          ? Number(r.satisfaction_score)
+          : undefined,
+      repromptCount:
+        r.reprompt_count !== null && r.reprompt_count !== undefined
+          ? Number(r.reprompt_count)
+          : undefined,
+    }));
+
+    return { records, total };
+  } catch (err) {
+    console.error("[SPB State] Failed to query activity records:", err);
+    return { records: [], total: 0 };
+  }
+}
+
+export function getSpbDetailedMetrics(options: SpbActivityFilterOptions = {}): SpbDetailedMetrics {
+  const { start, end } = resolveTimeRangeBounds(
+    options.timeRange,
+    options.startTime,
+    options.endTime
+  );
+  const defaultMetrics: SpbDetailedMetrics = {
+    totalRoutes: 0,
+    tierDistribution: {},
+    phaseDistribution: {},
+    avgLatencyMs: 0,
+    stagnationRecoveredCount: 0,
+    fallbacksTriggeredCount: 0,
+    checkpointsRestoredCount: 0,
+    timeRange: { startTime: start, endTime: end },
+  };
+
+  try {
+    initSpbStateTable();
+    const db = getDbInstance();
+
+    const conditions: string[] = ["timestamp >= ?", "timestamp <= ?"];
+    const params: (string | number)[] = [start, end];
+
+    if (options.tier && options.tier !== "all") {
+      conditions.push("model_tier = ?");
+      params.push(options.tier);
+    }
+
+    if (options.taskPhase && options.taskPhase !== "all") {
+      conditions.push("task_phase = ?");
+      params.push(options.taskPhase);
+    }
+
+    if (options.sessionId && options.sessionId.trim().length > 0) {
+      conditions.push("session_id LIKE ?");
+      params.push(`%${options.sessionId.trim()}%`);
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const summaryRow = db
+      .prepare(
+        `SELECT
+           COUNT(*) AS total_routes,
+           AVG(latency_ms) AS avg_latency,
+           SUM(stagnation_recovered) AS stagnation_recovered,
+           SUM(fallback_triggered) AS fallbacks_triggered,
+           SUM(checkpoint_restored) AS checkpoints_restored
+         FROM spb_telemetry_audit
+         WHERE ${whereClause}`
+      )
+      .get(...params) as
+      | {
+          total_routes: number;
+          avg_latency: number | null;
+          stagnation_recovered: number | null;
+          fallbacks_triggered: number | null;
+          checkpoints_restored: number | null;
+        }
+      | undefined;
+
+    if (!summaryRow || summaryRow.total_routes === 0) return defaultMetrics;
+
+    const tierRows = db
+      .prepare(
+        `SELECT model_tier, COUNT(*) AS count
+         FROM spb_telemetry_audit
+         WHERE ${whereClause}
+         GROUP BY model_tier`
+      )
+      .all(...params) as Array<{ model_tier: string; count: number }>;
+
+    const phaseRows = db
+      .prepare(
+        `SELECT task_phase, COUNT(*) AS count
+         FROM spb_telemetry_audit
+         WHERE ${whereClause}
+         GROUP BY task_phase`
+      )
+      .all(...params) as Array<{ task_phase: string; count: number }>;
+
+    const tierDistribution: Record<string, number> = {};
+    for (const r of tierRows) tierDistribution[r.model_tier] = r.count;
+
+    const phaseDistribution: Record<string, number> = {};
+    for (const r of phaseRows) phaseDistribution[r.task_phase] = r.count;
+
+    return {
+      totalRoutes: summaryRow.total_routes,
+      tierDistribution,
+      phaseDistribution,
+      avgLatencyMs: Math.round((summaryRow.avg_latency || 0) * 10) / 10,
+      stagnationRecoveredCount: summaryRow.stagnation_recovered || 0,
+      fallbacksTriggeredCount: summaryRow.fallbacks_triggered || 0,
+      checkpointsRestoredCount: summaryRow.checkpoints_restored || 0,
+      timeRange: { startTime: start, endTime: end },
+    };
+  } catch (err) {
+    console.error("[SPB State] Failed to build detailed metrics:", err);
+    return defaultMetrics;
   }
 }
 

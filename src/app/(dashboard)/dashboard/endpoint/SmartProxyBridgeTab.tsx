@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Toggle from "@/shared/components/Toggle";
 import TierModelSelectModal from "@/shared/components/TierModelSelectModal";
+import SmartProxyActivitySection from "./SmartProxyActivitySection";
 
 interface BridgeStats {
   totalRouted: number;
@@ -843,6 +844,8 @@ export function SmartProxyBridgeTab() {
           </ul>
         </div>
       </div>
+
+      <SmartProxyActivitySection />
 
       <TierModelSelectModal
         isOpen={tierModalConfig.isOpen}

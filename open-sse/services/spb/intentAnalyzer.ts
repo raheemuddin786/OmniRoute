@@ -241,19 +241,34 @@ export function classifyIntent(
   // - Code generation / Tool execution: Tier 2 (Code generation)
 
   // THE CRITICAL ARCHITECTURAL CONSTRAINTS:
-  // 1. Context-aware First-Turn Tier 1 Planning:
-  //    When a new request arrives from a user on the initial human prompt (userMessages.length === 1 && !isToolResultTurn),
+  // 1. Context-aware Human-Turn Tier 1 Planning:
+  //    When a user request arrives on a direct human prompt (!isToolResultTurn),
   //    evaluate whether the context warrants structured architectural planning (Tier 1 Apex) to create
   //    tasks, goals, and constraints before Tier 2 / Tier 3 execute.
   //    Triggers when the prompt involves broad application adaptation, multi-step design, screen workflows,
-  //    end-to-end features, or explicit planning/architecture requests.
+  //    end-to-end features, research, audits, or explicit planning/architecture requests.
   // 2. All Tier 3 execution (FAST_REFACTOR, DETERMINISTIC_ROUTING) must have GuidanceContract from supervisor tiers.
-  const isFirstHumanTurn = userMessages.length === 1 && !isToolResultTurn;
-  const isBroadSystemContext =
-    isFirstHumanTurn &&
-    /\b(adapt|screen|screens|app|mobile|redesign|system architecture|design flow|end-to-end|workflow|multi-page|multi-step|roadmap|blueprint)\b/i.test(
+  const isContinuationPhrase = /^(ok|yes|proceed|continue|go on|sure|fine|yep|done|next)$/i.test(
+    targetText.trim()
+  );
+  const isDirectHumanPrompt =
+    !isToolResultTurn && targetText.trim().length > 0 && !isContinuationPhrase;
+
+  const isExplicitPureCodeExecution =
+    /\b(implement(?:ing|ed|s)?|code|write|create the (?:code|file|component)|patch|fix|debug)\b/i.test(
+      targetText
+    ) &&
+    !/\b(plan|planning|architect|architecture|blueprint|roadmap|research|investigate|audit|system architecture)\b/i.test(
       targetText
     );
+
+  const isBroadSystemContext =
+    isDirectHumanPrompt &&
+    !isExplicitPureCodeExecution &&
+    (/\b(adapt|screen|screens|app|mobile|redesign|system architecture|architectural|design flow|end-to-end|workflow|multi-page|multi-step|roadmap|blueprint|research|investigate|audit|plan|planning|strategy|deep analysis)\b/i.test(
+      targetText
+    ) ||
+      userMessages.length === 1);
 
   if (hasPureArchitectureIntent || isBroadSystemContext) {
     taskPhase = "ARCHITECTURAL_PLANNING";
