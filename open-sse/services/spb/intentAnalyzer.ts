@@ -121,7 +121,7 @@ export function classifyIntent(
     /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|threat model(?:ing)?|rfc proposal|system rfc)\b/i;
 
   const codeRegex =
-    /\b(function|class|const|let|var|import|export|def|return|async|await|interface|type|code|implement|typescript|javascript|python|rust|golang|sql|query|endpoint|controller|service|component|bug|fix|debug|patch|issue|script|module|file|method)\b/i;
+    /\b(function(?:s)?|class(?:es)?|const|let|var|import|export|def|return|async|await|interface|type|code|implement(?:s|ed|ing)?|component(?:s)?|typescript|javascript|python|rust|golang|sql|query|endpoint(?:s)?|controller(?:s)?|service(?:s)?|bug(?:s)?|fix(?:es|ed|ing)?|debug(?:ging)?|patch(?:es|ed|ing)?|issue(?:s)?|script(?:s)?|module(?:s)?|file(?:s)?|method(?:s)?|build(?:ing)?|write|writing|written)\b/i;
 
   const architectureRegex =
     /\b(system architecture|architectural design|architectural planning|software architecture|distributed systems?|microservices architecture|rfc proposal|system rfc|complex reasoning|formal proof|algorithmic proof|strategic planning|multi-tier architecture|threat model(?:ing)?|deep thinking|deep reasoning|apex reasoning)\b/i;
@@ -240,13 +240,24 @@ export function classifyIntent(
   // - Formatting / Deterministic: Tier 3 (Deterministic routing) - requires GuidanceContract from supervisor tiers
   // - Code generation / Tool execution: Tier 2 (Code generation)
 
-  // THE CRITICAL NEW ARCHITECTURAL CONSTRAINT:
-  // All Tier 3 execution (FAST_REFACTOR, DETERMINISTIC_ROUTING) must have GuidanceContract from supervisor tiers
-  // This prevents unguided code mutations and enforces architectural supervision for ALL Tier 3 operations
+  // THE CRITICAL ARCHITECTURAL CONSTRAINTS:
+  // 1. Context-aware First-Turn Tier 1 Planning:
+  //    When a new request arrives from a user on the initial human prompt (userMessages.length === 1 && !isToolResultTurn),
+  //    evaluate whether the context warrants structured architectural planning (Tier 1 Apex) to create
+  //    tasks, goals, and constraints before Tier 2 / Tier 3 execute.
+  //    Triggers when the prompt involves broad application adaptation, multi-step design, screen workflows,
+  //    end-to-end features, or explicit planning/architecture requests.
+  // 2. All Tier 3 execution (FAST_REFACTOR, DETERMINISTIC_ROUTING) must have GuidanceContract from supervisor tiers.
+  const isFirstHumanTurn = userMessages.length === 1 && !isToolResultTurn;
+  const isBroadSystemContext =
+    isFirstHumanTurn &&
+    /\b(adapt|screen|screens|app|mobile|redesign|system architecture|design flow|end-to-end|workflow|multi-page|multi-step|roadmap|blueprint)\b/i.test(
+      targetText
+    );
 
-  if (hasPureArchitectureIntent) {
+  if (hasPureArchitectureIntent || isBroadSystemContext) {
     taskPhase = "ARCHITECTURAL_PLANNING";
-    complexityScore = 0.9;
+    complexityScore = hasPureArchitectureIntent ? 0.9 : 0.85;
   } else if (isToolResultTurn) {
     if (hasTestKeywords) {
       taskPhase = "TESTING_AND_VERIFICATION";

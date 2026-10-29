@@ -11,7 +11,11 @@ import {
   processSpbOutboundZeroLoss,
   pruneOldToolOutputsForReprompt,
 } from "../../open-sse/services/spb/outboundEvaluator.ts";
-import { processSmartProxyRouting } from "../../open-sse/services/spb/proxyBridge.ts";
+import {
+  processSmartProxyRouting,
+  verifyCodeDiffAgainstConclusion,
+  extractClaimedFilesFromText,
+} from "../../open-sse/services/spb/proxyBridge.ts";
 import { expandIncomingCcrMarkers } from "../../open-sse/services/compression/engines/ccr/index.ts";
 import { persistCcrBlock } from "../../src/lib/db/ccrBlocks.ts";
 import {
@@ -833,4 +837,106 @@ test("processSmartProxyRouting enhances array-based user content blocks with rol
     enhancedContent[0].text.includes("Fix the race condition"),
     "Original instruction must be preserved"
   );
+});
+
+test("First-Turn Planning: initial request with broad screen adaptation context routes to Tier 1", async () => {
+  const sessionId = "spb_first_turn_planning_" + Date.now();
+
+  // Initial user prompt with broad mobile screen adaptation context
+  const turn1 = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content: "Adapt and update the mobile app screens for the new design flow",
+      },
+    ],
+  });
+
+  assert.equal(turn1.intent.taskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(turn1.tierAssignment.tier, "tier_1_apex");
+  assert.ok(
+    turn1.tierAssignment.guidanceContract,
+    "Tier 1 planning must establish GuidanceContract"
+  );
+
+  // Subsequent turn with execution command routes to Tier 2 under the established contract
+  const turn2 = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      {
+        role: "user",
+        content: "Adapt and update the mobile app screens for the new design flow",
+      },
+      {
+        role: "assistant",
+        content: "Here is the architectural plan and task breakdown for screen adaptation...",
+      },
+      {
+        role: "user",
+        content: "Proceed with implementing the home screen components",
+      },
+    ],
+  });
+
+  assert.equal(turn2.intent.taskPhase, "CODE_GENERATION");
+  assert.ok(
+    turn2.tierAssignment.guidanceContract,
+    "Turn 2 must inherit supervisor GuidanceContract"
+  );
+  assert.ok(
+    turn2.tierAssignment.tier === "tier_3_local" ||
+      turn2.tierAssignment.tier === "tier_2_resilient",
+    "Turn 2 execution routes to supervised tier"
+  );
+});
+
+test("Conclusion Reviewer: extractClaimedFilesFromText extracts markdown links, backticks, and action verbs", () => {
+  const text =
+    "I have completed the work.\n" +
+    "- Updated [authHandler.ts](src/auth/authHandler.ts#L10-L25)\n" +
+    "- Modified `open-sse/services/spb/proxyBridge.ts` with new imports\n" +
+    "- Created src/screens/ProfileScreen.tsx for user profiles\n" +
+    "- Visit https://example.com/docs for reference";
+
+  const claimed = extractClaimedFilesFromText(text);
+  assert.ok(claimed.includes("src/auth/authHandler.ts"), "Must extract markdown link target");
+  assert.ok(
+    claimed.includes("open-sse/services/spb/proxyBridge.ts"),
+    "Must extract backticked path"
+  );
+  assert.ok(claimed.includes("src/screens/ProfileScreen.tsx"), "Must extract verb-preceded path");
+  assert.ok(!claimed.some((f) => f.includes("example.com")), "Must not extract web URLs");
+});
+
+test("Conclusion Reviewer: verifyCodeDiffAgainstConclusion detects missing files and creates reviewer report", () => {
+  const nonExistentFile = "src/nonexistent/fictionalComponent_12345.tsx";
+  const fakeConclusion =
+    `I have implemented the solution. ` +
+    `Created \`${nonExistentFile}\` with all necessary screen adaptations. ` +
+    `All changes are applied and ready.`;
+
+  const review = verifyCodeDiffAgainstConclusion(fakeConclusion);
+  assert.equal(review.passed, false, "Review must fail when claimed file is missing from git diff");
+  assert.ok(
+    review.claimedFilesMissingInDiff.includes(nonExistentFile),
+    "Missing file must be recorded in discrepancies"
+  );
+  assert.ok(review.report, "Reviewer report must be generated");
+  assert.ok(
+    review.report!.includes("[REVIEWER FACTUAL VERIFICATION REPORT]"),
+    "Report must contain header"
+  );
+  assert.ok(review.report!.includes(nonExistentFile), "Report must cite the exact missing file");
+});
+
+test("Conclusion Reviewer: verifyCodeDiffAgainstConclusion passes when no un-modified files are claimed", () => {
+  const cleanConclusion =
+    "Here is an explanation of the architecture. " +
+    "No code modifications were required for this inquiry.";
+
+  const review = verifyCodeDiffAgainstConclusion(cleanConclusion);
+  assert.equal(review.passed, true, "Review must pass when no false modifications are claimed");
+  assert.equal(review.claimedFilesMissingInDiff.length, 0);
+  assert.equal(review.report, undefined);
 });

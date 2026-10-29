@@ -46,8 +46,11 @@ import {
   evaluateResponseIntent,
   processSpbOutboundZeroLoss,
   extractResponseContent,
+  verifyCodeDiffAgainstConclusion,
+  extractClaimedFilesFromText,
   type ResponseEvaluationResult,
   type ExtractedResponseContent,
+  type CodeDiffReviewResult,
 } from "./outboundEvaluator.ts";
 
 export {
@@ -67,10 +70,13 @@ export {
   evaluateResponseIntent,
   processSpbOutboundZeroLoss,
   extractResponseContent,
+  verifyCodeDiffAgainstConclusion,
+  extractClaimedFilesFromText,
   type PromptEnhancementResult,
   type NecessityCheckResult,
   type ResponseEvaluationResult,
   type ExtractedResponseContent,
+  type CodeDiffReviewResult,
   detectAndRecoverFromStagnation,
   escalateFromStagnation,
 };

@@ -14,6 +14,8 @@ import { TaskPhase } from "./intentAnalyzer.ts";
 import { ModelTier } from "./tieredRegistry.ts";
 import { recordIntentEvaluation, saveLearnedOptimization } from "../../../src/lib/db/spbState.ts";
 import { computePatternHash } from "./inboundIntelligence.ts";
+import { isFeatureFlagEnabled } from "../../../src/shared/utils/featureFlags.ts";
+import { spawnSync } from "node:child_process";
 
 export interface ResponseEvaluationResult {
   isSatisfied: boolean;
@@ -24,6 +26,8 @@ export interface ResponseEvaluationResult {
   claimsExecutionWithoutTools?: boolean;
   hasHallucinatedPaths?: boolean;
   isStagnantAnalysisLoop?: boolean;
+  reviewerDiscrepancies?: string[];
+  reviewerReport?: string;
   suggestedReprompt?: string;
   repromptCount: number;
 }
@@ -305,6 +309,152 @@ export function evaluateResponseIntent(
   };
 }
 
+export interface CodeDiffReviewResult {
+  passed: boolean;
+  actualModifiedFiles: string[];
+  claimedFilesMissingInDiff: string[];
+  report?: string;
+}
+
+/**
+ * Extracts file paths claimed to be created, modified, or updated from completion text.
+ */
+export function extractClaimedFilesFromText(text: string): string[] {
+  const found = new Set<string>();
+
+  // 1. Markdown link targets: [filename.ts](path/to/filename.ts)
+  const mdLinkRegex = /\[([^\]]+)\]\(([^)]+\.[a-zA-Z0-9]+)(?:#L\d+(?:-L\d+)?)?\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = mdLinkRegex.exec(text)) !== null) {
+    const rawPath = match[2].trim().replace(/^(\.\/|\/)/, "");
+    if (!rawPath.startsWith("http://") && !rawPath.startsWith("https://")) {
+      found.add(rawPath);
+    }
+  }
+
+  // 2. Explicit paths in backticks: `src/foo/bar.ts` or `open-sse/...`
+  const backtickRegex = /`([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]{1,10})`/g;
+  while ((match = backtickRegex.exec(text)) !== null) {
+    const rawPath = match[1].trim().replace(/^(\.\/|\/)/, "");
+    if (rawPath.includes("/") && !rawPath.includes(" ")) {
+      found.add(rawPath);
+    }
+  }
+
+  // 3. Sentences explicitly claiming edits/creations:
+  const verbRegex =
+    /\b(?:created|modified|updated|edited|patched|wrote)\s+([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]{1,10})\b/gi;
+  while ((match = verbRegex.exec(text)) !== null) {
+    const rawPath = match[1].trim().replace(/^(\.\/|\/)/, "");
+    if (rawPath.includes("/")) {
+      found.add(rawPath);
+    }
+  }
+
+  return Array.from(found);
+}
+
+/**
+ * Conclusion Reviewer: Factual Verification against Repository Code Diff.
+ * Checks whether the agent's claimed code modifications actually exist in git diff/status.
+ * If discrepancies exist, generates a structured Reviewer Report so the agent can reiterate.
+ */
+export function verifyCodeDiffAgainstConclusion(
+  conclusionText: string,
+  cwd: string = process.cwd()
+): CodeDiffReviewResult {
+  try {
+    const diffProc = spawnSync("git", ["diff", "--name-only", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    const statusProc = spawnSync("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      timeout: 5000,
+    });
+
+    if (diffProc.status !== 0 && statusProc.status !== 0) {
+      return { passed: true, actualModifiedFiles: [], claimedFilesMissingInDiff: [] };
+    }
+
+    const actualFiles = new Set<string>();
+    if (diffProc.stdout) {
+      for (const line of diffProc.stdout.split("\n")) {
+        const file = line.trim();
+        if (file) actualFiles.add(file);
+      }
+    }
+    if (statusProc.stdout) {
+      for (const line of statusProc.stdout.split("\n")) {
+        const lineTrimmed = line.trim();
+        if (lineTrimmed) {
+          const file = lineTrimmed.slice(3).trim();
+          if (file) actualFiles.add(file);
+        }
+      }
+    }
+
+    const actualModifiedFiles = Array.from(actualFiles);
+    const claimedFiles = extractClaimedFilesFromText(conclusionText);
+
+    const claimedFilesMissingInDiff: string[] = [];
+    for (const claimed of claimedFiles) {
+      const matched = actualModifiedFiles.some(
+        (actual) =>
+          actual === claimed || actual.endsWith("/" + claimed) || claimed.endsWith("/" + actual)
+      );
+      if (!matched) {
+        claimedFilesMissingInDiff.push(claimed);
+      }
+    }
+
+    const claimsCompletionWithoutAnyDiff =
+      actualModifiedFiles.length === 0 &&
+      claimedFiles.length > 0 &&
+      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed))\b/i.test(
+        conclusionText
+      );
+
+    if (claimedFilesMissingInDiff.length > 0 || claimsCompletionWithoutAnyDiff) {
+      const missingList =
+        claimedFilesMissingInDiff.length > 0
+          ? claimedFilesMissingInDiff.map((f) => `  - ${f}`).join("\n")
+          : "  - (Claimed implementation completed, but git diff shows 0 modified or created files)";
+
+      const actualList =
+        actualModifiedFiles.length > 0
+          ? actualModifiedFiles.map((f) => `  - ${f}`).join("\n")
+          : "  - (none)";
+
+      const report =
+        `[REVIEWER FACTUAL VERIFICATION REPORT]\n` +
+        `Factual discrepancy detected: Your conclusion claims code modifications were completed, but repository code diff verification failed:\n` +
+        `Claimed files missing from actual code diff:\n${missingList}\n` +
+        `Actual modified files on disk:\n${actualList}\n\n` +
+        `INSTRUCTION: Reiterate and apply the required modifications using your file editing tools (Write/Edit/Bash). ` +
+        `Do not conclude until the required code modifications are physically written and verified on disk.`;
+
+      return {
+        passed: false,
+        actualModifiedFiles,
+        claimedFilesMissingInDiff,
+        report,
+      };
+    }
+
+    return {
+      passed: true,
+      actualModifiedFiles,
+      claimedFilesMissingInDiff: [],
+    };
+  } catch (err) {
+    console.warn("[SPB Reviewer] Git diff verification failed to execute:", err);
+    return { passed: true, actualModifiedFiles: [], claimedFilesMissingInDiff: [] };
+  }
+}
+
 /**
  * Extracts raw textual content from either an SSE stream or a JSON response.
  */
@@ -512,6 +662,11 @@ export function reconstructStreamResponse(
   headers.set("X-OmniRoute-SPB-Satisfaction", evalResult.satisfactionScore.toFixed(2));
   headers.set("X-OmniRoute-SPB-Reprompt-Count", String(repromptCount));
   headers.set("X-OmniRoute-SPB-ZeroLoss", evalResult.isSatisfied ? "verified" : "partial");
+  if (evalResult.reviewerReport) {
+    headers.set("X-OmniRoute-Reviewer-Status", evalResult.isSatisfied ? "verified" : "reprompted");
+  } else {
+    headers.set("X-OmniRoute-Reviewer-Status", "verified");
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -573,8 +728,41 @@ export async function processSpbOutboundZeroLoss(args: {
       clientHasTools
     );
     lastEvalResult = evalResult;
+
+    // Conclusion Reviewer: Code Diff & Factual Verification
+    // When the agent concludes (no tool calls) and the task involves code modifications,
+    // verify the conclusion against the repository code diff to eliminate hallucinated completion claims.
+    const isCodePhase =
+      args.taskPhase === "CODE_GENERATION" ||
+      args.taskPhase === "TESTING_AND_VERIFICATION" ||
+      args.taskPhase === "FAST_REFACTOR";
+
+    let reviewerDiscrepancyDetected = false;
+    if (
+      isFeatureFlagEnabled("REVIEWER_ASSISTANT_ENABLED") &&
+      !extracted.hasToolCalls &&
+      isCodePhase &&
+      extracted.text.trim()
+    ) {
+      const diffReview = verifyCodeDiffAgainstConclusion(extracted.text);
+      if (!diffReview.passed && diffReview.report) {
+        reviewerDiscrepancyDetected = true;
+        evalResult.isSatisfied = false;
+        evalResult.satisfactionScore = Math.min(evalResult.satisfactionScore, 0.4);
+        evalResult.oddities.push(
+          "Conclusion claimed code modifications not reflected in repository code diff."
+        );
+        evalResult.reviewerDiscrepancies = diffReview.claimedFilesMissingInDiff;
+        evalResult.reviewerReport = diffReview.report;
+        evalResult.suggestedReprompt = diffReview.report;
+        console.log(
+          `[SPB Outbound ZeroLoss] Reviewer check failed for session ${args.sessionId}: ${diffReview.claimedFilesMissingInDiff.length} claimed files missing in git diff. Re-prompting agent with feedback.`
+        );
+      }
+    }
+
     console.log(
-      `[SPB Outbound ZeroLoss] Session ${args.sessionId} | Phase: ${args.taskPhase} | Tier: ${args.tier} | Satisfaction: ${evalResult.satisfactionScore.toFixed(2)} | Satisfied: ${evalResult.isSatisfied} | Omissions: ${evalResult.omissions.length} | RepromptCount: ${repromptCount}`
+      `[SPB Outbound ZeroLoss] Session ${args.sessionId} | Phase: ${args.taskPhase} | Tier: ${args.tier} | Satisfaction: ${evalResult.satisfactionScore.toFixed(2)} | Satisfied: ${evalResult.isSatisfied} | Omissions: ${evalResult.omissions.length} | ReviewerDiscrepancy: ${reviewerDiscrepancyDetected} | RepromptCount: ${repromptCount}`
     );
 
     // If response satisfies 100% of intention criteria, max iterations reached, or tool call generated
@@ -591,6 +779,10 @@ export async function processSpbOutboundZeroLoss(args: {
         headers.set("X-OmniRoute-SPB-Satisfaction", evalResult.satisfactionScore.toFixed(2));
         headers.set("X-OmniRoute-SPB-Reprompt-Count", String(repromptCount));
         headers.set("X-OmniRoute-SPB-ZeroLoss", evalResult.isSatisfied ? "verified" : "partial");
+        headers.set(
+          "X-OmniRoute-Reviewer-Status",
+          evalResult.reviewerReport ? "reviewed-with-corrections" : "verified"
+        );
         return new Response(JSON.stringify(extracted.jsonBody || {}), {
           status: currentResponse.status,
           statusText: currentResponse.statusText,

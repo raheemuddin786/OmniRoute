@@ -422,9 +422,11 @@ export function assignRoleDirective(
       return { assignedRole: assignedRole, roleScope: roleScope };
 
     case "tier_1_apex":
-      assignedRole = "Apex Architect & Trade-off Synthesis Lead";
+      assignedRole = "Apex Architect & Strategic Planning Lead";
       roleScope =
         "Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. " +
+        "When an initial request arrives, structure the prompt into an end-to-end production-grade implementation plan with clear goals, " +
+        "granular task breakdowns, target file scopes, and UI/UX design flow consistency so Tier 2 (Resilient) and Tier 3 (Local) can execute effectively. " +
         "Handle inspection tools (Read, Grep, Glob, MCP, research) during planning. Do NOT handle code execution tasks directly.";
 
       return { assignedRole: assignedRole, roleScope: roleScope };

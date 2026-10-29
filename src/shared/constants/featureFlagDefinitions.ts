@@ -48,6 +48,18 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     warningLevel: "info",
   },
   {
+    key: "REVIEWER_ASSISTANT_ENABLED",
+    label: "Reviewer Assistant",
+    description:
+      "Enable factual verification reviewer assistant for output validation (default: enabled)",
+    descriptionI18nKey: "featureFlagReviewerAssistantEnabledDescription",
+    category: "runtime",
+    defaultValue: "true",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
     key: "PII_REDACTION_ENABLED",
     label: "PII Redaction",
     description: "Redact personally identifiable information from requests",
