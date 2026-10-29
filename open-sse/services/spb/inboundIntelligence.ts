@@ -172,7 +172,28 @@ export function evaluateRequestNecessity(
   const trimmed = currentPrompt.trim();
 
   // 1. Trivial or empty query check
+  // Skip for tool execution responses and agent continuation messages
   if (!trimmed || trimmed === "(no content)" || trimmed === "no content") {
+    // Check if this appears to be a tool execution response or agent continuation
+    const lastMessage = messages[messages.length - 1];
+    const isToolResponse = lastMessage && lastMessage.role === "tool";
+    const isAgentContinuation = messages.some(
+      (m) =>
+        m.role === "assistant" &&
+        typeof m.content === "string" &&
+        (m.content.includes("tool_use") || m.content.includes("function_call"))
+    );
+
+    if (isToolResponse || isAgentContinuation) {
+      // For tool executions and agent continuations, treat as valid even if empty
+      return {
+        isNecessary: true,
+        isRedundant: false,
+        isClarificationNeeded: false,
+        confirmationRequired: false,
+      };
+    }
+
     return {
       isNecessary: false,
       isRedundant: true,

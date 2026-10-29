@@ -139,6 +139,10 @@ function toFullModelString(model: string, providerId?: string | null): string {
   const trimmedModel = model.trim();
   if (trimmedModel.includes("/")) return trimmedModel;
   const normalizedProviderId = toTrimmedString(providerId);
+  // Deduplicate provider prefix: if providerId equals model, use just model
+  if (normalizedProviderId && normalizedProviderId === trimmedModel) {
+    return trimmedModel;
+  }
   return normalizedProviderId ? `${normalizedProviderId}/${trimmedModel}` : trimmedModel;
 }
 

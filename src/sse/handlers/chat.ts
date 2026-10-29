@@ -945,7 +945,15 @@ async function handleChatImplementation(
         request.headers.get("x-omniroute-force-execution") === "true" ||
         requestUrl.searchParams.get("force") === "true";
 
-      if (spbDecision.necessity?.confirmationRequired && !forceExecution) {
+      const hasToolsOrToolCalls =
+        Array.isArray(body?.tools) ||
+        (Array.isArray(body?.messages) &&
+          body.messages.some(
+            (m: { role?: string; content?: unknown }) =>
+              m.role === "tool" || (typeof m.content === "object" && m.content !== null)
+          ));
+
+      if (spbDecision.necessity?.confirmationRequired && !forceExecution && !hasToolsOrToolCalls) {
         log.warn("SPB", `Pre-execution confirmation required: ${spbDecision.necessity.reason}`);
         return new Response(
           JSON.stringify({

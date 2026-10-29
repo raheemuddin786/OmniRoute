@@ -247,6 +247,28 @@ export function repairJsonString(str: string): unknown | null {
 }
 
 /**
+ * Check if a tool name corresponds to a deferred/Asleep agent tool.
+ * Deferred tools are those that invoke Agent, ToolSearch, or other internal tools.
+ */
+export function isDeferredTool(name: string): boolean {
+  const deferredToolNames = new Set([
+    "SendMessage",
+    "AskUserQuestion",
+    "ToolSearch",
+    "Agent",
+    "ListAgents",
+    "ScheduleWakeup",
+    "Workflow",
+    "Skill",
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+  ]);
+  return deferredToolNames.has(name);
+}
+
+/**
  * Parse the tool arguments.
  *
  * Model output arrives either as an already-parsed object or as a JSON string.
@@ -288,6 +310,52 @@ export function parseArguments(
 }
 
 /**
+ * Normalize JSON Schema types to lowercase for Ajv compatibility (Anthropic/Gemini wire format).
+ * Converts uppercase types like "OBJECT" -> "object", "STRING" -> "string", etc.
+ */
+export function normalizeSchemaTypes(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") return schema;
+
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeSchemaTypes);
+  }
+
+  const obj = schema as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "type") {
+      if (typeof value === "string") {
+        normalized.type = value.toLowerCase();
+      } else if (Array.isArray(value)) {
+        normalized.type = value.map((v) => (typeof v === "string" ? v.toLowerCase() : v));
+      } else {
+        normalized.type = value;
+      }
+    } else if (
+      key === "properties" ||
+      key === "items" ||
+      key === "additionalProperties" ||
+      key === "patternProperties"
+    ) {
+      normalized[key] = normalizeSchemaTypes(value);
+    } else if (key === "anyOf" || key === "oneOf" || key === "allOf" || key === "prefixItems") {
+      if (Array.isArray(value)) {
+        normalized[key] = value.map(normalizeSchemaTypes);
+      } else {
+        normalized[key] = normalizeSchemaTypes(value);
+      }
+    } else if (key === "$defs" || key === "definitions") {
+      normalized[key] = normalizeSchemaTypes(value);
+    } else {
+      normalized[key] = value;
+    }
+  }
+
+  return normalized;
+}
+
+/**
  * Get a cached validator for a schema object.
  *
  * The cache is keyed by the schema OBJECT's identity (a WeakMap), so a repeated
@@ -306,7 +374,8 @@ function validatorFor(schema: object): ValidateFunction | null {
 
   let compiled: ValidateFunction | null = null;
   try {
-    compiled = ajv.compile(schema as object);
+    const normalized = normalizeSchemaTypes(schema) as object;
+    compiled = ajv.compile(normalized);
   } catch {
     compiled = null;
   }
@@ -532,6 +601,16 @@ function validateToolCallInternal(
   // ── Name check ──
   const { declaredNames, schemaMap } = catalog;
   if (declaredNames && !declaredNames.has(toolName)) {
+    // If the catalog includes dynamic discovery tools (ToolSearch, Agent, Workflow)
+    // or if the tool is an Agent/deferred tool, allow it to pass through to the agent harness.
+    const hasDynamicDiscovery =
+      declaredNames.has("ToolSearch") ||
+      declaredNames.has("Agent") ||
+      declaredNames.has("Workflow");
+    if (hasDynamicDiscovery || isDeferredTool(toolName)) {
+      return { ok: true, degraded: true };
+    }
+
     return rejection(
       context,
       call,

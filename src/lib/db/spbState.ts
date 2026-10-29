@@ -840,13 +840,14 @@ export function getEnhancedGovernanceMetrics(
       }
 
       for (const rl of rateLimitGroups.values()) {
+        const msgs = Array.from(rl.messages);
         rateLimitEvents.push({
           provider: rl.provider,
           model: rl.model,
           totalRateLimitHits: rl.hits,
-          messages: Array.from(rl.messages),
+          messages: msgs,
           wastedTokens: rl.tokens,
-          creditsNeeded: rl.messages.some((m) => m.includes("10 credits")) ? 10 : undefined,
+          creditsNeeded: msgs.some((m) => m.includes("10 credits")) ? 10 : undefined,
         });
       }
 

@@ -493,10 +493,16 @@ function parseModelUncached(modelStr: string | null | undefined): ParsedModel {
   }
 
   // Check if standard format: provider/model or alias/model
+  // Deduplicate provider prefix: if providerOrAlias equals model, use only model
   if (cleanStr.includes("/")) {
     const firstSlash = cleanStr.indexOf("/");
     const providerOrAlias = cleanStr.slice(0, firstSlash).trim();
     const model = cleanStr.slice(firstSlash + 1).trim();
+    // Deduplicate: provider/model where provider == model -> just use model
+    if (providerOrAlias === model) {
+      // Use just the model part (strip provider entirely)
+      return { provider: null, model, isAlias: true, providerAlias: null, extendedContext };
+    }
     const provider = resolveProviderAlias(providerOrAlias);
     return { provider, model, isAlias: false, providerAlias: providerOrAlias, extendedContext };
   }

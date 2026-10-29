@@ -79,6 +79,8 @@ export interface EgressToolCall {
   name: string;
   /** Raw arguments — a JSON string for OpenAI, an object for Anthropic. */
   arguments: unknown;
+  /** True when the call is from a historical turn, not the active turn being answered. */
+  isHistorical?: boolean;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -154,11 +156,40 @@ export function extractEchoedToolCalls(body: unknown): EgressToolCall[] {
 
   // ── OpenAI Chat + Anthropic: assistant messages ──
   if (Array.isArray(record.messages)) {
-    for (const message of record.messages as unknown[]) {
-      const msg = asRecord(message);
+    const rawMessages = record.messages as unknown[];
+    // Find index of the latest assistant message containing tool calls
+    let lastAssistantIdx = -1;
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+      const msg = asRecord(rawMessages[i]);
       if (!msg) continue;
-      openAIAssistantCalls(msg, out);
-      anthropicAssistantCalls(msg, out);
+      const isAssistant =
+        msg.role === "assistant" ||
+        (Array.isArray(msg.content) &&
+          (msg.content as unknown[]).some((b) => asRecord(b)?.type === "tool_use"));
+      if (
+        isAssistant &&
+        (Array.isArray(msg.tool_calls) ||
+          (Array.isArray(msg.content) &&
+            (msg.content as unknown[]).some((b) => asRecord(b)?.type === "tool_use")))
+      ) {
+        lastAssistantIdx = i;
+        break;
+      }
+    }
+
+    for (let i = 0; i < rawMessages.length; i++) {
+      const msg = asRecord(rawMessages[i]);
+      if (!msg) continue;
+      const isHistorical = lastAssistantIdx !== -1 && i < lastAssistantIdx;
+      const tempCalls: EgressToolCall[] = [];
+      openAIAssistantCalls(msg, tempCalls);
+      anthropicAssistantCalls(msg, tempCalls);
+      if (isHistorical) {
+        for (const c of tempCalls) {
+          c.isHistorical = true;
+        }
+      }
+      out.push(...tempCalls);
     }
   }
 
@@ -309,6 +340,12 @@ function resolveRejection(
       reason: known.reason as ToolCallRejectionReason,
       message: known.message,
     };
+  }
+
+  // Skip validation and rejection enforcement for historical tool calls
+  // Historical calls are from previous turns and their results have already been processed
+  if (call.isHistorical) {
+    return null;
   }
 
   const descriptor: ToolCallDescriptor = {
