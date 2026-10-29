@@ -178,6 +178,10 @@ export interface ConfirmationGateRecord {
 // Lazy init guard — tables are created at most once per process lifetime.
 let _tablesInitialized = false;
 
+// High-speed in-memory LRU checkpoint cache to avoid repeated SQLite disk I/O on active turns
+const checkpointMemoryCache = new Map<string, SpbStateCheckpoint>();
+const CHECKPOINT_CACHE_MAX_SIZE = 1000;
+
 export function initSpbStateTable(): void {
   if (_tablesInitialized) return;
   try {
@@ -301,6 +305,7 @@ export function initSpbStateTable(): void {
 /** Test-only: reset the init guard so tables can be re-created after a DB reset. */
 export function __resetSpbStateInitForTests(): void {
   _tablesInitialized = false;
+  checkpointMemoryCache.clear();
 }
 
 export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
@@ -342,6 +347,14 @@ export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
         columns.join(", ") +
         `) VALUES (${values.map(() => "?").join(", ")})`
     ).run(...values);
+
+    // Write through to in-memory cache
+    checkpointMemoryCache.set(checkpoint.sessionId, { ...checkpoint });
+    if (checkpointMemoryCache.size > CHECKPOINT_CACHE_MAX_SIZE) {
+      const oldestKey = checkpointMemoryCache.keys().next().value;
+      if (oldestKey) checkpointMemoryCache.delete(oldestKey);
+    }
+
     return true;
   } catch (err) {
     console.error("[SPB State] Failed to save checkpoint:", err);
@@ -350,6 +363,12 @@ export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
 }
 
 export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
+  // 1. Check in-memory cache first for instant retrieval
+  const cached = checkpointMemoryCache.get(sessionId);
+  if (cached) {
+    return { ...cached };
+  }
+
   try {
     initSpbStateTable();
     const db = getDbInstance();
@@ -406,6 +425,9 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
     if (row.consecutive_reads !== undefined) checkpoint.consecutiveReads = row.consecutive_reads;
     if (row.stagnation_recovered !== undefined)
       checkpoint.stagnationRecovered = row.stagnation_recovered;
+
+    // Cache in memory
+    checkpointMemoryCache.set(sessionId, { ...checkpoint });
     return checkpoint;
   } catch (err) {
     console.error("[SPB State] Failed to get checkpoint:", err);

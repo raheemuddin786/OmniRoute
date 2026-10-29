@@ -6,6 +6,7 @@
 
 import { TaskPhase, type GuidanceContract } from "./intentAnalyzer.ts";
 import { type TierModelsConfig } from "../tierTypes.ts";
+import { checkCooldownStatus } from "../globalRateLimiter.ts";
 
 export type ModelTier = "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 
@@ -19,33 +20,62 @@ export interface TierAssignment {
   requiresGuidance?: boolean;
 }
 
+/**
+ * Reorders candidates to place healthy, non-cooldown models first
+ */
+function prioritizeHealthyTierModels(models: string[]): string[] {
+  if (!models || models.length <= 1) return models || [];
+  const healthy: string[] = [];
+  const inCooldown: string[] = [];
+
+  for (const model of models) {
+    const provider = model.includes("/") ? model.split("/")[0] : "";
+    const modelId = model.includes("/") ? model.split("/").slice(1).join("/") : model;
+    try {
+      const status = checkCooldownStatus(provider, null, modelId);
+      if (status.allowed) {
+        healthy.push(model);
+      } else {
+        inCooldown.push(model);
+      }
+    } catch {
+      healthy.push(model);
+    }
+  }
+
+  return healthy.length > 0 ? [...healthy, ...inCooldown] : inCooldown;
+}
+
 export function selectModelTier(
   taskPhase: TaskPhase,
-  _complexityScore: number,
+  complexityScore: number,
   customModels?: TierModelsConfig,
   _requiresTools?: boolean,
   isToolResultTurn?: boolean,
   guidanceContract?: GuidanceContract
 ): TierAssignment {
   const models = {
-    apex: customModels?.apex ?? [],
-    resilient: customModels?.resilient ?? [],
-    local: customModels?.local ?? [],
+    apex: prioritizeHealthyTierModels(customModels?.apex ?? []),
+    resilient: prioritizeHealthyTierModels(customModels?.resilient ?? []),
+    local: prioritizeHealthyTierModels(customModels?.local ?? []),
   };
 
-  // Only block Tier 1/3 during ACTIVE tool execution (tool result turn), not when tools are merely available.
-  // This allows plan mode / architectural planning (Tier 1) and refactoring (Tier 3) to route correctly
-  // even when the agent runtime provides tools, as long as we're not mid-execution.
-  // isToolExecution is intentionally unused to maintain architectural consistency and boundary definitions
+  // Dynamically calibrate token bounds based on task complexity (0.0 to 1.0)
+  const normScore =
+    typeof complexityScore === "number" && Number.isFinite(complexityScore)
+      ? Math.max(0, Math.min(1, complexityScore))
+      : 0.5;
+
+  const apexMaxTokens = normScore >= 0.7 ? 16384 : normScore <= 0.3 ? 8192 : 12288;
+  const resilientMaxTokens = normScore >= 0.7 ? 8192 : normScore <= 0.3 ? 4096 : 8192;
+  const localMaxTokens = normScore >= 0.7 ? 4096 : normScore <= 0.3 ? 2048 : 4096;
 
   // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.
-  // Tier 1 models are costly and must not handle code execution tasks, but they DO handle
-  // inspection tools (Read, Grep, Glob, MCP, research) during planning.
   if (taskPhase === "ARCHITECTURAL_PLANNING") {
     return {
       tier: "tier_1_apex",
       recommendedModels: models.apex,
-      maxTokens: 16384,
+      maxTokens: apexMaxTokens,
       temperature: 0.2,
       cacheEnabled: true,
       guidanceContract,
@@ -88,7 +118,7 @@ export function selectModelTier(
     return {
       tier: "tier_3_local",
       recommendedModels: models.local,
-      maxTokens: 4096,
+      maxTokens: localMaxTokens,
       temperature: 0.1,
       cacheEnabled: false,
       guidanceContract,
@@ -108,7 +138,7 @@ export function selectModelTier(
   return {
     tier: "tier_2_resilient",
     recommendedModels: models.resilient,
-    maxTokens: 8192,
+    maxTokens: resilientMaxTokens,
     temperature: 0.2,
     cacheEnabled: true,
     guidanceContract,

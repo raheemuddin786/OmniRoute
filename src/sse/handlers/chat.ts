@@ -978,7 +978,12 @@ async function handleChatImplementation(
       }
 
       if (body) {
-        body = { ...body, _spbActive: true, _spbDecision: spbDecision };
+        body = {
+          ...body,
+          _spbActive: true,
+          _spbDecision: spbDecision,
+          ...(spbDecision.cacheControl ? { cacheControl: spbDecision.cacheControl } : {}),
+        };
       }
     } catch (spbErr) {
       log.warn("SPB", `SPB-IR processing warning: ${spbErr}`);

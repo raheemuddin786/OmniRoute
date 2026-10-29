@@ -77,13 +77,19 @@ interface CooldownBlock {
 }
 
 const globalCooldownMap = new Map<string, CooldownBlock>();
+const failureStreakMap = new Map<string, number>();
 
 // Rapid burst prevention store: track timestamp of last request per entity (connection, IP, or key)
-// Enforces minimum inter-request interval (e.g. 50ms) and caps requests within the exact same second
+// Enforces minimum inter-request interval (e.g. 40ms) and caps requests within the exact same second
 const subSecondThrottleMap = new Map<
   string,
   { lastRequestTime: number; countInCurrentSecond: number; currentSecondBucket: number }
 >();
+
+// Sliding-window request tracking per entity (connection / model / provider)
+const slidingWindowMap = new Map<string, number[]>();
+const SLIDING_WINDOW_DURATION_MS = 60_000;
+const DEFAULT_MAX_REQUESTS_PER_MINUTE = 600;
 
 const MAX_REQUESTS_PER_SECOND = (() => {
   const envVal = process.env.OMNIROUTE_MAX_REQUESTS_PER_SECOND;
@@ -177,9 +183,34 @@ export function inspectErrorResponse(params: {
     }
   }
 
-  // 3. Check for 429 (Rate Limit / Quota Exhaustion)
+  // 3. Check for 408 (Request Timeout)
+  if (status === 408) {
+    isBlocked = true;
+    scope = "transient";
+    reason = "request_timeout";
+    cooldownMs = 15_000;
+  }
+
+  // 4. Check for 409 (Conflict / Concurrency Limit)
+  if (status === 409) {
+    isBlocked = true;
+    scope = "transient";
+    reason = "concurrency_conflict";
+    cooldownMs = 10_000;
+  }
+
+  // 5. Check for 429 (Rate Limit / Quota Exhaustion)
   if (status === 429) {
     isBlocked = true;
+
+    const getHeaderVal = (name: string): string | null => {
+      if (!headers) return null;
+      if (typeof (headers as Headers).get === "function") {
+        return (headers as Headers).get(name) || (headers as Headers).get(name.toLowerCase());
+      }
+      const rec = headers as Record<string, string>;
+      return rec[name] || rec[name.toLowerCase()] || null;
+    };
 
     // Check upstream headers for Retry-After or x-ratelimit-reset
     if (headers) {
@@ -193,14 +224,45 @@ export function inspectErrorResponse(params: {
           }
         }
       } else {
-        const rawRetry =
-          (headers as Record<string, string>)["retry-after"] ||
-          (headers as Record<string, string>)["Retry-After"];
+        const rawRetry = getHeaderVal("retry-after");
         if (rawRetry) {
           const parsed = Number(rawRetry.trim());
           if (Number.isFinite(parsed) && parsed > 0) {
             retryAfterSeconds = parsed;
             cooldownMs = parsed * 1000;
+          }
+        }
+      }
+
+      // Check retry-after-ms
+      if (cooldownMs <= 0) {
+        const rawMs = getHeaderVal("retry-after-ms");
+        if (rawMs) {
+          const parsedMs = Number(rawMs.trim());
+          if (Number.isFinite(parsedMs) && parsedMs > 0) {
+            cooldownMs = parsedMs;
+            retryAfterSeconds = Math.ceil(parsedMs / 1000);
+          }
+        }
+      }
+
+      // Check x-ratelimit-reset / x-ratelimit-reset-requests / x-ratelimit-reset-tokens
+      if (cooldownMs <= 0) {
+        const rawReset =
+          getHeaderVal("x-ratelimit-reset") ||
+          getHeaderVal("x-ratelimit-reset-requests") ||
+          getHeaderVal("x-ratelimit-reset-tokens");
+        if (rawReset) {
+          const parsedReset = Number(rawReset.trim());
+          if (Number.isFinite(parsedReset) && parsedReset > 0) {
+            if (parsedReset > 1_000_000_000_000) {
+              cooldownMs = Math.max(0, parsedReset - Date.now());
+            } else if (parsedReset > 1_000_000_000) {
+              cooldownMs = Math.max(0, parsedReset * 1000 - Date.now());
+            } else {
+              cooldownMs = parsedReset * 1000;
+            }
+            retryAfterSeconds = Math.ceil(cooldownMs / 1000);
           }
         }
       }
@@ -254,8 +316,8 @@ export function inspectErrorResponse(params: {
     }
   }
 
-  // 4. Check for 500 / 502 / 503 / 504 (Server Errors & Overload)
-  if (status >= 500 && status <= 504) {
+  // 6. Check for 500 / 502 / 503 / 504 / 529 (Server Errors & Overload)
+  if ((status >= 500 && status <= 504) || status === 529) {
     isBlocked = true;
     if (
       status === 503 ||
@@ -300,7 +362,7 @@ export function inspectErrorResponse(params: {
 }
 
 /**
- * Register a cooldown block based on error inspection
+ * Register a cooldown block based on error inspection with exponential backoff and jitter
  */
 export function registerCooldownBlock(params: {
   provider: string;
@@ -311,6 +373,22 @@ export function registerCooldownBlock(params: {
   const { provider, connectionId, model, inspection } = params;
   if (!inspection.isBlocked) return;
 
+  // Track failure streak for exponential backoff
+  const streak = (failureStreakMap.get(inspection.targetKey) || 0) + 1;
+  failureStreakMap.set(inspection.targetKey, streak);
+
+  // Apply exponential backoff multiplier (capped at 8x) and random jitter for repeated non-permanent failures
+  let effectiveCooldownMs = inspection.cooldownMs;
+  if (!inspection.isPermanent && streak > 1) {
+    const backoffMultiplier = Math.min(Math.pow(1.5, streak - 1), 8);
+    const jitterMs = Math.floor(Math.random() * 1500);
+    effectiveCooldownMs = Math.round(effectiveCooldownMs * backoffMultiplier) + jitterMs;
+  }
+
+  const gracePeriodMs = inspection.isPermanent ? 0 : resolveConfiguredGracePeriodMs();
+  const totalBlockMs = effectiveCooldownMs + gracePeriodMs;
+  const unblockTimestamp = Date.now() + totalBlockMs;
+
   const block: CooldownBlock = {
     key: inspection.targetKey,
     scope: inspection.scope,
@@ -319,8 +397,8 @@ export function registerCooldownBlock(params: {
     connectionId: connectionId ?? undefined,
     reason: inspection.reason,
     blockedAt: Date.now(),
-    unblockTimestamp: inspection.unblockTimestamp,
-    gracePeriodMs: inspection.gracePeriodMs,
+    unblockTimestamp,
+    gracePeriodMs,
     isPermanent: inspection.isPermanent,
   };
 
@@ -328,7 +406,22 @@ export function registerCooldownBlock(params: {
 }
 
 /**
+ * Record a successful request for a model/provider to reset failure streak
+ */
+export function recordGlobalRateLimitSuccess(
+  provider: string,
+  connectionId?: string | null,
+  model?: string | null
+): void {
+  const modelKey = buildRateLimitKey(provider, connectionId, model, "model");
+  const providerKey = buildRateLimitKey(provider, connectionId, null, "provider");
+  failureStreakMap.delete(modelKey);
+  failureStreakMap.delete(providerKey);
+}
+
+/**
  * 2. Check if a request is blocked by active cooldown + grace period
+ * Checks in strict hierarchical order: Account -> Provider -> Model -> Transient
  */
 export function checkCooldownStatus(
   provider: string,
@@ -337,24 +430,22 @@ export function checkCooldownStatus(
 ): RateLimitCheckResult {
   const now = Date.now();
 
-  // 1. Check model-specific block
-  if (model) {
-    const modelKey = buildRateLimitKey(provider, connectionId, model, "model");
-    const modelBlock = globalCooldownMap.get(modelKey);
-    if (modelBlock && now < modelBlock.unblockTimestamp) {
-      const remainingMs = modelBlock.unblockTimestamp - now;
-      return {
-        allowed: false,
-        retryAfterMs: remainingMs,
-        reason: `${modelBlock.reason} (cooldown + grace active)`,
-        scope: "model",
-      };
-    } else if (modelBlock) {
-      globalCooldownMap.delete(modelKey);
-    }
+  // 1. Check account block (highest authority: deactivated or suspended connection)
+  const accountKey = buildRateLimitKey(provider, connectionId, null, "account");
+  const accountBlock = globalCooldownMap.get(accountKey);
+  if (accountBlock && now < accountBlock.unblockTimestamp) {
+    const remainingMs = accountBlock.unblockTimestamp - now;
+    return {
+      allowed: false,
+      retryAfterMs: remainingMs,
+      reason: `${accountBlock.reason} (account suspended/deactivated)`,
+      scope: "account",
+    };
+  } else if (accountBlock) {
+    globalCooldownMap.delete(accountKey);
   }
 
-  // 2. Check provider-wide block
+  // 2. Check provider-wide block (provider 500/502/503/504 or provider quota)
   const providerKey = buildRateLimitKey(provider, connectionId, null, "provider");
   const providerBlock = globalCooldownMap.get(providerKey);
   if (providerBlock && now < providerBlock.unblockTimestamp) {
@@ -369,19 +460,36 @@ export function checkCooldownStatus(
     globalCooldownMap.delete(providerKey);
   }
 
-  // 3. Check account block
-  const accountKey = buildRateLimitKey(provider, connectionId, null, "account");
-  const accountBlock = globalCooldownMap.get(accountKey);
-  if (accountBlock && now < accountBlock.unblockTimestamp) {
-    const remainingMs = accountBlock.unblockTimestamp - now;
+  // 3. Check model-specific block
+  if (model) {
+    const modelKey = buildRateLimitKey(provider, connectionId, model, "model");
+    const modelBlock = globalCooldownMap.get(modelKey);
+    if (modelBlock && now < modelBlock.unblockTimestamp) {
+      const remainingMs = modelBlock.unblockTimestamp - now;
+      return {
+        allowed: false,
+        retryAfterMs: remainingMs,
+        reason: `${modelBlock.reason} (model cooldown + grace active)`,
+        scope: "model",
+      };
+    } else if (modelBlock) {
+      globalCooldownMap.delete(modelKey);
+    }
+  }
+
+  // 4. Check transient burst or concurrency block
+  const transientKey = buildRateLimitKey(provider, connectionId, model, "transient");
+  const transientBlock = globalCooldownMap.get(transientKey);
+  if (transientBlock && now < transientBlock.unblockTimestamp) {
+    const remainingMs = transientBlock.unblockTimestamp - now;
     return {
       allowed: false,
       retryAfterMs: remainingMs,
-      reason: `${accountBlock.reason} (account suspended/deactivated)`,
-      scope: "account",
+      reason: `${transientBlock.reason} (transient cooldown active)`,
+      scope: "transient",
     };
-  } else if (accountBlock) {
-    globalCooldownMap.delete(accountKey);
+  } else if (transientBlock) {
+    globalCooldownMap.delete(transientKey);
   }
 
   return { allowed: true };
@@ -434,15 +542,51 @@ export function checkRapidSubSecondThrottle(entityId: string): RateLimitCheckRes
 }
 
 /**
- * Comprehensive global check combining cooldown status and micro-burst protection
+ * 4. Sliding-window frequency limiter (RPM control per entity/provider)
+ */
+export function checkSlidingWindowRateLimit(
+  entityId: string,
+  maxRpm: number = DEFAULT_MAX_REQUESTS_PER_MINUTE
+): RateLimitCheckResult {
+  const now = Date.now();
+  const windowStart = now - SLIDING_WINDOW_DURATION_MS;
+
+  let timestamps = slidingWindowMap.get(entityId);
+  if (!timestamps) {
+    timestamps = [];
+    slidingWindowMap.set(entityId, timestamps);
+  }
+
+  // Prune entries outside the 60s sliding window
+  const activeTimestamps = timestamps.filter((t) => t > windowStart);
+  slidingWindowMap.set(entityId, activeTimestamps);
+
+  if (activeTimestamps.length >= maxRpm) {
+    const oldest = activeTimestamps[0];
+    const retryAfterMs = Math.max(100, oldest + SLIDING_WINDOW_DURATION_MS - now);
+    return {
+      allowed: false,
+      retryAfterMs,
+      reason: `sliding_window_rpm_limit_exceeded_${maxRpm}`,
+      scope: "transient",
+    };
+  }
+
+  activeTimestamps.push(now);
+  return { allowed: true };
+}
+
+/**
+ * Comprehensive global check combining cooldown status, sliding-window RPM, and micro-burst protection
  */
 export function checkGlobalRateLimit(params: {
   provider: string;
   connectionId?: string | null;
   model?: string | null;
   entityId?: string;
+  maxRpm?: number;
 }): RateLimitCheckResult {
-  const { provider, connectionId, model, entityId } = params;
+  const { provider, connectionId, model, entityId, maxRpm } = params;
 
   // 1. Check cooldown and grace period status
   const cooldownCheck = checkCooldownStatus(provider, connectionId, model);
@@ -450,7 +594,15 @@ export function checkGlobalRateLimit(params: {
     return cooldownCheck;
   }
 
-  // 2. Check micro-burst throttle
+  // 2. Check sliding-window RPM limit if entityId provided
+  if (entityId) {
+    const slidingCheck = checkSlidingWindowRateLimit(entityId, maxRpm);
+    if (!slidingCheck.allowed) {
+      return slidingCheck;
+    }
+  }
+
+  // 3. Check micro-burst sub-second throttle
   if (entityId) {
     const burstCheck = checkRapidSubSecondThrottle(entityId);
     if (!burstCheck.allowed) {
@@ -467,6 +619,8 @@ export function checkGlobalRateLimit(params: {
 export function clearAllGlobalCooldowns(): void {
   globalCooldownMap.clear();
   subSecondThrottleMap.clear();
+  slidingWindowMap.clear();
+  failureStreakMap.clear();
 }
 
 export function getActiveGlobalCooldownCount(): number {

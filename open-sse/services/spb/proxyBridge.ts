@@ -95,6 +95,8 @@ export interface SpbRoutingDecision {
   enhancement?: PromptEnhancementResult;
   necessity?: NecessityCheckResult;
   enhancedMessages?: Array<{ role: string; content?: unknown }>;
+  cacheControl?: { type: "ephemeral" };
+  tokensSaved?: number;
   error?: string;
 }
 
@@ -524,6 +526,67 @@ export async function processSmartProxyRouting(
       }
     }
 
+    // 9. Prompt Caching Boundary Optimization & Token Conservation
+    let tokensSaved = 0;
+    const finalMessages = (enhancedMessages || messages) as Array<{
+      role: string;
+      content?: unknown;
+      [key: string]: unknown;
+    }>;
+
+    if (tierAssignment.cacheEnabled) {
+      // Prompt Cache Preservation & Boundary Injection
+      // 1. Ensure system messages carry cache_control breakpoint
+      for (const m of finalMessages) {
+        if (m.role === "system" && !m.cache_control) {
+          m.cache_control = { type: "ephemeral" };
+        }
+      }
+
+      // 2. Mark preceding turn before active user turn to freeze prefix cache
+      if (lastUserIndex > 0) {
+        const precedingTurn = finalMessages[lastUserIndex - 1];
+        if (precedingTurn && !precedingTurn.cache_control) {
+          precedingTurn.cache_control = { type: "ephemeral" };
+        }
+      }
+
+      // 3. Mark last tool if present in context.tools
+      if (Array.isArray(tools) && tools.length > 0) {
+        const lastTool = tools[tools.length - 1];
+        if (
+          lastTool &&
+          typeof lastTool === "object" &&
+          !(lastTool as Record<string, unknown>).cache_control
+        ) {
+          (lastTool as Record<string, unknown>).cache_control = { type: "ephemeral" };
+        }
+      }
+    }
+
+    // Safe CCR token savings calculation for large message bodies (>= 1200 chars)
+    for (let i = 0; i < finalMessages.length; i++) {
+      const msg = finalMessages[i];
+      if (typeof msg.content === "string" && msg.content.length >= 1200) {
+        const { text, replaced } = maybeCcrReplace(
+          msg.content,
+          1200,
+          sessionId,
+          RETRIEVAL_RAMP_FACTOR_DEFAULT
+        );
+        if (replaced) {
+          const originalChars = msg.content.length;
+          const compressedChars = text.length;
+          tokensSaved += Math.max(0, Math.floor((originalChars - compressedChars) / 4));
+          msg.content = text;
+        }
+      }
+    }
+
+    if (finalMessages !== messages) {
+      enhancedMessages = finalMessages;
+    }
+
     return {
       intent,
       tierAssignment,
@@ -532,6 +595,8 @@ export async function processSmartProxyRouting(
       enhancement,
       necessity: enhancement?.necessity,
       enhancedMessages,
+      cacheControl: tierAssignment.cacheEnabled ? { type: "ephemeral" } : undefined,
+      tokensSaved,
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -569,15 +634,17 @@ export async function processSmartProxyRouting(
 }
 
 export function shouldTriggerZeroLossFallback(statusCode: number): boolean {
-  // Trigger recovery on rate limits, bad requests (model-scoped rejections), credits exhaustion, gateway errors, or timeouts
+  // Trigger recovery on rate limits, bad requests (model-scoped rejections), credits exhaustion, gateway errors, overload, or timeouts
   return (
     statusCode === 400 ||
     statusCode === 402 ||
     statusCode === 408 ||
+    statusCode === 409 ||
     statusCode === 429 ||
     statusCode === 500 ||
     statusCode === 502 ||
     statusCode === 503 ||
-    statusCode === 504
+    statusCode === 504 ||
+    statusCode === 529
   );
 }

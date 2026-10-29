@@ -12,8 +12,14 @@
  */
 
 import { lockExactModel, clearModelLock } from "../../services/accountFallback.ts";
-import { checkGlobalRateLimit, buildRateLimitKey } from "../../services/globalRateLimiter.ts";
+import {
+  checkGlobalRateLimit,
+  checkCooldownStatus,
+  buildRateLimitKey,
+} from "../../services/globalRateLimiter.ts";
 import { getIsoContext, createIsoContextKey, type IsoContext } from "./isoContext.ts";
+import { getTierConfig } from "../../services/tierResolver.ts";
+import { PROVIDER_MODELS } from "../../config/providerModels.ts";
 
 export interface SessionConcurrencyGuard {
   acquire(
@@ -131,6 +137,34 @@ class SessionConcurrencyGuardImpl implements SessionConcurrencyGuard {
     model: string,
     sessionId: string
   ): Promise<ConcurrentRequestResult> {
+    const existingRequestKey = createIsoContextKey(
+      "session_lock",
+      provider,
+      connectionId,
+      model,
+      sessionId
+    );
+
+    // 1. Brief poll to allow in-flight request to release lock normally
+    const waitTimeoutMs = 1500;
+    const pollIntervalMs = 50;
+    const start = Date.now();
+
+    while (Date.now() - start < waitTimeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      const activeLock = this.isoContext.getSessionLock(existingRequestKey);
+      if (!activeLock) {
+        try {
+          const token = await this.acquire(model, provider, connectionId, sessionId);
+          return { success: true, token };
+        } catch {
+          // If acquiring again throws due to re-locking, proceed to alternatives
+          break;
+        }
+      }
+    }
+
+    // 2. Query healthy alternative models in the same tier or provider
     const alternativeModels = await this.getAlternativeModels(provider, connectionId, model);
 
     if (alternativeModels.length === 0) {
@@ -140,21 +174,75 @@ class SessionConcurrencyGuardImpl implements SessionConcurrencyGuard {
       };
     }
 
-    const altModel = alternativeModels[0];
-    const altToken = await this.acquire(altModel, provider, connectionId, sessionId);
+    for (const altModel of alternativeModels) {
+      try {
+        const altToken = await this.acquire(altModel, provider, connectionId, sessionId);
+        return {
+          success: true,
+          token: altToken,
+          suggestedFallback: `Switched to alternative model: ${altModel}`,
+        };
+      } catch {
+        // Try next alternative if this one is busy or in cooldown
+      }
+    }
+
     return {
-      success: true,
-      token: altToken,
-      suggestedFallback: `Switched to alternative model: ${altModel}`,
+      success: false,
+      suggestedFallback: `All alternative models busy or in cooldown for provider ${provider}`,
     };
   }
 
   private async getAlternativeModels(
-    _provider: string,
-    _connectionId: string,
-    _currentModel: string
+    provider: string,
+    connectionId: string,
+    currentModel: string
   ): Promise<string[]> {
-    return [];
+    const alternatives: string[] = [];
+    const normCurrent = (currentModel || "").toLowerCase().trim();
+
+    // 1. Check tier configuration for sibling models in the same tier
+    try {
+      const tierConfig = getTierConfig();
+      const tierModels = tierConfig?.tierModels;
+      if (tierModels) {
+        for (const tierKey of ["apex", "resilient", "local"] as const) {
+          const list = tierModels[tierKey] || [];
+          if (list.some((m) => m.toLowerCase().trim() === normCurrent)) {
+            for (const candidate of list) {
+              if (candidate.toLowerCase().trim() !== normCurrent) {
+                alternatives.push(candidate);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Non-fatal if tier config lookup fails
+    }
+
+    // 2. Check provider models from the provider registry
+    if (alternatives.length === 0) {
+      try {
+        const provModels = PROVIDER_MODELS[provider] || [];
+        for (const entry of provModels) {
+          const candidateId = entry.id;
+          if (candidateId.toLowerCase().trim() !== normCurrent) {
+            alternatives.push(candidateId);
+          }
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    // 3. Filter out any candidate currently in rate limit cooldown or lockout
+    const healthyAlternatives = alternatives.filter((candidate) => {
+      const status = checkCooldownStatus(provider, connectionId, candidate);
+      return status.allowed;
+    });
+
+    return healthyAlternatives;
   }
 
   private createRequestToken(
