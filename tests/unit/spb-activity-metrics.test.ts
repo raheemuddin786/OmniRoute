@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import {
   initSpbStateTable,
   recordSpbTelemetry,
+  recordSpbIntentEvaluation,
   getSpbActivityRecords,
   getSpbDetailedMetrics,
+  getEnhancedGovernanceMetrics,
 } from "../../src/lib/db/spbState";
 import { resetDbInstance } from "../../src/lib/db/core";
 
@@ -109,4 +111,47 @@ test("SPB Activity API Route: handles GET requests and parses filter parameters"
   assert.equal(typeof data.total, "number");
   assert.ok(data.metrics);
   assert.equal(typeof data.metrics.totalRoutes, "number");
+  assert.ok(data.governance);
+  assert.equal(typeof data.governance.spbUsageCount, "number");
+});
+
+test("SPB Governance & Intent Evaluations: records evaluations and computes governance analytics", () => {
+  const now = Date.now();
+  const testSessionId = `test_gov_${now}`;
+
+  // 1. Record an intent evaluation with reprompt and recovery
+  recordSpbIntentEvaluation({
+    sessionId: testSessionId,
+    promptAnchorHash: "spb_hash_123",
+    tier: "tier_2_resilient",
+    taskPhase: "CODE_GENERATION",
+    satisfactionScore: 1.0,
+    detectedOmissions: "[]",
+    repromptCount: 1,
+    repromptSuccess: true,
+    evaluatedAt: now,
+  });
+
+  // 2. Record telemetry
+  recordSpbTelemetry({
+    sessionId: testSessionId,
+    taskPhase: "CODE_GENERATION",
+    modelTier: "tier_2_resilient",
+    checkpointRestored: true,
+    fallbackTriggered: false,
+    statusCode: 200,
+    latencyMs: 30,
+    timestamp: now,
+    stagnationDetected: true,
+    stagnationRecovered: true,
+  });
+
+  // 3. Compute enhanced governance metrics
+  const gov = getEnhancedGovernanceMetrics({ timeRange: "1h", sessionId: testSessionId });
+  assert.ok(gov);
+  assert.equal(typeof gov.spbUsageCount, "number");
+  assert.equal(typeof gov.stagnationDetectionRate, "number");
+  assert.equal(typeof gov.stagnationRecoveryRate, "number");
+  assert.ok(gov.stagnationRecoveryRate >= 1);
+  assert.ok(gov.conclusionReviews >= 1);
 });

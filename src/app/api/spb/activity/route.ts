@@ -4,6 +4,7 @@ import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   getSpbActivityRecords,
   getSpbDetailedMetrics,
+  getEnhancedGovernanceMetrics,
   SpbActivityFilterOptions,
 } from "@/lib/db/spbState";
 
@@ -48,6 +49,7 @@ export async function GET(request: Request) {
 
     const { records, total } = getSpbActivityRecords(options);
     const metrics = getSpbDetailedMetrics(options);
+    const governance = getEnhancedGovernanceMetrics(options);
 
     return NextResponse.json({
       success: true,
@@ -56,6 +58,7 @@ export async function GET(request: Request) {
       limit,
       offset,
       metrics,
+      governance,
     });
   } catch (err) {
     console.error("[API] GET /api/spb/activity error:", err);

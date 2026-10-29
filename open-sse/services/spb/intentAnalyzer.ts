@@ -265,10 +265,13 @@ export function classifyIntent(
   const isBroadSystemContext =
     isDirectHumanPrompt &&
     !isExplicitPureCodeExecution &&
+    !hasDeterministicKeywords &&
+    !hasTestKeywords &&
+    !hasRefactorKeywords &&
     (/\b(adapt|screen|screens|app|mobile|redesign|system architecture|architectural|design flow|end-to-end|workflow|multi-page|multi-step|roadmap|blueprint|research|investigate|audit|plan|planning|strategy|deep analysis)\b/i.test(
       targetText
     ) ||
-      userMessages.length === 1);
+      (userMessages.length === 1 && !hasCodeKeywords));
 
   if (hasPureArchitectureIntent || isBroadSystemContext) {
     taskPhase = "ARCHITECTURAL_PLANNING";

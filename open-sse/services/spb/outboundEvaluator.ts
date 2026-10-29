@@ -767,6 +767,22 @@ export async function processSpbOutboundZeroLoss(args: {
 
     // If response satisfies 100% of intention criteria, max iterations reached, or tool call generated
     if (evalResult.isSatisfied || repromptCount >= maxReprompts || extracted.hasToolCalls) {
+      try {
+        recordIntentEvaluation({
+          sessionId: args.sessionId,
+          promptAnchorHash: "spb_" + args.sessionId,
+          tier: args.tier,
+          taskPhase: args.taskPhase,
+          satisfactionScore: evalResult.satisfactionScore,
+          detectedOmissions: JSON.stringify(evalResult.omissions || []),
+          repromptCount,
+          repromptSuccess: evalResult.isSatisfied,
+          evaluatedAt: Date.now(),
+        });
+      } catch {
+        // Non-blocking telemetry
+      }
+
       if (extracted.isStream) {
         return reconstructStreamResponse(
           extracted.rawChunks,

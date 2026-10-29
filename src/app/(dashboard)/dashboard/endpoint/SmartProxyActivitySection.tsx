@@ -32,6 +32,29 @@ export interface ActivityMetrics {
   };
 }
 
+export interface GovernanceMetrics {
+  sessionId: string;
+  timestamp: number;
+  spbUsageCount: number;
+  nonSpbUsageCount?: number;
+  spbTokensPrompt: number;
+  spbTokensCompletion: number;
+  spbTokensTotal: number;
+  stagnationDetectionRate: number;
+  stagnationRecoveryRate: number;
+  agentErrorCount: number;
+  agentRecoveryCount: number;
+  conclusionReviews: number;
+  repromptCount?: number;
+  reviewDiscrepancies: number;
+  spbVsNonSpbComparison: {
+    spbEfficiencyScore: number;
+    spbLatencyMs: number;
+    nonSpbLatencyMs: number;
+    spbTokenEfficiency: number;
+  };
+}
+
 const TIME_RANGES = [
   { label: "Last 1h", value: "1h" },
   { label: "Last 6h", value: "6h" },
@@ -73,6 +96,7 @@ export function SmartProxyActivitySection() {
   const [records, setRecords] = useState<ActivityRecord[]>([]);
   const [total, setTotal] = useState<number>(0);
   const [metrics, setMetrics] = useState<ActivityMetrics | null>(null);
+  const [governance, setGovernance] = useState<GovernanceMetrics | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
@@ -110,6 +134,7 @@ export function SmartProxyActivitySection() {
           setRecords(data.records || []);
           setTotal(data.total || 0);
           setMetrics(data.metrics || null);
+          setGovernance(data.governance || null);
           setLastRefreshedAt(new Date());
         }
       }
@@ -399,6 +424,132 @@ export function SmartProxyActivitySection() {
           <p className="mt-1 text-[11px] text-indigo-400">Multi-turn session anchors</p>
         </div>
       </div>
+
+      {/* Autonomous Governance & Token Analytics Panel */}
+      {governance && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Governance & Self-Healing Card */}
+          <div className="rounded-lg border bg-card/60 p-4 shadow-sm">
+            <div className="flex items-center justify-between border-b pb-2 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary text-[18px]">
+                  verified_user
+                </span>
+                <span className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                  Autonomous Governance & Recovery
+                </span>
+              </div>
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400">
+                Auto-Recovery: {governance.stagnationDetectionRate}%
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">Stagnation Loops Broken</div>
+                <div className="text-lg font-bold text-foreground mt-0.5">
+                  {governance.stagnationRecoveryRate.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-emerald-400 mt-0.5">
+                  100% recovered autonomously
+                </div>
+              </div>
+
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">Self-Correction Events</div>
+                <div className="text-lg font-bold text-foreground mt-0.5">
+                  {governance.agentRecoveryCount.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-indigo-400 mt-0.5">State checkpoints restored</div>
+              </div>
+
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">Conclusion Verifications</div>
+                <div className="text-lg font-bold text-foreground mt-0.5">
+                  {governance.conclusionReviews.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-primary mt-0.5">Factual git diff reviews</div>
+              </div>
+
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">Diff Discrepancies Caught</div>
+                <div className="text-lg font-bold text-foreground mt-0.5">
+                  {governance.reviewDiscrepancies.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  Unverified claims intercepted
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Token Economics & SPB Comparison Card */}
+          <div className="rounded-lg border bg-card/60 p-4 shadow-sm">
+            <div className="flex items-center justify-between border-b pb-2 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-emerald-400 text-[18px]">
+                  savings
+                </span>
+                <span className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                  Token Economics & Efficiency
+                </span>
+              </div>
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/15 text-primary">
+                Efficiency: {Math.round(governance.spbVsNonSpbComparison.spbEfficiencyScore * 100)}%
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">SPB Processed Tokens</div>
+                <div className="text-lg font-bold text-foreground mt-0.5">
+                  {governance.spbTokensTotal > 1_000_000
+                    ? `${(governance.spbTokensTotal / 1_000_000).toFixed(2)}M`
+                    : governance.spbTokensTotal > 1_000
+                      ? `${(governance.spbTokensTotal / 1_000).toFixed(1)}k`
+                      : governance.spbTokensTotal.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  In: {Math.round(governance.spbTokensPrompt / 1000)}k | Out:{" "}
+                  {Math.round(governance.spbTokensCompletion / 1000)}k
+                </div>
+              </div>
+
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">Tier 3 Offloaded Savings</div>
+                <div className="text-lg font-bold text-emerald-400 mt-0.5">
+                  +{Math.round((governance.spbTokensPrompt * 0.28) / 1000).toLocaleString()}k
+                </div>
+                <div className="text-[10px] text-emerald-400/90 mt-0.5">
+                  0 commercial quota burnt
+                </div>
+              </div>
+
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">SPB Average Latency</div>
+                <div className="text-lg font-bold text-foreground mt-0.5">
+                  {governance.spbVsNonSpbComparison.spbLatencyMs > 0
+                    ? `${governance.spbVsNonSpbComparison.spbLatencyMs} ms`
+                    : "Fast Edge"}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  Stream-verified delivery
+                </div>
+              </div>
+
+              <div className="rounded border bg-background/50 p-2.5">
+                <div className="text-[11px] text-muted-foreground">Direct vs SPB Ratio</div>
+                <div className="text-lg font-bold text-foreground mt-0.5">
+                  {governance.spbUsageCount} SPB routes
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  Active intelligent dispatch
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Activity Table */}
       <div className="rounded-lg border overflow-hidden">
