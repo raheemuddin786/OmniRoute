@@ -187,6 +187,20 @@ export async function evaluateExecuteTargetGates(opts: {
   }
 
   const preScreenEntry = deps.preScreenMap.get(target.executionKey);
+  if (preScreenEntry && preScreenEntry.available === false) {
+    deps.log.info("COMBO", `Skipping ${modelStr} — target marked unavailable during pre-screen`);
+    recordComboDecision(deps.traceInvocationId, {
+      step: target.executionKey,
+      target: modelStr,
+      decision: "skipped_before_dispatch",
+      reason: "pre_screen_unavailable",
+    });
+    bumpFallback();
+    return {
+      kind: "skip",
+      result: stopProtectedPriorityTarget(`Model ${modelStr} is unavailable (pre-screen)`),
+    };
+  }
   const profile = preScreenEntry?.profile ?? (await getRuntimeProviderProfile(provider));
 
   const allowRateLimitedConnection =
