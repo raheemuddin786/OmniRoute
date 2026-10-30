@@ -2107,81 +2107,95 @@ async function handleChatImplementation(
 
     // 2. If still not ok, try globalFallbackModel if configured
     if (!response.ok) {
-      const fallbackSettings = (await getCachedSettings().catch(
-        () => ({}) as Record<string, unknown>
-      )) as Record<string, unknown>;
-      const fallbackModel =
-        typeof fallbackSettings?.globalFallbackModel === "string"
-          ? (fallbackSettings.globalFallbackModel as string).trim()
-          : null;
-      if (fallbackModel && fallbackModel !== resolvedModelStr) {
-        log.info(
+      // When the client explicitly names a provider prefix (e.g. cw/claude-sonnet-5.5-low),
+      // never silently divert to a different provider's model on a 429. The explicit
+      // provider choice is the operator's intent; a global fallback that substitutes a
+      // different provider is a side effect the caller did not ask for. Return the
+      // original error so the client can choose its own fallback.
+      const clientProvider = modelStr.includes("/") ? modelStr.split("/")[0] : null;
+      const isExplicitProviderRequest = Boolean(clientProvider);
+      if (isExplicitProviderRequest) {
+        log.debug(
           "GLOBAL_FALLBACK",
-          `Single model "${resolvedModelStr}" failed (${response.status}) — attempting global fallback: ${fallbackModel}`
+          `Skipping global fallback for "${resolvedModelStr}": client explicitly requested provider "${clientProvider}" — preserving provider choice on ${response.status}`
         );
-        try {
-          const fallbackCombo = await getComboByName(fallbackModel).catch(() => null);
-          const fallbackResponse = fallbackCombo
-            ? await (handleComboChat as any)({
-                body,
-                combo: fallbackCombo,
-                endpointPath: clientRawRequest?.endpoint || new URL(request.url).pathname,
-                requestHeaders: clientRawRequest?.headers || request.headers,
-                handleSingleModel: (b: any, m: string) =>
-                  handleSingleModelChat(
-                    b,
-                    m,
-                    clientRawRequest,
-                    request,
-                    fallbackCombo.name ?? fallbackModel,
-                    apiKeyInfo,
-                    telemetry,
-                    {
-                      sessionId,
-                      sessionAffinityKey,
-                      emergencyFallbackTried: true,
-                      forceLiveComboTest: isComboLiveTest,
-                      forcedConnectionId: null,
-                      correlationId: reqId,
-                      conversationId,
-                      managedLease,
-                      videoBridgeLog,
-                    },
-                    fallbackCombo.strategy,
-                    true
-                  ),
-                sessionId,
-                sessionAffinityKey,
-                log,
-              })
-            : await handleSingleModelChat(
-                body,
-                fallbackModel,
-                clientRawRequest,
-                request,
-                null,
-                apiKeyInfo,
-                telemetry,
-                {
+      } else {
+        const fallbackSettings = (await getCachedSettings().catch(
+          () => ({}) as Record<string, unknown>
+        )) as Record<string, unknown>;
+        const fallbackModel =
+          typeof fallbackSettings?.globalFallbackModel === "string"
+            ? (fallbackSettings.globalFallbackModel as string).trim()
+            : null;
+        if (fallbackModel && fallbackModel !== resolvedModelStr) {
+          log.info(
+            "GLOBAL_FALLBACK",
+            `Single model "${resolvedModelStr}" failed (${response.status}) — attempting global fallback: ${fallbackModel}`
+          );
+          try {
+            const fallbackCombo = await getComboByName(fallbackModel).catch(() => null);
+            const fallbackResponse = fallbackCombo
+              ? await (handleComboChat as any)({
+                  body,
+                  combo: fallbackCombo,
+                  endpointPath: clientRawRequest?.endpoint || new URL(request.url).pathname,
+                  requestHeaders: clientRawRequest?.headers || request.headers,
+                  handleSingleModel: (b: any, m: string) =>
+                    handleSingleModelChat(
+                      b,
+                      m,
+                      clientRawRequest,
+                      request,
+                      fallbackCombo.name ?? fallbackModel,
+                      apiKeyInfo,
+                      telemetry,
+                      {
+                        sessionId,
+                        sessionAffinityKey,
+                        emergencyFallbackTried: true,
+                        forceLiveComboTest: isComboLiveTest,
+                        forcedConnectionId: null,
+                        correlationId: reqId,
+                        conversationId,
+                        managedLease,
+                        videoBridgeLog,
+                      },
+                      fallbackCombo.strategy,
+                      true
+                    ),
                   sessionId,
                   sessionAffinityKey,
-                  forceLiveComboTest: isComboLiveTest,
-                  forcedConnectionId: null,
-                  correlationId: reqId,
-                  conversationId,
-                  managedLease,
-                  videoBridgeLog,
-                },
-                null,
-                false
-              );
-          if (fallbackResponse.ok) {
-            log.info("GLOBAL_FALLBACK", `Global fallback "${fallbackModel}" succeeded`);
-            response = fallbackResponse;
+                  log,
+                })
+              : await handleSingleModelChat(
+                  body,
+                  fallbackModel,
+                  clientRawRequest,
+                  request,
+                  null,
+                  apiKeyInfo,
+                  telemetry,
+                  {
+                    sessionId,
+                    sessionAffinityKey,
+                    forceLiveComboTest: isComboLiveTest,
+                    forcedConnectionId: null,
+                    correlationId: reqId,
+                    conversationId,
+                    managedLease,
+                    videoBridgeLog,
+                  },
+                  null,
+                  false
+                );
+            if (fallbackResponse.ok) {
+              log.info("GLOBAL_FALLBACK", `Global fallback "${fallbackModel}" succeeded`);
+              response = fallbackResponse;
+            }
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log.warn("GLOBAL_FALLBACK", `Global fallback error: ${errMsg}`);
           }
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          log.warn("GLOBAL_FALLBACK", `Global fallback error: ${errMsg}`);
         }
       }
     }
