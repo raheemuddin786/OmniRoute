@@ -193,7 +193,7 @@ export async function evaluateExecuteTargetGates(opts: {
       step: target.executionKey,
       target: modelStr,
       decision: "skipped_before_dispatch",
-      reason: "pre_screen_unavailable",
+      reason: "availability",
     });
     bumpFallback();
     return {
@@ -201,6 +201,7 @@ export async function evaluateExecuteTargetGates(opts: {
       result: stopProtectedPriorityTarget(`Model ${modelStr} is unavailable (pre-screen)`),
     };
   }
+
   const profile = preScreenEntry?.profile ?? (await getRuntimeProviderProfile(provider));
 
   const allowRateLimitedConnection =

@@ -78,7 +78,7 @@ export type AttemptLoopDeps = {
   resilienceSettings: ResilienceSettings;
   sticky: ApplyStickinessResult;
   effectiveSessionId: string | null;
-  preScreenMap: Map<string, { profile?: unknown }>;
+  preScreenMap: Map<string, { profile?: unknown; available?: boolean }>;
   quotaCutoffResetWindowConfig: ResetWindowConfig;
   maxRetries: number;
   traceInvocationId: string;
