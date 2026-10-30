@@ -337,7 +337,7 @@ export function enhanceInboundPrompt(
     }
 
     case "tier_2_resilient": {
-      tierPreamble = `[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries. Never delete or overwrite working implementations without explicit architectural specification. ${repositoryTruthDirective}]`;
+      tierPreamble = `[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries. When editing, perform precise search-and-replace targeting minimal diffs; never rewrite or truncate existing working code without explicit instruction. Never delete or overwrite working implementations without explicit architectural specification. Verify changes using project tests and typecheckers before completing turns. ${repositoryTruthDirective}]`;
       appliedOptimizations.push("Tier 2 Resilient Implementation & Error Boundary Enforcement");
       break;
     }

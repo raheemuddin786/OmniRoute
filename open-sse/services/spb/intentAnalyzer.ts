@@ -273,9 +273,20 @@ export function classifyIntent(
     ) ||
       (userMessages.length === 1 && !hasCodeKeywords));
 
-  if (hasPureArchitectureIntent || isBroadSystemContext) {
+  // Multi-file mutation detection: if the request references >3 distinct source files for mutation/refactor,
+  // route to ARCHITECTURAL_PLANNING to establish a supervisor guidance contract before delegating to Tier 2
+  const referencedFileMatches = targetText.match(
+    /(?:[a-zA-Z0-9_\-./]+\/)?(?:src|open-sse|tests|scripts|electron|lib|app|components)\/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g
+  );
+  const uniqueReferencedFiles = new Set(referencedFileMatches || []);
+  const isMultiFileMutation =
+    isDirectHumanPrompt &&
+    uniqueReferencedFiles.size > 3 &&
+    (hasCodeKeywords || hasRefactorKeywords);
+
+  if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
     taskPhase = "ARCHITECTURAL_PLANNING";
-    complexityScore = hasPureArchitectureIntent ? 0.9 : 0.85;
+    complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
   } else if (isToolResultTurn) {
     if (hasTestKeywords) {
       taskPhase = "TESTING_AND_VERIFICATION";

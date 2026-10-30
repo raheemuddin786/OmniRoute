@@ -443,6 +443,14 @@ export function pruneStaleCheckpoints(maxAgeMs: number = 24 * 60 * 60 * 1000): n
     const result = db
       .prepare(`DELETE FROM spb_state_checkpoints WHERE created_at < ?`)
       .run(pruneThreshold);
+
+    // Evict stale entries from the in-memory cache as well
+    for (const [sid, cp] of checkpointMemoryCache.entries()) {
+      if (cp.createdAt < pruneThreshold) {
+        checkpointMemoryCache.delete(sid);
+      }
+    }
+
     return result.changes;
   } catch (err) {
     console.error("[SPB State] Failed to prune stale checkpoints:", err);

@@ -265,7 +265,9 @@ export async function processSmartProxyRouting(
 
     // If stagnation recovery specified an escalation tier, enforce it immediately
     if (isStagnant && stagnationRecovery.escalationTier) {
-      const resilientModels = tierConfig?.tierModels?.tier_2_resilient;
+      const resilientModels =
+        tierConfig?.tierModels?.resilient ||
+        (tierConfig?.tierModels as Record<string, string[]> | undefined)?.tier_2_resilient;
       tierAssignment = {
         tier: stagnationRecovery.escalationTier,
         recommendedModels:
