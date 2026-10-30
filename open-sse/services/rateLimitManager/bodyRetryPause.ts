@@ -111,6 +111,25 @@ export function noteLimiterUpdate(limiter: object, updates: object): void {
 }
 
 /**
+ * Format milliseconds into a structured days:hour:min:sec:ms string.
+ * Example: 3313840 -> "0d:00h:55m:13s:840ms"
+ */
+export function formatDurationBreakdown(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0d:00h:00m:00s:000ms";
+  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+  const remDays = ms % (24 * 60 * 60 * 1000);
+  const hours = Math.floor(remDays / (60 * 60 * 1000));
+  const remHours = remDays % (60 * 60 * 1000);
+  const minutes = Math.floor(remHours / (60 * 1000));
+  const remMinutes = remHours % (60 * 1000);
+  const seconds = Math.floor(remMinutes / 1000);
+  const milliseconds = remMinutes % 1000;
+
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${days}d:${pad(hours)}h:${pad(minutes)}m:${pad(seconds)}s:${pad(milliseconds, 3)}ms`;
+}
+
+/**
  * Returns a typed `RATE_LIMIT_QUEUE_TIMEOUT` error when the recorded pause runs
  * past the caller's remaining queue time `budgetMs` (queueing could only end in
  * that same timeout), or null when no pause is recorded or it ends in time.
@@ -123,9 +142,11 @@ export function checkLimiterPause(
 ): Error | null {
   const until = pausedUntil.get(limiter);
   if (until === undefined || until - now <= budgetMs) return null;
+  const remainingMs = until - now;
+  const formattedBreakdown = formatDurationBreakdown(remainingMs);
   return markLocalRateLimitError(
     new Error(
-      `Request not queued: the local rate-limit pause for ${identity} lasts ${until - now}ms more, ` +
+      `Request not queued: the local rate-limit pause for ${identity} lasts ${remainingMs}ms (${formattedBreakdown}) more, ` +
         `past the ${budgetMs}ms left in its queue budget — this is OmniRoute's request queue ` +
         `honouring an upstream retry-after, not a new upstream rejection.`
     ),
