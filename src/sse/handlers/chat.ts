@@ -29,6 +29,8 @@ import {
   lockModel,
   recordModelLockoutFailure,
   isDailyQuotaExhausted,
+  isAccountUnavailable,
+  isModelLocked,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { getCombo, getComboForModel, getModelInfo } from "../services/model";
 import { stripContextWindowSuffix } from "@omniroute/open-sse/services/model.ts";
@@ -1633,6 +1635,22 @@ async function handleChatImplementation(
       );
       const availability = getComboCredentialAvailability(creds);
       if (availability !== true) return availability;
+
+      // Skip models with active connection cooldowns or per-model lockouts
+      if (creds && typeof creds === "object" && "connectionId" in creds && creds.connectionId) {
+        const connId = String(creds.connectionId);
+        if ("rateLimitedUntil" in creds && isAccountUnavailable(creds.rateLimitedUntil as string)) {
+          log.debug(
+            "COMBO",
+            `Skipping ${modelString}: connection ${connId} in cooldown until ${creds.rateLimitedUntil}`
+          );
+          return false;
+        }
+        if (isModelLocked(provider, connId, resolvedModel)) {
+          log.debug("COMBO", `Skipping ${modelString}: model locked on connection ${connId}`);
+          return false;
+        }
+      }
 
       // OAuth selection must happen atomically with occupancy reservation in the
       // actual dispatch. Availability preflight may finish well before a combo
