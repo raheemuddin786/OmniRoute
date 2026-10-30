@@ -926,8 +926,16 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
   if (status === 429) {
     const counts = limiter.counts();
     const limiterKey = getLimiterKey(provider, connectionId, model);
+    const parsedWaitMs = retryAfterStr ? parseResetTime(retryAfterStr) : null;
+    const effectiveCooldownMs =
+      parsedWaitMs && parsedWaitMs > 0
+        ? parsedWaitMs
+        : provider === "claude-web" || provider === "claude"
+          ? 60_000
+          : 30_000;
+
     logRateLimit(
-      `🚫 [RATE-LIMIT] ${provider}:${connectionId.slice(0, 8)} — 429 received (${describeRetryAfter(retryAfterStr)}), resetting the limiter (headers set no local pause), dropping ${counts.QUEUED} queued request(s)`
+      `🚫 [RATE-LIMIT] ${provider}:${connectionId.slice(0, 8)} — 429 received (${describeRetryAfter(retryAfterStr)}), pausing limiter for ${Math.ceil(effectiveCooldownMs / 1000)}s, dropping ${counts.QUEUED} queued request(s)`
     );
 
     // Evict from the cache so follow-up learning from the same error body
@@ -941,6 +949,12 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
     // Without disconnect() here, every 429 leaks a heartbeat timer until GC reclaims
     // the abandoned Bottleneck; under sustained quota pressure that is a real leak.
     evictLimiter(limiterKey, limiter);
+    preservedReplacementSettings.set(limiterKey, {
+      ...buildLimiterDefaults(),
+      reservoir: 0,
+      reservoirRefreshAmount: 60,
+      reservoirRefreshInterval: effectiveCooldownMs,
+    });
     return;
   }
 

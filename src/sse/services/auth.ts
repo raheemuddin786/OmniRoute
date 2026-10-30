@@ -1769,7 +1769,7 @@ export async function getProviderCredentials(
     }
 
     if (exhaustedQuota.length > 0) {
-      log.info(
+      log.debug(
         "AUTH",
         `${provider} | quota-aware: ${withQuota.length} with quota, skipping ${exhaustedQuota.length} exhausted`
       );
@@ -1877,8 +1877,8 @@ export async function getProviderCredentials(
       connection = affinityConnection;
       if (options.lease) commitSelectionSideEffects = affinityPlan?.commit;
       else syncSessionAffinityRuntimeFields(connectionsRaw, connection);
-    } else if (options.sessionKey) {
-      log.info(
+    } else if (options.sessionKey && sessionAffinityTtlMs > 0) {
+      log.debug(
         "AUTH",
         `session_key=${formatSessionKeyForLog(options.sessionKey)} has no available affinity target`
       );
@@ -3022,7 +3022,10 @@ export async function markAccountUnavailable(
         model,
         reason,
         status,
-        status === 404 || isNvidiaModelGone || isModelUnsupported401(status, errorText) || status === 403
+        status === 404 ||
+          isNvidiaModelGone ||
+          isModelUnsupported401(status, errorText) ||
+          status === 403
           ? (effectiveProviderProfile?.baseCooldownMs ?? COOLDOWN_MS.notFoundLocal)
           : (claudeQuotaScope.cooldownMs ??
               antigravityFamilyInferredBaseCooldownMs ??

@@ -2184,27 +2184,61 @@ async function handleChatImplementation(
           `Model "${resolvedModelStr}" exhausted/failed (${response.status}) — initiating automatic resilient failover to: ${resModel}`
         );
         try {
-          const resResponse = await handleSingleModelChat(
-            body,
-            resModel,
-            clientRawRequest,
-            request,
-            null,
-            apiKeyInfo,
-            telemetry,
-            {
-              sessionId,
-              sessionAffinityKey,
-              forceLiveComboTest: isComboLiveTest,
-              forcedConnectionId: null,
-              correlationId: reqId,
-              conversationId,
-              managedLease,
-              videoBridgeLog,
-            },
-            null,
-            false
-          );
+          const resCombo = await getComboByName(resModel).catch(() => null);
+          const resResponse = resCombo
+            ? await (handleComboChat as any)({
+                body,
+                combo: resCombo,
+                endpointPath: clientRawRequest?.endpoint || new URL(request.url).pathname,
+                requestHeaders: clientRawRequest?.headers || request.headers,
+                handleSingleModel: (b: any, m: string) =>
+                  handleSingleModelChat(
+                    b,
+                    m,
+                    clientRawRequest,
+                    request,
+                    resCombo.name ?? resModel,
+                    apiKeyInfo,
+                    telemetry,
+                    {
+                      sessionId,
+                      sessionAffinityKey,
+                      emergencyFallbackTried: true,
+                      forceLiveComboTest: isComboLiveTest,
+                      forcedConnectionId: null,
+                      correlationId: reqId,
+                      conversationId,
+                      managedLease,
+                      videoBridgeLog,
+                    },
+                    resCombo.strategy,
+                    true
+                  ),
+                sessionId,
+                sessionAffinityKey,
+                log,
+              })
+            : await handleSingleModelChat(
+                body,
+                resModel,
+                clientRawRequest,
+                request,
+                null,
+                apiKeyInfo,
+                telemetry,
+                {
+                  sessionId,
+                  sessionAffinityKey,
+                  forceLiveComboTest: isComboLiveTest,
+                  forcedConnectionId: null,
+                  correlationId: reqId,
+                  conversationId,
+                  managedLease,
+                  videoBridgeLog,
+                },
+                null,
+                false
+              );
           if (resResponse.ok) {
             log.info("RESILIENT_FAILOVER", `Resilient failover to "${resModel}" succeeded`);
             response = resResponse;
