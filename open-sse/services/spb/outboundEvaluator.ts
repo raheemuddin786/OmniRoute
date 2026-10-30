@@ -861,6 +861,14 @@ export async function processSpbOutboundZeroLoss(args: {
       headers.set("X-OmniRoute-SPB-Satisfaction", fallbackEval.satisfactionScore.toFixed(2));
       headers.set("X-OmniRoute-SPB-Reprompt-Count", String(repromptCount));
       headers.set("X-OmniRoute-SPB-ZeroLoss", fallbackEval.isSatisfied ? "verified" : "partial");
+      if (fallbackEval.reviewerReport) {
+        headers.set(
+          "X-OmniRoute-Reviewer-Status",
+          fallbackEval.isSatisfied ? "verified" : "discrepancy-unresolved"
+        );
+      } else {
+        headers.set("X-OmniRoute-Reviewer-Status", "verified");
+      }
       return new Response(JSON.stringify(lastExtracted.jsonBody || {}), {
         status: currentResponse.status,
         statusText: currentResponse.statusText,
