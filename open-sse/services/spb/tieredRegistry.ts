@@ -212,9 +212,19 @@ export function detectAndRecoverFromStagnation(
     const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
-    // Escalate tier assignment to tier_2_resilient to enable tool execution
-    // (Tier 2 has full tool execution authority vs Tier 1 oversight or Tier 3 constraints)
-    escalationTier = "tier_2_resilient";
+    // Escalate tier assignment:
+    // If Tier 2 has already performed extended repeated inspections (>= 5 turns), escalate to Tier 1 Apex
+    // so an architectural supervisor synthesizes a concrete plan and unblocks execution.
+    // Otherwise, escalate to Tier 2 Resilient for tool execution authority.
+    if (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 5) {
+      escalationTier = "tier_1_apex";
+      newTaskPhase = "ARCHITECTURAL_PLANNING";
+      recoveryDirective =
+        "ARCHITECTURAL RESOLUTION MANDATE: Tier 2 execution stagnated after multiple inspection cycles. " +
+        "Escalating to Apex Architecture to establish a rigorous, step-by-step implementation contract.";
+    } else {
+      escalationTier = "tier_2_resilient";
+    }
 
     // Update the checkpoint with the reset counter to prevent immediate re-triggering
     if (existingCheckpoint) {

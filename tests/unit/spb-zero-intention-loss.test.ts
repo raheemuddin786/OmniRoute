@@ -940,3 +940,64 @@ test("Conclusion Reviewer: verifyCodeDiffAgainstConclusion passes when no un-mod
   assert.equal(review.claimedFilesMissingInDiff.length, 0);
   assert.equal(review.report, undefined);
 });
+
+test("Conclusion Reviewer: reconstructStreamResponse appends Reviewer Status Check when discrepancy unresolved", async () => {
+  const { reconstructStreamResponse } =
+    await import("@omniroute/open-sse/services/spb/outboundEvaluator.ts");
+  const rawChunks = [
+    new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Initial completion"}}]}\n\n'),
+  ];
+  const originalResponse = new Response("dummy", { status: 200 });
+  const evalResult = {
+    isSatisfied: false,
+    satisfactionScore: 0.3,
+    omissions: [],
+    oddities: ["Conclusion claimed code modifications not reflected in repository code diff."],
+    reviewerReport: "[REVIEWER FACTUAL VERIFICATION REPORT] Missing files in diff",
+  };
+
+  const reconstructed = reconstructStreamResponse(rawChunks, originalResponse, evalResult, 2);
+  assert.equal(reconstructed.headers.get("X-OmniRoute-Reviewer-Status"), "discrepancy-unresolved");
+  assert.equal(reconstructed.headers.get("X-OmniRoute-SPB-ZeroLoss"), "partial");
+
+  const reader = reconstructed.body?.getReader();
+  assert.ok(reader);
+  let totalText = "";
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader!.read();
+    if (done) break;
+    if (value) totalText += decoder.decode(value);
+  }
+  assert.ok(
+    totalText.includes("[SPB Reviewer Status Check: Factual discrepancy detected"),
+    "Stream body must contain Reviewer Status Check notice"
+  );
+});
+
+test("Stagnation Recovery: Tier 2 persistent stagnation (>= 5 reads) escalates to Tier 1 Apex", async () => {
+  const { detectAndRecoverFromStagnation } =
+    await import("@omniroute/open-sse/services/spb/tieredRegistry.ts");
+  const recovery = detectAndRecoverFromStagnation(
+    "test_tier2_stagnant",
+    "INSPECTION_SYNTHESIS",
+    5,
+    {
+      sessionId: "test_tier2_stagnant",
+      promptAnchorHash: "sha256:test",
+      taskPhase: "INSPECTION_SYNTHESIS",
+      modelTier: "tier_2_resilient",
+      statePayload: "{}",
+      createdAt: Date.now(),
+    }
+  );
+
+  assert.equal(recovery.isStagnant, true);
+  assert.equal(
+    recovery.escalationTier,
+    "tier_1_apex",
+    "Persistent Tier 2 stagnation must escalate to Tier 1 Apex"
+  );
+  assert.equal(recovery.newTaskPhase, "ARCHITECTURAL_PLANNING");
+  assert.ok(recovery.recoveryDirective?.includes("ARCHITECTURAL RESOLUTION MANDATE"));
+});

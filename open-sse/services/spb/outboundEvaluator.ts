@@ -391,7 +391,14 @@ export function verifyCodeDiffAgainstConclusion(
         const lineTrimmed = line.trim();
         if (lineTrimmed) {
           const file = lineTrimmed.slice(3).trim();
-          if (file) actualFiles.add(file);
+          if (file.includes("->")) {
+            const parts = file.split("->").map((p) => p.trim());
+            for (const p of parts) {
+              if (p) actualFiles.add(p);
+            }
+          } else if (file) {
+            actualFiles.add(file);
+          }
         }
       }
     }
@@ -663,7 +670,14 @@ export function reconstructStreamResponse(
   headers.set("X-OmniRoute-SPB-Reprompt-Count", String(repromptCount));
   headers.set("X-OmniRoute-SPB-ZeroLoss", evalResult.isSatisfied ? "verified" : "partial");
   if (evalResult.reviewerReport) {
-    headers.set("X-OmniRoute-Reviewer-Status", evalResult.isSatisfied ? "verified" : "reprompted");
+    headers.set(
+      "X-OmniRoute-Reviewer-Status",
+      evalResult.isSatisfied
+        ? "verified"
+        : repromptCount >= 2
+          ? "discrepancy-unresolved"
+          : "reprompted"
+    );
   } else {
     headers.set("X-OmniRoute-Reviewer-Status", "verified");
   }
@@ -672,6 +686,14 @@ export function reconstructStreamResponse(
     start(controller) {
       for (const chunk of rawChunks) {
         controller.enqueue(chunk);
+      }
+      // If discrepancy was detected and unresolved, append status check warning chunk
+      if (!evalResult.isSatisfied && evalResult.reviewerReport) {
+        const warningNotice = `\n\n⚠️ [SPB Reviewer Status Check: Factual discrepancy detected. Claimed code modifications were not verified in repository code diff after ${repromptCount} verification cycle(s).]`;
+        const warningSse = `data: ${JSON.stringify({
+          choices: [{ delta: { content: warningNotice }, index: 0, finish_reason: null }],
+        })}\n\n`;
+        controller.enqueue(new TextEncoder().encode(warningSse));
       }
       controller.close();
     },
@@ -869,7 +891,25 @@ export async function processSpbOutboundZeroLoss(args: {
       } else {
         headers.set("X-OmniRoute-Reviewer-Status", "verified");
       }
-      return new Response(JSON.stringify(lastExtracted.jsonBody || {}), {
+      const jsonBody = lastExtracted.jsonBody
+        ? (JSON.parse(JSON.stringify(lastExtracted.jsonBody)) as Record<string, unknown>)
+        : {};
+      if (!fallbackEval.isSatisfied && fallbackEval.reviewerReport) {
+        const warningNotice = `\n\n⚠️ [SPB Reviewer Status Check: Factual discrepancy detected. Claimed code modifications were not verified in repository code diff after ${repromptCount} verification cycle(s).]`;
+        const choices = jsonBody.choices as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(choices) && choices[0]?.message) {
+          const msg = choices[0].message as Record<string, unknown>;
+          if (typeof msg.content === "string") {
+            msg.content += warningNotice;
+          }
+        } else if (Array.isArray(jsonBody.content) && jsonBody.content[0]) {
+          const c0 = jsonBody.content[0] as Record<string, unknown>;
+          if (typeof c0.text === "string") {
+            c0.text += warningNotice;
+          }
+        }
+      }
+      return new Response(JSON.stringify(jsonBody), {
         status: currentResponse.status,
         statusText: currentResponse.statusText,
         headers,
