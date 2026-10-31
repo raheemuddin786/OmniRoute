@@ -45,7 +45,10 @@ import {
   looksLikeQuotaExhausted,
   type FailureKind,
 } from "../../src/shared/utils/classify429";
-import { recordProviderSuccess as resetCooldownFailureCount } from "./providerCooldownTracker.ts";
+import {
+  recordProviderSuccess as resetCooldownFailureCount,
+  recordProviderConnectionFailure,
+} from "./providerCooldownTracker.ts";
 import {
   resolveProviderId,
   isLocalProvider as isLocalProviderId,
@@ -1276,6 +1279,15 @@ export function recordProviderFailure(
   if (!breaker.canExecute()) return;
 
   breaker._onFailure();
+
+  // Also record connection failure to provider-level window for circuit breaker aggregation
+  // This ensures provider-level breaker sees failures across all connections
+  if (connectionId) {
+    recordProviderConnectionFailure(provider, connectionId, undefined, {
+      isNetworkError: opts?.isNetworkError,
+      isRetryableError: opts?.isNetworkError || !opts?.isQueueTimeout, // Network errors and non-queue-timeout failures are retryable
+    });
+  }
 
   if (!breaker.canExecute()) {
     log?.warn?.(`[ProviderFailure] ${provider}: circuit breaker opened after repeated failures`);

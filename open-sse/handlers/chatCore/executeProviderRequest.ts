@@ -40,6 +40,8 @@ import {
   isRateLimitEnabled,
   withRateLimit,
   resolveRequestQueueMaxWaitMs,
+  resolveDynamicQueueBudgetMs,
+  getUpstreamRetryAfterHint,
 } from "../../services/rateLimitManager.ts";
 import { acquireMany as acquireConcurrencyGates } from "../../services/accountSemaphore.ts";
 import { rethrowAdmissionError, remainingQueueBudgetMs } from "./queueBudget.ts";
@@ -285,6 +287,17 @@ export async function executeProviderRequest(
             undefined,
             attemptConnectionId ?? undefined
           );
+          // Dynamic queue budget: honor upstream retry-after hints when available.
+          // Prevents 503 "queue budget exceeded" when upstream signals longer waits.
+          const upstreamRetryAfterMs = getUpstreamRetryAfterHint(provider, attemptConnectionId);
+          const dynamicMaxWaitMs = upstreamRetryAfterMs
+            ? resolveDynamicQueueBudgetMs(
+                provider,
+                attemptConnectionId ?? "",
+                upstreamRetryAfterMs,
+                maxWaitMs
+              )
+            : maxWaitMs;
           const gateStartedAt = Date.now();
           const releaseAccountSemaphore = await acquireConcurrencyGates(
             [
@@ -306,7 +319,7 @@ export async function executeProviderRequest(
               },
             ],
             {
-              timeoutMs: maxWaitMs,
+              timeoutMs: dynamicMaxWaitMs,
               maxQueueSize: resilienceSettings.requestQueue.maxQueueDepth,
               signal: streamController.signal,
             }
