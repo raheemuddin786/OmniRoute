@@ -2205,10 +2205,7 @@ async function handleChatImplementation(
     if (isSpbActive && !response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
       const tierConfig = getTierConfig();
       const resilientCandidates = (
-        tierConfig?.tierModels?.resilient || [
-          "resilient/spb-tier-2",
-          "antigravity-tier2-resilient-execution",
-        ]
+        tierConfig?.tierModels?.resilient || ["antigravity-tier2-resilient-execution"]
       ).filter((m: string) => m !== resolvedModelStr);
       for (const resModel of resilientCandidates) {
         log.info(
