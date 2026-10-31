@@ -50,8 +50,15 @@ export async function resolveModelAliasWithSeedFallback(
 ): Promise<string | null | undefined> {
   if (!model) return model;
 
-  // Combo routing & virtual auto models (including auto/spb) take precedence over individual model aliases (#10124 / #9020)
-  if (model === "auto" || model.startsWith("auto/") || model.startsWith("combo/")) {
+  // Combo routing & virtual auto models (including auto/spb, resilient, spb-, tier_) take precedence over individual model aliases (#10124 / #9020)
+  if (
+    model === "auto" ||
+    model.startsWith("auto/") ||
+    model.startsWith("combo/") ||
+    model.startsWith("resilient/") ||
+    model.startsWith("spb-") ||
+    model.startsWith("tier_")
+  ) {
     return model;
   }
   const existingCombo = await getComboByName(model).catch(() => null);
