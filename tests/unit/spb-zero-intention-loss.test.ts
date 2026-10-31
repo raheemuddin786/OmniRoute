@@ -941,7 +941,7 @@ test("Conclusion Reviewer: verifyCodeDiffAgainstConclusion passes when no un-mod
   assert.equal(review.report, undefined);
 });
 
-test("Conclusion Reviewer: reconstructStreamResponse appends Reviewer Status Check when discrepancy unresolved", async () => {
+test("Conclusion Reviewer: reconstructStreamResponse sets Reviewer Status header when discrepancy unresolved", async () => {
   const { reconstructStreamResponse } =
     await import("@omniroute/open-sse/services/spb/outboundEvaluator.ts");
   const rawChunks = [
@@ -969,9 +969,19 @@ test("Conclusion Reviewer: reconstructStreamResponse appends Reviewer Status Che
     if (done) break;
     if (value) totalText += decoder.decode(value);
   }
+  // Body preserves raw chunks cleanly without corrupting the agent conversation loop with recursive warning injections
   assert.ok(
-    totalText.includes("[SPB Reviewer Status Check: Factual discrepancy detected"),
-    "Stream body must contain Reviewer Status Check notice"
+    totalText.includes("Initial completion"),
+    "Stream body must contain stream chunks intact"
+  );
+  // The reviewer status marker must NOT appear in the body — it lives in the response header only.
+  // A body-injected marker would be parsed as assistant-generated content on the next turn,
+  // triggering a recursive reviewer loop (regression guard).
+  const { SPB_REVIEWER_DISCREPANCY_MARKER } =
+    await import("@omniroute/open-sse/services/spb/outboundEvaluator.ts");
+  assert.ok(
+    !totalText.includes(SPB_REVIEWER_DISCREPANCY_MARKER),
+    "Stream body must NOT contain the reviewer status marker — it belongs in headers only"
   );
 });
 
