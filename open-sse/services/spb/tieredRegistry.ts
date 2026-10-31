@@ -104,12 +104,13 @@ export function selectModelTier(
   console.log(
     `[SPB TieredRegistry] Evaluating taskPhase: ${taskPhase}, isInToolExecution: ${isInToolExecution}, guidanceContract present: ${!!guidanceContract}, isSupervisedCodeGen: ${isSupervisedCodeGen}`
   );
+  // Keep active tool execution turns in resilient tier to prevent oscillation
   if (
-    taskPhase === "INSPECTION_SYNTHESIS" ||
-    (!isInToolExecution &&
-      (taskPhase === "FAST_REFACTOR" ||
-        taskPhase === "DETERMINISTIC_ROUTING" ||
-        isSupervisedCodeGen))
+    !isInToolExecution &&
+    (taskPhase === "INSPECTION_SYNTHESIS" ||
+      taskPhase === "FAST_REFACTOR" ||
+      taskPhase === "DETERMINISTIC_ROUTING" ||
+      isSupervisedCodeGen)
   ) {
     console.log(
       `[SPB TieredRegistry] Routing taskPhase ${taskPhase} to tier_3_local (guidanceContract: ${!!guidanceContract})`
@@ -213,14 +214,16 @@ export function detectAndRecoverFromStagnation(
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
     // Escalate tier assignment:
-    // If Tier 2 has already performed extended repeated inspections (>= 5 turns), escalate to Tier 1 Apex
-    // so an architectural supervisor synthesizes a concrete plan and unblocks execution.
-    // Otherwise, escalate to Tier 2 Resilient for tool execution authority.
-    if (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 5) {
+    // If consecutiveReads >= 5, escalate to Tier 1 Apex regardless of checkpoint
+    // to break any persistent inspection loops. Otherwise, escalate to Tier 2 Resilient.
+    if (
+      (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 5) ||
+      consecutiveReads >= 5
+    ) {
       escalationTier = "tier_1_apex";
       newTaskPhase = "ARCHITECTURAL_PLANNING";
       recoveryDirective =
-        "ARCHITECTURAL RESOLUTION MANDATE: Tier 2 execution stagnated after multiple inspection cycles. " +
+        "ARCHITECTURAL RESOLUTION MANDATE: Stagnation detected after multiple inspection cycles. " +
         "Escalating to Apex Architecture to establish a rigorous, step-by-step implementation contract.";
     } else {
       escalationTier = "tier_2_resilient";

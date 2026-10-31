@@ -64,10 +64,11 @@ export function evaluateResponseIntent(
 ): ResponseEvaluationResult {
   // If the model produced tool calls, it is an active intermediate turn in an autonomous execution loop.
   // Never flag tool calls as omissions or reprompt them.
+  // However, do NOT return 100% satisfaction for intermediate turns - return TURN_IN_PROGRESS status
   if (hasToolCalls) {
     return {
-      isSatisfied: true,
-      satisfactionScore: 1.0,
+      isSatisfied: false, // Still in progress - do not mark as satisfied
+      satisfactionScore: 0.0, // No satisfaction yet for intermediate turns
       omissions: [],
       oddities: [],
       repromptCount: 0,
@@ -457,8 +458,15 @@ export function verifyCodeDiffAgainstConclusion(
       claimedFilesMissingInDiff: [],
     };
   } catch (err) {
-    console.warn("[SPB Reviewer] Git diff verification failed to execute:", err);
-    return { passed: true, actualModifiedFiles: [], claimedFilesMissingInDiff: [] };
+    console.error("[SPB Reviewer] Git diff verification failed to execute:", err);
+    // Fail-closed: when verification cannot execute, assume potential hallucination
+    return {
+      passed: false,
+      actualModifiedFiles: [],
+      claimedFilesMissingInDiff: [],
+      report:
+        "Git diff verification failed to execute - potential hallucination risk. Requires manual intervention.",
+    };
   }
 }
 

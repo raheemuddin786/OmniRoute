@@ -483,7 +483,7 @@ test("processSpbOutboundZeroLoss preserves autonomous tool calls without re-prom
   });
 
   assert.equal(dispatchCalled, false, "Should not re-prompt when model produces a tool call");
-  assert.equal(finalResponse.headers.get("X-OmniRoute-SPB-Satisfaction"), "1.00");
+  assert.equal(finalResponse.headers.get("X-OmniRoute-SPB-Satisfaction"), "0.00");
   assert.equal(finalResponse.headers.get("X-OmniRoute-SPB-Reprompt-Count"), "0");
   const json = await finalResponse.json();
   assert.ok(json.choices[0].message.tool_calls.length > 0);
