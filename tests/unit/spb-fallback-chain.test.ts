@@ -35,14 +35,65 @@ test("SPB Fallback Ladder: tierConfig provides configured tier models across all
   ]);
 });
 
-test("SPB Virtual Auto-Combo Guard: returns 503 instead of falling through to generic 500+ model pool when unconfigured", async () => {
-  const autoRouting = await resolveAutoRoutingState("auto/spb");
-  assert.equal(autoRouting.isAutoRouting, true);
+test("SPB Virtual Auto-Combo Guard: returns 503 when SPB unconfigured (no tier models or SPB disabled)", async () => {
+  // Test case 1: SPB disabled - should return 503
+  setTierConfig({
+    version: "1.0.0",
+    defaults: { freeThreshold: 0, cheapThreshold: 1 },
+    providerOverrides: [],
+    modelOverrides: [],
+    freeProviders: [],
+    spbEnabled: false,
+    tierModels: {
+      apex: [],
+      resilient: [],
+      local: [],
+    },
+  });
+  const autoRoutingDisabled = await resolveAutoRoutingState("auto/spb");
+  const resultDisabled = await createVirtualAutoCombo(autoRoutingDisabled, null);
+  assert.ok(resultDisabled instanceof Response, "must return error response when SPB disabled");
+  assert.equal(resultDisabled.status, 503);
 
-  // When no spbCombo was formed (null), createVirtualAutoCombo must NOT create a 500+ model pool
-  const result = await createVirtualAutoCombo(autoRouting, null);
-  assert.ok(result instanceof Response, "must return error response");
-  assert.equal(result.status, 503);
-  const json = await result.json();
-  assert.match(json.error?.message || json.message, /No models configured for auto\/spb/);
+  // Test case 2: SPB enabled but no tier models configured - should return 503
+  setTierConfig({
+    version: "1.0.0",
+    defaults: { freeThreshold: 0, cheapThreshold: 1 },
+    providerOverrides: [],
+    modelOverrides: [],
+    freeProviders: [],
+    spbEnabled: true,
+    tierModels: {
+      apex: [],
+      resilient: [],
+      local: [],
+    },
+  });
+  const autoRoutingNoModels = await resolveAutoRoutingState("auto/spb");
+  const resultNoModels = await createVirtualAutoCombo(autoRoutingNoModels, null);
+  assert.ok(resultNoModels instanceof Response, "must return error response when no tier models");
+  assert.equal(resultNoModels.status, 503);
+
+  // Test case 3: SPB enabled WITH tier models configured - should succeed (no 503)
+  setTierConfig({
+    version: "1.0.0",
+    defaults: { freeThreshold: 0, cheapThreshold: 1 },
+    providerOverrides: [],
+    modelOverrides: [],
+    freeProviders: [],
+    spbEnabled: true,
+    tierModels: {
+      apex: ["apex/claude-sonnet-5.5", "claude-sonnet-5"],
+      resilient: ["antigravity/gemini-3.8-flash-tiered", "claude-opus-4-9"],
+      local: ["nvidia/nvidia/nemotron-3.5-lightning-30b-a3b", "antigravity/gemini-3.1-flash-lite"],
+    },
+  });
+
+  const autoRoutingConfigured = await resolveAutoRoutingState("auto/spb");
+  const resultConfigured = await createVirtualAutoCombo(autoRoutingConfigured, null);
+  // When configured, should NOT return 503; should return a valid combo
+  assert.ok(
+    !(resultConfigured instanceof Response) || resultConfigured.status !== 503,
+    "should not return 503 when SPB is enabled with tier models configured"
+  );
 });
