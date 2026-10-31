@@ -887,9 +887,14 @@ async function handleChatImplementation(
   // SPB-IR: Intelligent Routing, Intent Classification & Zero-Loss State Checkpointing
   const strategyHeader =
     request.headers.get("x-omniroute-strategy") || request.headers.get("X-OmniRoute-Strategy");
+  const isVirtualTierModel =
+    modelStr.startsWith("resilient/") ||
+    modelStr.startsWith("spb-") ||
+    modelStr.startsWith("tier_");
   const isSpbTarget =
     modelStr === "auto/spb" ||
     modelStr === "auto/smart-proxy-bridge" ||
+    isVirtualTierModel ||
     ((strategyHeader === "smart-proxy-bridge" || strategyHeader === "spb") &&
       (!modelStr ||
         modelStr === "auto" ||
@@ -1286,6 +1291,7 @@ async function handleChatImplementation(
   const isSpbModel =
     resolvedModelStr === "auto/spb" ||
     resolvedModelStr === "auto/smart-proxy-bridge" ||
+    isVirtualTierModel ||
     (isSpbActive && (resolvedModelStr === "auto" || resolvedModelStr === "default"));
 
   const isIncompatibleModality =
@@ -1355,11 +1361,27 @@ async function handleChatImplementation(
       );
     }
 
-    // Filter out non-chat modalities
+    // Filter out non-chat modalities AND any self-referential virtual tier identifiers
+    // (e.g. 'resilient/spb-tier-2', 'spb-tier-2', 'tier_2_resilient') so they never become dispatch targets
+    const isVirtualModelName = (name: string) => {
+      const lower = name.toLowerCase();
+      return (
+        lower.startsWith("resilient/") ||
+        lower.startsWith("spb-") ||
+        lower.startsWith("tier_") ||
+        lower.includes("spb-tier") ||
+        lower === "auto" ||
+        lower === "default" ||
+        lower === "auto/spb" ||
+        lower === "auto/smart-proxy-bridge"
+      );
+    };
+
     const uniqueTierModels = Array.from(new Set(candidateModels)).filter((m) => {
       const modelName = typeof m === "string" ? m : (m as any)?.model || "";
       const lower = modelName.toLowerCase();
       return (
+        !isVirtualModelName(modelName) &&
         !lower.includes("diffusion") &&
         !lower.includes("rerank") &&
         !lower.includes("embedding") &&
@@ -1447,6 +1469,31 @@ async function handleChatImplementation(
                 : DEFAULT_COMBO_TARGET_TIMEOUT_MS,
         },
       };
+    } else if (isVirtualTierModel) {
+      // Safety net: when all configured tier models were virtual identifiers or empty,
+      // fallback to registered resilient combos or healthy sibling tier models
+      // rather than letting the virtual name leak to literal provider resolution.
+      const fallbackCombos = [
+        "antigravity-tier2-resilient-execution",
+        "nvidia-tier2-resilient-execution",
+        "agentic-coding-combo",
+        "agentic-code-fast",
+      ];
+      let resolvedFallback: string | null = null;
+      for (const fc of fallbackCombos) {
+        if (await getComboByName(fc).catch(() => null)) {
+          resolvedFallback = fc;
+          break;
+        }
+      }
+      if (resolvedFallback) {
+        log.warn(
+          "SPB",
+          `Virtual tier '${resolvedModelStr}' had no concrete models; safely routing to combo '${resolvedFallback}'`
+        );
+        resolvedModelStr = resolvedFallback;
+        body = { ...body, model: resolvedModelStr };
+      }
     } else if (isIncompatibleModality) {
       const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
       log.warn(

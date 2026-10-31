@@ -502,11 +502,36 @@ export async function processSmartProxyRouting(
 
     // Inject auto-recovery directive into messages if stagnation was detected
     if (autoRecoveryDirective) {
-      // If enhancement produced an enhanced prompt, prepend the directive
+      // 1. If enhancement produced an enhanced prompt, prepend the directive
       if (enhancement && enhancement.enhancedPrompt) {
         enhancement.enhancedPrompt = `${autoRecoveryDirective}\n\n${enhancement.enhancedPrompt}`;
-      } else if (lastUserIndex >= 0 && messages[lastUserIndex]) {
-        // Inject directly into the last user message's content
+      }
+
+      // 2. Ensure enhancedMessages receives the directive if it was already constructed
+      if (enhancedMessages && lastUserIndex >= 0 && enhancedMessages[lastUserIndex]) {
+        const targetMsg = enhancedMessages[lastUserIndex];
+        if (typeof targetMsg.content === "string") {
+          targetMsg.content = `${autoRecoveryDirective}\n\n${targetMsg.content}`;
+        } else if (Array.isArray(targetMsg.content)) {
+          let replacedText = false;
+          targetMsg.content = targetMsg.content.map((part) => {
+            if (
+              !replacedText &&
+              part &&
+              typeof part === "object" &&
+              (part as Record<string, unknown>).type === "text" &&
+              typeof (part as Record<string, unknown>).text === "string"
+            ) {
+              replacedText = true;
+              return { ...part, text: `${autoRecoveryDirective}\n\n${part.text}` };
+            }
+            return part;
+          });
+        }
+      }
+
+      // 3. Inject directly into the base messages array
+      if (lastUserIndex >= 0 && messages[lastUserIndex]) {
         const targetMsg = messages[lastUserIndex];
         if (typeof targetMsg.content === "string") {
           messages[lastUserIndex] = {

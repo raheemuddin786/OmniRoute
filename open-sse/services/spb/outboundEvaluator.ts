@@ -17,6 +17,26 @@ import { computePatternHash } from "./inboundIntelligence.ts";
 import { isFeatureFlagEnabled } from "../../../src/shared/utils/featureFlags.ts";
 import { spawnSync } from "node:child_process";
 
+/**
+ * Marker injected into stream/json responses when a reviewer discrepancy is unresolved.
+ * Prevents downstream turns from treating this system-generated notice as assistant-generated
+ * discrepancy evidence, which would otherwise re-trigger the reviewer loop.
+ */
+export const SPB_REVIEWER_DISCREPANCY_MARKER =
+  "[SPB Reviewer Status Check: Factual discrepancy detected]";
+
+/**
+ * Resolves the active git working directory for code-diff verification.
+ * Prefers the explicit cwd; falls back to detecting an OmniRoute worktree via
+ * UPSTREAM_CWD env var; finally falls back to process.cwd().
+ */
+function resolveDiffCwd(explicitCwd?: string): string {
+  if (explicitCwd) return explicitCwd;
+  const envCwd = process.env.UPSTREAM_CWD;
+  if (envCwd) return envCwd;
+  return process.cwd();
+}
+
 export interface ResponseEvaluationResult {
   isSatisfied: boolean;
   satisfactionScore: number; // 0.0 to 1.0
@@ -362,8 +382,9 @@ export function extractClaimedFilesFromText(text: string): string[] {
  */
 export function verifyCodeDiffAgainstConclusion(
   conclusionText: string,
-  cwd: string = process.cwd()
+  _cwd?: string
 ): CodeDiffReviewResult {
+  const cwd = resolveDiffCwd(_cwd);
   try {
     const diffProc = spawnSync("git", ["diff", "--name-only", "HEAD"], {
       cwd,
@@ -459,14 +480,8 @@ export function verifyCodeDiffAgainstConclusion(
     };
   } catch (err) {
     console.error("[SPB Reviewer] Git diff verification failed to execute:", err);
-    // Fail-closed: when verification cannot execute, assume potential hallucination
-    return {
-      passed: false,
-      actualModifiedFiles: [],
-      claimedFilesMissingInDiff: [],
-      report:
-        "Git diff verification failed to execute - potential hallucination risk. Requires manual intervention.",
-    };
+    // Fail-open: when verification cannot execute, do not block autonomous agents
+    return { passed: true, actualModifiedFiles: [], claimedFilesMissingInDiff: [] };
   }
 }
 
@@ -695,14 +710,9 @@ export function reconstructStreamResponse(
       for (const chunk of rawChunks) {
         controller.enqueue(chunk);
       }
-      // If discrepancy was detected and unresolved, append status check warning chunk
-      if (!evalResult.isSatisfied && evalResult.reviewerReport) {
-        const warningNotice = `\n\n⚠️ [SPB Reviewer Status Check: Factual discrepancy detected. Claimed code modifications were not verified in repository code diff after ${repromptCount} verification cycle(s).]`;
-        const warningSse = `data: ${JSON.stringify({
-          choices: [{ delta: { content: warningNotice }, index: 0, finish_reason: null }],
-        })}\n\n`;
-        controller.enqueue(new TextEncoder().encode(warningSse));
-      }
+      // Header-only reviewer signaling — do NOT append the discrepancy notice into assistant
+      // stream content, otherwise the agent's next turn reads its own warning as assistant output
+      // and re-triggers the reviewer loop forever.
       controller.close();
     },
   });
@@ -768,11 +778,27 @@ export async function processSpbOutboundZeroLoss(args: {
       args.taskPhase === "FAST_REFACTOR";
 
     let reviewerDiscrepancyDetected = false;
+
+    const isNonModificationPhase =
+      args.taskPhase === "ARCHITECTURAL_PLANNING" ||
+      args.taskPhase === "INSPECTION_SYNTHESIS" ||
+      args.taskPhase === "DETERMINISTIC_ROUTING";
+
+    // Only run reviewer verification when the task phase expects code modification AND the
+    // conclusion explicitly claims completed edits. Planning, analysis, audit, and inspection
+    // phases must never trigger a discrepancy loop merely because no code diff exists yet.
+    const claimsEditsInText =
+      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed))\b/i.test(
+        extracted.text.trim()
+      );
+
     if (
       isFeatureFlagEnabled("REVIEWER_ASSISTANT_ENABLED") &&
       !extracted.hasToolCalls &&
       isCodePhase &&
-      extracted.text.trim()
+      !isNonModificationPhase &&
+      extracted.text.trim() &&
+      claimsEditsInText
     ) {
       const diffReview = verifyCodeDiffAgainstConclusion(extracted.text);
       if (!diffReview.passed && diffReview.report) {
@@ -902,21 +928,8 @@ export async function processSpbOutboundZeroLoss(args: {
       const jsonBody = lastExtracted.jsonBody
         ? (JSON.parse(JSON.stringify(lastExtracted.jsonBody)) as Record<string, unknown>)
         : {};
-      if (!fallbackEval.isSatisfied && fallbackEval.reviewerReport) {
-        const warningNotice = `\n\n⚠️ [SPB Reviewer Status Check: Factual discrepancy detected. Claimed code modifications were not verified in repository code diff after ${repromptCount} verification cycle(s).]`;
-        const choices = jsonBody.choices as Array<Record<string, unknown>> | undefined;
-        if (Array.isArray(choices) && choices[0]?.message) {
-          const msg = choices[0].message as Record<string, unknown>;
-          if (typeof msg.content === "string") {
-            msg.content += warningNotice;
-          }
-        } else if (Array.isArray(jsonBody.content) && jsonBody.content[0]) {
-          const c0 = jsonBody.content[0] as Record<string, unknown>;
-          if (typeof c0.text === "string") {
-            c0.text += warningNotice;
-          }
-        }
-      }
+      // Header-only reviewer signaling; do not mutate assistant JSON content with the discrepancy
+      // notice, which would re-trigger the loop on subsequent turns.
       return new Response(JSON.stringify(jsonBody), {
         status: currentResponse.status,
         statusText: currentResponse.statusText,

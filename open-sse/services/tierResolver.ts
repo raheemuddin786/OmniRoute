@@ -347,6 +347,49 @@ export function getTierStats(): Record<ProviderTier, number> {
   return stats;
 }
 
+/**
+ * Resolve a virtual tier identifier (e.g. 'resilient/spb-tier-2', 'spb-tier-2', 'tier_2_resilient')
+ * to concrete candidate models configured for that tier, avoiding self-referential loops.
+ * Complies with Hard Rule #24 (Canonical Model Resolution).
+ */
+export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
+  ensureConfigLoaded();
+  const lower = virtualIdentifier.toLowerCase().trim();
+
+  // Map virtual identifier to tier key
+  let tierKey: "apex" | "resilient" | "local" | null = null;
+  if (lower.includes("apex") || lower.includes("tier-1") || lower.includes("tier_1")) {
+    tierKey = "apex";
+  } else if (lower.includes("resilient") || lower.includes("tier-2") || lower.includes("tier_2")) {
+    tierKey = "resilient";
+  } else if (
+    lower.includes("local") ||
+    lower.includes("tier-3") ||
+    lower.includes("tier_3") ||
+    lower.includes("edge")
+  ) {
+    tierKey = "local";
+  }
+
+  if (!tierKey) return [];
+
+  const tierModels = currentConfig.tierModels?.[tierKey] || [];
+
+  // Filter out any self-referential virtual identifiers to prevent loops
+  return tierModels.filter((model) => {
+    const m = model.toLowerCase();
+    return (
+      !m.startsWith("apex/") &&
+      !m.startsWith("resilient/") &&
+      !m.startsWith("local/") &&
+      !m.startsWith("spb-") &&
+      !m.startsWith("tier_") &&
+      !m.includes("spb-tier") &&
+      m !== lower
+    );
+  });
+}
+
 export let tierAsyncFallbackTotal = 0; // exported for testability
 
 export async function classifyTierAsync(provider: string, model: string): Promise<TierAssignment> {

@@ -197,28 +197,30 @@ export function detectAndRecoverFromStagnation(
   newTaskPhase?: TaskPhase;
   escalationTier?: "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 } {
-  const STAGNATION_THRESHOLD = 3;
+  const _STAGNATION_THRESHOLD = 3;
   let isStagnant = false;
   let recoveryDirective: string | undefined;
   let newTaskPhase: TaskPhase | undefined;
   let escalationTier: "tier_1_apex" | "tier_2_resilient" | "tier_3_local" | undefined;
 
   // Detect stagnation based on consecutive read/inspection turns
-  if (consecutiveReads >= STAGNATION_THRESHOLD && taskPhase === "INSPECTION_SYNTHESIS") {
+  // Lower threshold to 2 turns to immediately catch read loops
+  if (consecutiveReads >= 2 && taskPhase === "INSPECTION_SYNTHESIS") {
     isStagnant = true;
 
-    // Generate recovery directive to break the loop
+    // Generate strict recovery directive to break the loop
     recoveryDirective =
-      "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections.";
+      "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections. " +
+      "Proceed immediately to concrete execution using editing tools (Write/Edit) or tests.";
     const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
     // Escalate tier assignment:
-    // If consecutiveReads >= 5, escalate to Tier 1 Apex regardless of checkpoint
+    // If consecutiveReads >= 4, escalate to Tier 1 Apex regardless of checkpoint
     // to break any persistent inspection loops. Otherwise, escalate to Tier 2 Resilient.
     if (
-      (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 5) ||
-      consecutiveReads >= 5
+      (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 4) ||
+      consecutiveReads >= 4
     ) {
       escalationTier = "tier_1_apex";
       newTaskPhase = "ARCHITECTURAL_PLANNING";
@@ -264,7 +266,8 @@ export function escalateFromStagnation(
 ): { newTaskPhase: TaskPhase; escalationTier: "tier_2_resilient"; recoveryDirective: string } {
   // Determine target phase based on original user intent signals
   const recoveryDirective =
-    "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections.";
+    "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections. " +
+    "Proceed immediately to concrete execution using editing tools (Write/Edit) or tests.";
 
   // escalate to CODE_GENERATION or TESTING_AND_VERIFICATION based on content
   const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
