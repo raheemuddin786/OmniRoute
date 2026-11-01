@@ -19,6 +19,7 @@ import {
   isModelUnsupported401,
   isModelNotFound404,
 } from "../../services/accountFallback/perModelFailureScope.ts";
+import { isModelPermanentlyUnavailable } from "../../services/accountFallback.ts";
 import { isRequestScoped400 } from "../../services/accountFallback/requestScoped400.ts";
 import type { ChatCoreErrorResult, ProviderLegUsage } from "@/lib/skills/toolLoopTypes.ts";
 import type { getProviderCredentials } from "@/sse/services/auth.ts";
@@ -858,7 +859,13 @@ export async function processErrorForPipeline(
   }
 
   if (status === 404 && isModelNotFound404(status, errorText)) {
-    lockExactModel(provider, connectionId, model, "model_not_found", COOLDOWN_MS.modelCapacity);
+    // Check if this is a permanently unavailable model (deprecated/retired) — if so,
+    // apply a 24h cooldown instead of the standard modelCapacity cooldown to prevent
+    // repeated futile retries (see accountFallback.ts isModelPermanentlyUnavailable).
+    const cooldownMs = isModelPermanentlyUnavailable(errorText || "")
+      ? 24 * 60 * 60 * 1000
+      : COOLDOWN_MS.modelCapacity;
+    lockExactModel(provider, connectionId, model, "model_not_found", cooldownMs);
   }
 
   if (status === 400 && isRequestScoped400(status, errorText)) {

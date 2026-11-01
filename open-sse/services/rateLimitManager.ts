@@ -269,7 +269,7 @@ export function resolveDynamicQueueBudgetMs(
   _connectionId: string,
   retryAfterMs: number | null,
   baseBudgetMs: number,
-  maxBudgetMs: number = 600000 // 10 min absolute ceiling
+  maxBudgetMs: number = 3_600_000 // 60 min absolute ceiling (handles long upstream retry-after like Cohere ~51 min)
 ): number {
   if (!retryAfterMs || retryAfterMs <= 0) return baseBudgetMs;
 

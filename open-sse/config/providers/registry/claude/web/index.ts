@@ -8,6 +8,9 @@ export const claude_webProvider: RegistryEntry = {
   baseUrl: "https://claude.ai/api/organizations",
   authType: "apikey",
   authHeader: "cookie",
+  // Claude Web has higher latency; give it a 300s provider-level timeout
+  // (global FETCH_TIMEOUT_MS is 600s, but combo per-target default is 120s)
+  timeoutMs: 300_000,
   models: [
     {
       id: "claude-fable-5-1",
