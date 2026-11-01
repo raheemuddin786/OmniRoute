@@ -143,7 +143,7 @@ export async function GET(request: NextRequest) {
     for (const conn of activeConnections) {
       // Primary: use the provider field (UUID or string ID)
       let p = conn.provider as string | undefined;
-      // Fallback: use the prefix from providerSpecificData (e.g. "lc-aieng")
+      // Fallback: use the prefix from providerSpecificData
       if (!p && conn.providerSpecificData) {
         const psd = conn.providerSpecificData as Record<string, unknown>;
         p = (psd.prefix as string | undefined) || undefined;

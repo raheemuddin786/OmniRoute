@@ -393,8 +393,38 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
     return concreteModels;
   }
 
-  // No hardcoded fallbacks - return empty array to enforce configuration-driven model selection
-  // All models must be explicitly configured in tier_config (database) or provider registry
+  // Dynamic fallback: discover active models from database provider connections and provider registry
+  try {
+    const getDbInstance = lazyRequire("../../src/lib/db/core").getDbInstance;
+    const db = getDbInstance();
+    const activeRows = db
+      .prepare("SELECT DISTINCT provider FROM provider_connections WHERE is_active = 1")
+      .all() as Array<{ provider: string }>;
+    const activeProviders = activeRows.map((r) => r.provider.toLowerCase());
+
+    const { PROVIDER_MODELS } = lazyRequire("../config/providerModels.ts");
+    const discovered: string[] = [];
+
+    for (const [providerId, models] of Object.entries(PROVIDER_MODELS)) {
+      if (activeProviders.length === 0 || activeProviders.includes(providerId.toLowerCase())) {
+        if (Array.isArray(models)) {
+          for (const m of models) {
+            const modelId = typeof m === "string" ? m : (m as { id?: string })?.id;
+            if (modelId) {
+              discovered.push(modelId);
+            }
+          }
+        }
+      }
+    }
+
+    if (discovered.length > 0) {
+      return discovered.slice(0, 10);
+    }
+  } catch {
+    // ignore dynamic discovery errors
+  }
+
   return [];
 }
 

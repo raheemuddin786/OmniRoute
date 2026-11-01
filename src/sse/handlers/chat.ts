@@ -1423,6 +1423,13 @@ async function handleChatImplementation(
       );
     });
 
+    if (uniqueTierModels.length === 0) {
+      const dynamicModels = resolveVirtualTierModels(activeTier);
+      if (dynamicModels.length > 0) {
+        uniqueTierModels.push(...dynamicModels);
+      }
+    }
+
     // Check if the targeted tier lacks configured models and warn operator
     const tierConfiguredCount =
       activeTier === "tier_1_apex"
