@@ -489,12 +489,14 @@ async function applySpbOutboundZeroLoss(
   try {
     const { processSpbOutboundZeroLoss } =
       await import("@omniroute/open-sse/services/spb/outboundEvaluator");
+    const { updateCheckpointSatisfaction } = await import("@/lib/db/spbState");
     const lastUserPrompt = spbDecision.enhancement?.originalPrompt || "";
     const preservedIntentions = spbDecision.enhancement?.preservedIntentions || [];
     const tier = spbDecision.tierAssignment?.tier || "tier_2_resilient";
     const taskPhase = spbDecision.intent?.taskPhase || "DEFAULT";
+    const sessionId = runtimeOpts.sessionId || "default_session";
 
-    return await processSpbOutboundZeroLoss({
+    const evaluatedResponse = await processSpbOutboundZeroLoss({
       initialResponse: response,
       dispatchModel: (newBody: any) =>
         handleSingleModelChat(
@@ -514,9 +516,21 @@ async function applySpbOutboundZeroLoss(
       preservedIntentions,
       tier,
       taskPhase,
-      sessionId: runtimeOpts.sessionId || "default_session",
+      sessionId,
       maxReprompts: 2,
     });
+
+    // Update checkpoint with satisfaction score for cross-tier restoration
+    // We need to extract the satisfaction score from the response headers
+    const satisfactionHeader = evaluatedResponse.headers.get("X-OmniRoute-SPB-Satisfaction");
+    if (satisfactionHeader) {
+      const satisfactionScore = parseFloat(satisfactionHeader);
+      if (!isNaN(satisfactionScore)) {
+        updateCheckpointSatisfaction(sessionId, satisfactionScore);
+      }
+    }
+
+    return evaluatedResponse;
   } catch (spbEvalErr) {
     log.warn("SPB", `SPB outbound zero-loss evaluation warning: ${spbEvalErr}`);
     return response;
@@ -1490,37 +1504,17 @@ async function handleChatImplementation(
       };
     } else if (isVirtualTierModel || isSpbModel) {
       // Safety net: when all configured tier models were virtual identifiers or empty,
-      // fallback to registered resilient combos or healthy sibling tier models
-      // rather than letting the virtual name leak to literal provider resolution.
-      const fallbackCombos = [
-        "rashizun/free-agentic-accuracy",
-        "agentic-code-fast",
-        "agentic-coding-combo",
-        "antigravity-tier2-resilient-execution",
-        "nvidia-tier2-resilient-execution",
-      ];
-      let resolvedFallback: string | null = null;
-      for (const fc of fallbackCombos) {
-        if (await getComboByName(fc).catch(() => null)) {
-          resolvedFallback = fc;
-          break;
-        }
-      }
-      if (resolvedFallback) {
-        log.warn(
-          "SPB",
-          `Virtual tier or SPB model '${resolvedModelStr}' had no concrete models; safely routing to combo '${resolvedFallback}'`
-        );
-        resolvedModelStr = resolvedFallback;
-        body = { ...body, model: resolvedModelStr };
-        spbCombo = {
-          id: `spb-fallback-${activeTier}`,
-          name: `SPB Fallback ${resolvedFallback}`,
-          type: "spb",
-          strategy: "priority",
-          models: [{ model: resolvedFallback }],
-        };
-      }
+      // we do NOT fall back to hardcoded combos. All models must be explicitly configured
+      // in tier_config or provider registry. Fail fast with clear error.
+      log.error(
+        "SPB",
+        `Virtual tier or SPB model '${resolvedModelStr}' had no concrete models configured. ` +
+          `Configure models in tier_config (database) or provider registry. No hardcoded fallback applied.`
+      );
+      return errorResponse(
+        503,
+        `SPB tier '${activeTier}' has no configured models. Please configure models in tier_config or provider registry.`
+      );
     } else if (isIncompatibleModality) {
       const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
       log.warn(

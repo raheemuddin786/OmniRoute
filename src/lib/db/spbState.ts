@@ -362,6 +362,52 @@ export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
   }
 }
 
+/**
+ * Update checkpoint with satisfaction score from outbound evaluation.
+ * Called after processSpbOutboundZeroLoss completes to enable cross-tier checkpoint restoration.
+ */
+export function updateCheckpointSatisfaction(
+  sessionId: string,
+  satisfactionScore: number
+): boolean {
+  try {
+    initSpbStateTable();
+    const db = getDbInstance();
+
+    // Read existing checkpoint
+    const row = db
+      .prepare(`SELECT state_payload FROM spb_state_checkpoints WHERE session_id = ?`)
+      .get(sessionId) as { state_payload: string } | undefined;
+
+    if (!row) return false;
+
+    let statePayload: Record<string, unknown>;
+    try {
+      statePayload = JSON.parse(row.state_payload);
+    } catch {
+      statePayload = {};
+    }
+
+    statePayload.satisfactionScore = satisfactionScore;
+
+    db.prepare(`UPDATE spb_state_checkpoints SET state_payload = ? WHERE session_id = ?`).run(
+      JSON.stringify(statePayload),
+      sessionId
+    );
+
+    // Update in-memory cache
+    const cached = checkpointMemoryCache.get(sessionId);
+    if (cached) {
+      cached.statePayload = JSON.stringify(statePayload);
+    }
+
+    return true;
+  } catch (err) {
+    console.error("[SPB State] Failed to update checkpoint satisfaction:", err);
+    return false;
+  }
+}
+
 export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
   // 1. Check in-memory cache first for instant retrieval
   const cached = checkpointMemoryCache.get(sessionId);

@@ -287,9 +287,25 @@ export async function processSmartProxyRouting(
     );
 
     if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
-      // Model continuity: only preserve model continuity when the active turn is within the same tier.
-      // Never force execution, code generation, testing, or refactoring into Tier 1.
-      if (existingCheckpoint.modelTier === tierAssignment.tier) {
+      // Model continuity: preserve model continuity when the active turn is within the same tier.
+      // ALSO allow cross-tier restoration when the prior checkpoint achieved high satisfaction
+      // (>= 0.9), indicating the response was complete and correct. This prevents rework
+      // when stagnation recovery escalates to a higher tier after a successful lower-tier result.
+      const priorSatisfaction = existingCheckpoint.statePayload
+        ? (() => {
+            try {
+              const parsed = JSON.parse(existingCheckpoint.statePayload);
+              return typeof parsed.satisfactionScore === "number" ? parsed.satisfactionScore : null;
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+
+      const sameTier = existingCheckpoint.modelTier === tierAssignment.tier;
+      const highSatisfactionCrossTier = priorSatisfaction !== null && priorSatisfaction >= 0.9;
+
+      if (sameTier || highSatisfactionCrossTier) {
         checkpointRestored = true;
         if (existingCheckpoint.statePayload) {
           try {
@@ -303,6 +319,11 @@ export async function processSmartProxyRouting(
           } catch {
             // Ignore corrupted payload JSON
           }
+        }
+        if (highSatisfactionCrossTier && !sameTier) {
+          console.log(
+            `[SPB Bridge] Session ${sessionId} | Cross-tier checkpoint restored (prior satisfaction: ${priorSatisfaction}, prior tier: ${existingCheckpoint.modelTier}, current tier: ${tierAssignment.tier})`
+          );
         }
       }
     }
@@ -386,6 +407,7 @@ export async function processSmartProxyRouting(
 
     // 6. Save new state checkpoint asynchronously / safely
     // Include guidanceContract and stagnation tracking in checkpoint for session restore and verification loop
+    // Satisfaction score will be updated later by applySpbOutboundZeroLoss via updateCheckpointSatisfaction
     try {
       saveCheckpoint({
         sessionId,
