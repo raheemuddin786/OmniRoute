@@ -1,5 +1,5 @@
 import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
-import { getTierConfig } from "@omniroute/open-sse/services/tierResolver";
+import { getTierConfig, resolveVirtualTierModels } from "@omniroute/open-sse/services/tierResolver";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -1366,7 +1366,9 @@ async function handleChatImplementation(
     const isVirtualModelName = (name: string) => {
       const lower = name.toLowerCase();
       return (
+        lower.startsWith("apex/") ||
         lower.startsWith("resilient/") ||
+        lower.startsWith("local/") ||
         lower.startsWith("spb-") ||
         lower.startsWith("tier_") ||
         lower.includes("spb-tier") ||
@@ -1377,7 +1379,24 @@ async function handleChatImplementation(
       );
     };
 
-    const uniqueTierModels = Array.from(new Set(candidateModels)).filter((m) => {
+    // Expand virtual tier identifiers to concrete candidate models
+    const rawCandidates: string[] = [];
+    for (const m of candidateModels) {
+      const modelName = typeof m === "string" ? m : (m as any)?.model || "";
+      if (isVirtualModelName(modelName)) {
+        const resolved = resolveVirtualTierModels(modelName);
+        if (resolved.length > 0) {
+          rawCandidates.push(...resolved);
+        }
+      } else {
+        rawCandidates.push(modelName);
+      }
+    }
+    if (rawCandidates.length === 0) {
+      rawCandidates.push(...resolveVirtualTierModels(activeTier));
+    }
+
+    const uniqueTierModels = Array.from(new Set(rawCandidates)).filter((m) => {
       const modelName = typeof m === "string" ? m : (m as any)?.model || "";
       const lower = modelName.toLowerCase();
       return (
@@ -1469,15 +1488,16 @@ async function handleChatImplementation(
                 : DEFAULT_COMBO_TARGET_TIMEOUT_MS,
         },
       };
-    } else if (isVirtualTierModel) {
+    } else if (isVirtualTierModel || isSpbModel) {
       // Safety net: when all configured tier models were virtual identifiers or empty,
       // fallback to registered resilient combos or healthy sibling tier models
       // rather than letting the virtual name leak to literal provider resolution.
       const fallbackCombos = [
+        "rashizun/free-agentic-accuracy",
+        "agentic-code-fast",
+        "agentic-coding-combo",
         "antigravity-tier2-resilient-execution",
         "nvidia-tier2-resilient-execution",
-        "agentic-coding-combo",
-        "agentic-code-fast",
       ];
       let resolvedFallback: string | null = null;
       for (const fc of fallbackCombos) {
@@ -1489,10 +1509,17 @@ async function handleChatImplementation(
       if (resolvedFallback) {
         log.warn(
           "SPB",
-          `Virtual tier '${resolvedModelStr}' had no concrete models; safely routing to combo '${resolvedFallback}'`
+          `Virtual tier or SPB model '${resolvedModelStr}' had no concrete models; safely routing to combo '${resolvedFallback}'`
         );
         resolvedModelStr = resolvedFallback;
         body = { ...body, model: resolvedModelStr };
+        spbCombo = {
+          id: `spb-fallback-${activeTier}`,
+          name: `SPB Fallback ${resolvedFallback}`,
+          type: "spb",
+          strategy: "priority",
+          models: [{ model: resolvedFallback }],
+        };
       }
     } else if (isIncompatibleModality) {
       const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;

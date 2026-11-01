@@ -376,7 +376,7 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
   const tierModels = currentConfig.tierModels?.[tierKey] || [];
 
   // Filter out any self-referential virtual identifiers to prevent loops
-  return tierModels.filter((model) => {
+  const concreteModels = tierModels.filter((model) => {
     const m = model.toLowerCase();
     return (
       !m.startsWith("apex/") &&
@@ -388,6 +388,36 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
       m !== lower
     );
   });
+
+  if (concreteModels.length > 0) {
+    return concreteModels;
+  }
+
+  // Fallback defaults when tier configuration only contains virtual placeholders
+  // or no concrete models are configured:
+  if (tierKey === "apex") {
+    return [
+      "rc/claude-opus-5-1-thinking",
+      "claude-opus-5",
+      "antigravity/gemini-3.1-pro-low",
+      "openrouter/anthropic/claude-3.5-sonnet:beta",
+    ];
+  } else if (tierKey === "resilient") {
+    return [
+      "rashizun/free-agentic-accuracy",
+      "agentic-code-fast",
+      "agentic-coding-combo",
+      "antigravity/gemini-3.8-flash-tiered",
+      "antigravity/gemini-3.6-flash-low",
+      "nvidia/deepseek-ai/deepseek-v4-flash",
+    ];
+  } else {
+    return [
+      "antigravity/gemini-3.5-flash-extra-low",
+      "kilocode/stepfun/step-3.7-flash:free",
+      "nvidia/nvidia/nemotron-3-super-120b-a12b",
+    ];
+  }
 }
 
 export let tierAsyncFallbackTotal = 0; // exported for testability

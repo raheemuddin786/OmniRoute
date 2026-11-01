@@ -185,8 +185,9 @@ function getRegistryModel(providerIdOrAlias: string | null, modelId: string | nu
   const providerAlias = PROVIDER_ID_TO_ALIAS[providerIdOrAlias] || providerIdOrAlias;
   const models = PROVIDER_MODELS[providerAlias];
   if (!Array.isArray(models)) return null;
-  const normalizedModelId =
-    providerAlias === "cnl" ? modelId.replace(/-(?:xhigh|high|medium|low)$/i, "") : modelId;
+  const direct = models.find((model) => model?.id === modelId);
+  if (direct) return direct;
+  const normalizedModelId = modelId.replace(/-(?:xhigh|high|medium|low|none)$/i, "");
   return models.find((model) => model?.id === normalizedModelId) || null;
 }
 
@@ -911,8 +912,8 @@ export function getResolvedModelCapabilities(
   const supportsTools =
     synced?.tool_call ??
     (typeof registryModel?.toolCalling === "boolean" ? registryModel.toolCalling : null) ??
-    (typeof spec?.supportsTools === "boolean" ? spec.supportsTools : null) ??
-    (providerDeniesTools ? false : null);
+    (providerDeniesTools ? false : null) ??
+    (typeof spec?.supportsTools === "boolean" ? spec.supportsTools : null);
 
   const reasoningEffortsOverride = usePersistedOverrides
     ? getReasoningEffortsCapabilityOverride(resolved, snapshot)
