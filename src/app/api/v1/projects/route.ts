@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { listProjects, insertProject, getProjectByBasePath } from "@/lib/db/projectRegistry";
-import { scanProjectDirectory, autoDiscoverWorkspaces } from "@/lib/projectScanner";
+import {
+  listProjects,
+  insertProject,
+  getProjectByBasePath,
+  deleteProject,
+} from "@/lib/db/projectRegistry";
+import {
+  scanProjectDirectory,
+  autoDiscoverWorkspaces,
+  isValidWorkspaceRoot,
+} from "@/lib/projectScanner";
 import { getDbInstance } from "@/lib/db/core";
 import { randomUUID } from "crypto";
 
@@ -9,6 +18,18 @@ import { randomUUID } from "crypto";
 function ensureWorkspacesDerived() {
   const db = getDbInstance();
   const logSnippets: string[] = [];
+
+  // Prune any legacy or invalid entries that are not genuine workspace roots (e.g. ~/.nvm/... or system dirs)
+  try {
+    const existingProjects = listProjects();
+    for (const proj of existingProjects) {
+      if (!isValidWorkspaceRoot(proj.basePath)) {
+        deleteProject(proj.id);
+      }
+    }
+  } catch {
+    // Graceful fallback
+  }
 
   try {
     const logs = db
@@ -30,6 +51,7 @@ function ensureWorkspacesDerived() {
 
   const discovered = autoDiscoverWorkspaces(logSnippets);
   for (const scan of discovered) {
+    if (!isValidWorkspaceRoot(scan.basePath)) continue;
     const existing = getProjectByBasePath(scan.basePath);
     if (!existing) {
       const id = `proj_${randomUUID().replace(/-/g, "").slice(0, 16)}`;

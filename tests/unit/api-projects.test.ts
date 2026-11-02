@@ -54,7 +54,9 @@ test("API: GET /api/v1/projects auto-seeds current workspace and returns list", 
   assert.equal(data.success, true);
   assert.ok(Array.isArray(data.projects));
   assert.ok(data.projects.length >= 1);
-  assert.equal(data.projects[0].basePath, process.cwd());
+  const selfProject = data.projects.find((p: { basePath: string }) => p.basePath === process.cwd());
+  assert.ok(selfProject);
+  assert.equal(selfProject.basePath, process.cwd());
 });
 
 test("API: POST /api/v1/projects/scan previews filesystem metadata", async () => {

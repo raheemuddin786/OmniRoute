@@ -164,6 +164,50 @@ test("generateProjectBrief generates executive brief on-demand for project and g
   assert.ok(globalBrief.summary.includes("Global Application Overview"));
 });
 
+test("isValidWorkspaceRoot correctly identifies valid roots and filters system directories", () => {
+  // Current working directory has package.json / .git
+  assert.equal(scanner.isValidWorkspaceRoot(process.cwd()), true);
+
+  // System or invalid directories
+  assert.equal(scanner.isValidWorkspaceRoot("/Users/test/.nvm/versions/node/v24.18/bin"), false);
+  assert.equal(scanner.isValidWorkspaceRoot("/home/user/.fnm/current"), false);
+  assert.equal(scanner.isValidWorkspaceRoot("/usr/local/bin"), false);
+  assert.equal(scanner.isValidWorkspaceRoot(""), false);
+});
+
+test("extractWorkspaceFromContext extracts valid project roots from headers or body", () => {
+  const currentDir = process.cwd();
+
+  // From headers
+  const headerContext = {
+    "x-omniroute-workspace-root": currentDir,
+  };
+  assert.equal(scanner.extractWorkspaceFromContext(headerContext), currentDir);
+
+  // From request body environment or cwd
+  const bodyContext = {
+    cwd: currentDir,
+  };
+  assert.equal(scanner.extractWorkspaceFromContext(null, bodyContext), currentDir);
+
+  // From workspace_roots XML
+  const xmlBody = {
+    messages: [
+      {
+        role: "user",
+        content: `<workspace_roots><root>${currentDir}</root></workspace_roots>`,
+      },
+    ],
+  };
+  assert.equal(scanner.extractWorkspaceFromContext(null, xmlBody), currentDir);
+
+  // Rejects invalid system paths
+  assert.equal(
+    scanner.extractWorkspaceFromContext({ "x-project-path": "/Users/test/.nvm/bin" }),
+    null
+  );
+});
+
 test("deleteProject removes the project record", () => {
   const deleted = reg.deleteProject("proj_test_001");
   assert.equal(deleted, true);

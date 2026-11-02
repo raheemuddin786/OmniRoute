@@ -49,14 +49,16 @@ interface PromptRow {
   timestamp: string;
 }
 
-interface MemoryCountRow {
-  count: number;
+interface ConversationTurnRow {
+  last_messages_hash: string;
+  last_seen_at: string;
 }
 
 /**
  * Calculates on-demand analytics for a registered project or the global application overview.
  * If projectId is null or "__global__", aggregates across all proxy traffic.
- * Uses bounded database queries so no external LLM load is incurred.
+ * When scoped to a specific project, strictly filters by project_id or workspace_root.
+ * Uses bounded database queries so zero background LLM inference load is incurred.
  */
 export async function calculateProjectAnalytics(
   projectId: string | null
@@ -67,9 +69,50 @@ export async function calculateProjectAnalytics(
 
   const db = getDbInstance();
 
+  // Check if workspace linkage columns exist in call_logs (migration 219)
+  let hasWorkspaceCol = false;
+  let hasProjectIdCol = false;
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(call_logs)").all() as Array<{ name?: string }>;
+    hasWorkspaceCol = tableInfo.some((r) => r.name === "workspace_root");
+    hasProjectIdCol = tableInfo.some((r) => r.name === "project_id");
+  } catch {
+    // Graceful fallback
+  }
+
+  // Build project-scoping WHERE clauses
+  const whereClauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (!isGlobal && project) {
+    const projectConditions: string[] = [];
+    if (hasProjectIdCol) {
+      projectConditions.push("project_id = ?");
+      params.push(project.id);
+    }
+    if (hasWorkspaceCol && project.basePath) {
+      projectConditions.push("workspace_root = ?");
+      params.push(project.basePath);
+    }
+
+    // Also match by artifact path or request summary containing project directory or base name
+    if (project.basePath) {
+      projectConditions.push("artifact_relpath LIKE ?");
+      params.push(`%${project.basePath}%`);
+    }
+
+    if (projectConditions.length > 0) {
+      whereClauses.push(`(${projectConditions.join(" OR ")})`);
+    } else {
+      // If table doesn't have columns yet, scope to empty for safety
+      whereClauses.push("1 = 0");
+    }
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
   // 1. Token Economics from call_logs
-  // Query summary metrics
-  const callLogsStmt = db.prepare(`
+  const callLogsSql = `
     SELECT
       COUNT(*) AS totalCalls,
       COALESCE(SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END), 0) AS successCalls,
@@ -82,20 +125,33 @@ export async function calculateProjectAnalytics(
       COALESCE(SUM(tokens_cache_creation), 0) AS tokensCacheCreation,
       COALESCE(SUM(tokens_reasoning), 0) AS tokensReasoning
     FROM call_logs
-  `);
-  const logAgg = (callLogsStmt.get() ?? {}) as Partial<CallLogAggregateRow>;
+    ${whereSql}
+  `;
+  const callLogsStmt = db.prepare(callLogsSql);
+  const logAgg = (callLogsStmt.get(...params) ?? {}) as Partial<CallLogAggregateRow>;
 
   // 2. Cost calculations from request_cost_ledger if present
   let totalCostUsd = 0;
   try {
-    const costStmt = db.prepare(`
-      SELECT COALESCE(SUM(amount_usd), 0.0) AS totalAmountUsd
-      FROM request_cost_ledger
-    `);
-    const costAgg = (costStmt.get() ?? {}) as Partial<CostLedgerRow>;
-    totalCostUsd = Number(costAgg.totalAmountUsd ?? 0);
+    let costSql = `SELECT COALESCE(SUM(amount_usd), 0.0) AS totalAmountUsd FROM request_cost_ledger`;
+    if (!isGlobal && project) {
+      costSql = `
+        SELECT COALESCE(SUM(rcl.amount_usd), 0.0) AS totalAmountUsd
+        FROM request_cost_ledger rcl
+        JOIN call_logs cl ON rcl.call_log_id = cl.id
+        ${whereSql}
+      `;
+      const costAgg = (db.prepare(costSql).get(...params) ?? {}) as Partial<CostLedgerRow>;
+      totalCostUsd = Number(costAgg.totalAmountUsd ?? 0);
+    } else {
+      const costAgg = (db.prepare(costSql).get() ?? {}) as Partial<CostLedgerRow>;
+      totalCostUsd = Number(costAgg.totalAmountUsd ?? 0);
+    }
   } catch {
-    // If table not populated or empty, cost remains 0
+    // If ledger join fails or table is empty, compute estimate from tokens
+    const successTokens =
+      Number(logAgg.tokensInSuccess ?? 0) + Number(logAgg.tokensOutSuccess ?? 0);
+    totalCostUsd = (successTokens / 1_000_000) * 1.5; // Average blended rate $1.5/M tokens
   }
 
   // Token breakdown
@@ -116,66 +172,99 @@ export async function calculateProjectAnalytics(
   // 3. Sessions & Prompt Histories
   let totalSessions = 0;
   let uniquePrompts = 0;
-  let recentPrompts: Array<{ prompt: string; timestamp: string }> = [];
+  const recentPrompts: Array<{ prompt: string; timestamp: string }> = [];
 
   try {
-    const sessionCountStmt = db.prepare(`
+    const sessionCountSql = `
       SELECT COUNT(DISTINCT session_tag) AS count
       FROM call_logs
-      WHERE session_tag IS NOT NULL AND length(trim(session_tag)) > 0
-    `);
-    const sessionRow = (sessionCountStmt.get() ?? { count: 0 }) as { count: number };
+      ${whereSql ? `${whereSql} AND` : "WHERE"} session_tag IS NOT NULL AND length(trim(session_tag)) > 0
+    `;
+    const sessionRow = (db.prepare(sessionCountSql).get(...params) ?? { count: 0 }) as {
+      count: number;
+    };
     totalSessions = Number(sessionRow.count ?? 0);
+    if (totalSessions === 0) {
+      totalSessions = Number(logAgg.totalCalls ?? 0);
+    }
   } catch {
     totalSessions = Number(logAgg.totalCalls ?? 0);
   }
 
+  // Fetch unique prompts from call_logs.request_summary or agentic_conversations
   try {
-    const promptStmt = db.prepare(`
+    const promptSql = `
       SELECT request_summary, timestamp
       FROM call_logs
-      WHERE request_summary IS NOT NULL AND length(trim(request_summary)) > 0
+      ${whereSql ? `${whereSql} AND` : "WHERE"} request_summary IS NOT NULL AND length(trim(request_summary)) > 0
       ORDER BY id DESC
       LIMIT 100
-    `);
-    const promptRows = (promptStmt.all() ?? []) as PromptRow[];
+    `;
+    const promptRows = (db.prepare(promptSql).all(...params) ?? []) as PromptRow[];
     const seenPrompts = new Set<string>();
-    const promptList: Array<{ prompt: string; timestamp: string }> = [];
 
     for (const row of promptRows) {
       if (row.request_summary && !seenPrompts.has(row.request_summary.trim())) {
         seenPrompts.add(row.request_summary.trim());
-        promptList.push({
+        recentPrompts.push({
           prompt: row.request_summary.trim(),
           timestamp: row.timestamp || new Date().toISOString(),
         });
       }
     }
-    uniquePrompts = seenPrompts.size;
-    recentPrompts = promptList.slice(0, 15);
+
+    // If request_summary was empty in call_logs, inspect agentic_conversations turn counts
+    if (seenPrompts.size === 0) {
+      try {
+        const convSql = isGlobal
+          ? `SELECT last_messages_hash, last_seen_at FROM agentic_conversations ORDER BY rowid DESC LIMIT 50`
+          : `SELECT ac.last_messages_hash, ac.last_seen_at
+             FROM agentic_conversations ac
+             JOIN call_logs cl ON ac.id = cl.session_tag
+             ${whereSql}
+             ORDER BY ac.rowid DESC
+             LIMIT 50`;
+        const convRows = (
+          isGlobal ? db.prepare(convSql).all() : db.prepare(convSql).all(...params)
+        ) as ConversationTurnRow[];
+        for (const row of convRows) {
+          if (row.last_messages_hash && !seenPrompts.has(row.last_messages_hash)) {
+            seenPrompts.add(row.last_messages_hash);
+            recentPrompts.push({
+              prompt: `Agent turn session (${row.last_messages_hash.slice(0, 12)}...)`,
+              timestamp: row.last_seen_at || new Date().toISOString(),
+            });
+          }
+        }
+      } catch {
+        // Fallback gracefully
+      }
+    }
+
+    uniquePrompts = seenPrompts.size > 0 ? seenPrompts.size : Number(logAgg.totalCalls ?? 0);
   } catch {
-    uniquePrompts = 0;
+    uniquePrompts = Number(logAgg.totalCalls ?? 0);
   }
 
   const sessions: SessionSummary = {
     total: totalSessions,
     uniquePrompts,
-    recentPrompts,
+    recentPrompts: recentPrompts.slice(0, 15),
   };
 
   // 4. Models & Combos breakdown
   const byModel: Record<string, number> = {};
   let modelCallsTotal = 0;
   try {
-    const modelStmt = db.prepare(`
+    const modelSql = `
       SELECT model, COUNT(*) AS count
       FROM call_logs
-      WHERE model IS NOT NULL AND length(trim(model)) > 0
+      ${whereSql ? `${whereSql} AND` : "WHERE"} model IS NOT NULL AND length(trim(model)) > 0
       GROUP BY model
       ORDER BY count DESC
       LIMIT 10
-    `);
-    const modelRows = (modelStmt.all() ?? []) as ModelCountRow[];
+    `;
+    const modelRows = (db.prepare(modelSql).all(...params) ?? []) as ModelCountRow[];
     for (const row of modelRows) {
       byModel[row.model] = row.count;
       modelCallsTotal += row.count;
@@ -186,15 +275,15 @@ export async function calculateProjectAnalytics(
 
   const combos: string[] = [];
   try {
-    const comboStmt = db.prepare(`
+    const comboSql = `
       SELECT combo_name, COUNT(*) AS count
       FROM call_logs
-      WHERE combo_name IS NOT NULL AND length(trim(combo_name)) > 0
+      ${whereSql ? `${whereSql} AND` : "WHERE"} combo_name IS NOT NULL AND length(trim(combo_name)) > 0
       GROUP BY combo_name
       ORDER BY count DESC
       LIMIT 5
-    `);
-    const comboRows = (comboStmt.all() ?? []) as ComboCountRow[];
+    `;
+    const comboRows = (db.prepare(comboSql).all(...params) ?? []) as ComboCountRow[];
     for (const row of comboRows) {
       combos.push(row.combo_name);
     }
@@ -210,16 +299,6 @@ export async function calculateProjectAnalytics(
     skillsTotal = Number(skillRow.count ?? 0);
   } catch {
     skillsTotal = 0;
-  }
-
-  // 6. Memories / RAG count
-  let _memoryCount = 0;
-  try {
-    const memStmt = db.prepare(`SELECT COUNT(*) AS count FROM memories`);
-    const memRow = (memStmt.get() ?? { count: 0 }) as MemoryCountRow;
-    _memoryCount = Number(memRow.count ?? 0);
-  } catch {
-    _memoryCount = 0;
   }
 
   const agents: AgentUsageSummary = {

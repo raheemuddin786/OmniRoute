@@ -3,7 +3,7 @@
  *
  * Discovers project name, description, tech stack, cloud stack, files and docs
  * counts from local workspace roots and derives active workspaces from proxy request
- * corpuses/logs without external network calls.
+ * corpuses/logs and client session contexts without external network calls.
  */
 
 import fs from "fs";
@@ -35,6 +35,117 @@ const EXCLUDE_DIRS = new Set([
 ]);
 
 const DOC_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst", ".adoc"]);
+
+/**
+ * Normalizes and checks if a given directory path is a valid workspace root.
+ * Validates existence, eliminates system/binary node directories (like .nvm, bin, lib),
+ * and confirms presence of project descriptors.
+ */
+export function isValidWorkspaceRoot(dirPath: string): boolean {
+  if (!dirPath || typeof dirPath !== "string") return false;
+  try {
+    const resolved = path.resolve(dirPath);
+    if (!fs.existsSync(resolved)) return false;
+    const stats = fs.statSync(resolved);
+    if (!stats.isDirectory()) return false;
+
+    // Filter out node version manager / runtime tool installations
+    const lower = resolved.toLowerCase();
+    if (
+      lower.includes("/.nvm/") ||
+      lower.includes("/.fnm/") ||
+      lower.includes("/.asdf/") ||
+      lower.includes("/node_modules") ||
+      lower.endsWith("/bin")
+    ) {
+      return false;
+    }
+
+    // Must have at least one manifest, git directory, or workspace indicator
+    return (
+      fs.existsSync(path.join(resolved, "package.json")) ||
+      fs.existsSync(path.join(resolved, "pyproject.toml")) ||
+      fs.existsSync(path.join(resolved, "Cargo.toml")) ||
+      fs.existsSync(path.join(resolved, "go.mod")) ||
+      fs.existsSync(path.join(resolved, "pom.xml")) ||
+      fs.existsSync(path.join(resolved, ".git")) ||
+      fs.existsSync(path.join(resolved, "requirements.txt"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extracts candidate workspace root paths from headers, environment blocks, or request payloads.
+ */
+export function extractWorkspaceFromContext(
+  headers?: Headers | Record<string, string | null | undefined> | null,
+  body?: unknown
+): string | null {
+  // 1. Inspect headers
+  if (headers) {
+    const getHeader = (name: string): string | null => {
+      if (typeof (headers as Headers).get === "function") {
+        return (headers as Headers).get(name);
+      }
+      const record = headers as Record<string, string | null | undefined>;
+      return record[name] || record[name.toLowerCase()] || null;
+    };
+
+    const headerCandidates = [
+      getHeader("x-omniroute-workspace-root"),
+      getHeader("x-project-path"),
+      getHeader("x-workspace-root"),
+      getHeader("x-claude-code-project-path"),
+      getHeader("x-project-root"),
+    ];
+
+    for (const cand of headerCandidates) {
+      if (cand && typeof cand === "string" && cand.trim().length > 0) {
+        const clean = cand.trim();
+        if (isValidWorkspaceRoot(clean)) {
+          return path.resolve(clean);
+        }
+      }
+    }
+  }
+
+  // 2. Inspect request body (e.g. Codex/Claude/Cursor environment blocks or metadata)
+  if (body && typeof body === "object") {
+    const bodyObj = body as Record<string, unknown>;
+
+    // Look for explicit workspace/cwd in body
+    if (typeof bodyObj.cwd === "string" && isValidWorkspaceRoot(bodyObj.cwd)) {
+      return path.resolve(bodyObj.cwd);
+    }
+    if (typeof bodyObj.workspaceRoot === "string" && isValidWorkspaceRoot(bodyObj.workspaceRoot)) {
+      return path.resolve(bodyObj.workspaceRoot);
+    }
+
+    // Inspect messages / system prompts for workspace_roots XML or working directory markers
+    const messages = Array.isArray(bodyObj.messages) ? bodyObj.messages : [];
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      const content = (msg as { content?: unknown }).content;
+      if (typeof content === "string") {
+        const rootMatch = content.match(/<root>([^<]+)<\/root>/);
+        if (rootMatch && rootMatch[1] && isValidWorkspaceRoot(rootMatch[1])) {
+          return path.resolve(rootMatch[1]);
+        }
+        const cwdMatch = content.match(/(?:working directory|cwd|workspace):\s*([/\\].+)/i);
+        if (cwdMatch && cwdMatch[1]) {
+          const cand = cwdMatch[1].trim().split(/\s+/)[0];
+          if (cand && isValidWorkspaceRoot(cand)) {
+            return path.resolve(cand);
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
 
 /**
  * Scans a project directory on the local filesystem.
@@ -141,7 +252,7 @@ export function scanProjectDirectory(
   let docsCount = 0;
 
   function traverse(dir: string, depth = 0) {
-    if (depth > 5 || filesCount > 20000) return;
+    if (depth > 5 || filesCount > 25000) return;
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
@@ -183,14 +294,16 @@ export function scanProjectDirectory(
  * Automatically derives candidate project workspaces from:
  * 1. Current working directory
  * 2. Active worktrees under .claude/worktrees
- * 3. Sibling workspace directories
+ * 3. Sibling workspace directories under common development roots
  * 4. Extracted directory paths from request summaries/logs
  */
 export function autoDiscoverWorkspaces(logSnippets: string[] = []): ProjectScanResult[] {
   const candidatePaths = new Set<string>();
 
   // 1. Current workspace root
-  candidatePaths.add(process.cwd());
+  if (isValidWorkspaceRoot(process.cwd())) {
+    candidatePaths.add(path.resolve(process.cwd()));
+  }
 
   // 2. Active worktrees if present
   const worktreeDir = path.join(process.cwd(), ".claude", "worktrees");
@@ -199,7 +312,10 @@ export function autoDiscoverWorkspaces(logSnippets: string[] = []): ProjectScanR
       const worktrees = fs.readdirSync(worktreeDir, { withFileTypes: true });
       for (const wt of worktrees) {
         if (wt.isDirectory()) {
-          candidatePaths.add(path.join(worktreeDir, wt.name));
+          const wtPath = path.join(worktreeDir, wt.name);
+          if (isValidWorkspaceRoot(wtPath)) {
+            candidatePaths.add(path.resolve(wtPath));
+          }
         }
       }
     } catch {
@@ -207,42 +323,28 @@ export function autoDiscoverWorkspaces(logSnippets: string[] = []): ProjectScanR
     }
   }
 
-  // 3. Check sibling development roots (up to 1 level up if under 'work' or 'dev')
+  // 3. Check sibling development roots (up to 2 levels up if under 'work', 'dev', 'projects')
   try {
     const parentDir = path.dirname(process.cwd());
     const grandParentDir = path.dirname(parentDir);
-    const parentName = path.basename(parentDir).toLowerCase();
-    if (parentName === "work" || parentName === "dev" || parentName === "tools") {
-      const siblings = fs.readdirSync(parentDir, { withFileTypes: true });
-      for (const s of siblings) {
-        if (s.isDirectory() && !s.name.startsWith(".")) {
-          const sPath = path.join(parentDir, s.name);
-          if (
-            fs.existsSync(path.join(sPath, "package.json")) ||
-            fs.existsSync(path.join(sPath, ".git"))
-          ) {
-            candidatePaths.add(sPath);
-          }
-        }
-      }
-    } else {
-      // Check grandparent for sibling clusters (e.g. /Users/raheem/work/...)
-      const grandParentName = path.basename(grandParentDir).toLowerCase();
-      if (grandParentName === "work" || grandParentName === "dev") {
-        const grandSiblings = fs.readdirSync(grandParentDir, { withFileTypes: true });
-        for (const gs of grandSiblings) {
-          if (gs.isDirectory() && !gs.name.startsWith(".")) {
-            const gsPath = path.join(grandParentDir, gs.name);
-            if (
-              fs.existsSync(path.join(gsPath, "package.json")) ||
-              fs.existsSync(path.join(gsPath, ".git"))
-            ) {
-              candidatePaths.add(gsPath);
+    const checkDir = (dir: string) => {
+      try {
+        const siblings = fs.readdirSync(dir, { withFileTypes: true });
+        for (const s of siblings) {
+          if (s.isDirectory() && !s.name.startsWith(".")) {
+            const sPath = path.join(dir, s.name);
+            if (isValidWorkspaceRoot(sPath)) {
+              candidatePaths.add(path.resolve(sPath));
             }
           }
         }
+      } catch {
+        // Ignore
       }
-    }
+    };
+
+    checkDir(parentDir);
+    checkDir(grandParentDir);
   } catch {
     // Ignore
   }
@@ -255,16 +357,20 @@ export function autoDiscoverWorkspaces(logSnippets: string[] = []): ProjectScanR
     if (matches) {
       for (const rawMatch of matches) {
         let cleanPath = rawMatch.trim();
-        // Remove trailing punctuation
         cleanPath = cleanPath.replace(/[,;:'")\]}]+$/, "");
-        if (fs.existsSync(cleanPath)) {
-          const stats = fs.statSync(cleanPath);
-          const dir = stats.isDirectory() ? cleanPath : path.dirname(cleanPath);
-          if (
-            fs.existsSync(path.join(dir, "package.json")) ||
-            fs.existsSync(path.join(dir, ".git"))
-          ) {
-            candidatePaths.add(dir);
+        if (isValidWorkspaceRoot(cleanPath)) {
+          candidatePaths.add(path.resolve(cleanPath));
+        } else {
+          // Walk up to find nearest valid workspace root
+          let curr = path.dirname(cleanPath);
+          for (let i = 0; i < 3; i++) {
+            if (isValidWorkspaceRoot(curr)) {
+              candidatePaths.add(path.resolve(curr));
+              break;
+            }
+            const next = path.dirname(curr);
+            if (next === curr) break;
+            curr = next;
           }
         }
       }

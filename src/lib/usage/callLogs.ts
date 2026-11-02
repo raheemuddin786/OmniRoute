@@ -702,6 +702,29 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
   const detailState: CallLogDetailState = detailExpected ? "pending" : "none";
   const detailPendingUntil = detailExpected ? Date.now() + 5 * 60_000 : null;
 
+  // Workspace linkage (migration 219): extract the originating workspace root from
+  // request headers/body and resolve the registered project id. This is best-effort
+  // and additive — it never blocks request processing or breaks legacy rows.
+  let workspaceRoot: string | null = null;
+  let projectId: string | null = null;
+  try {
+    const { extractWorkspaceFromContext } = await import("@/lib/projectScanner.ts");
+    const candidateRoot = extractWorkspaceFromContext(
+      entry.headers ?? null,
+      entry.body ?? entry.requestBody ?? null
+    );
+    if (candidateRoot) {
+      workspaceRoot = candidateRoot;
+      const { getProjectByBasePath } = await import("@/lib/db/projectRegistry.ts");
+      const project = getProjectByBasePath(candidateRoot);
+      if (project) {
+        projectId = project.id;
+      }
+    }
+  } catch {
+    // Best-effort workspace association — never block the request on this.
+  }
+
   const insertParams = {
     ...logEntry,
     errorSummary: toStoredErrorSummary(protectedError),
@@ -715,6 +738,8 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
     resilienceActions,
     hasPipelineDetails: protectedPipelinePayloads ? 1 : 0,
     requestSummary,
+    workspaceRoot,
+    projectId,
   };
   return {
     db,
@@ -741,6 +766,15 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
   // Optional column (migration 191) — only fixed identifiers are spliced in.
   const resilienceCol = hasResilienceColumn ? ", resilience_actions" : "";
   const resilienceParam = hasResilienceColumn ? ", @resilienceActions" : "";
+  // Workspace linkage (migration 219) — additive, nullable, defaults to NULL.
+  // Persisted when the request carries a workspace root / project id so per-project
+  // analytics can scope call_logs without rewriting existing rows.
+  const hasWorkspaceCol = hasCallLogsColumn("workspace_root");
+  const hasProjectIdCol = hasCallLogsColumn("project_id");
+  const workspaceCol = hasWorkspaceCol ? ", workspace_root" : "";
+  const workspaceParam = hasWorkspaceCol ? ", @workspaceRoot" : "";
+  const projectIdCol = hasProjectIdCol ? ", project_id" : "";
+  const projectIdParam = hasProjectIdCol ? ", @projectId" : "";
   const insertStmt = db.prepare(
     `
       INSERT INTO call_logs (
@@ -756,7 +790,7 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
         has_request_body, has_response_body, has_pipeline_details, request_summary,
         correlation_id, model_pinned, session_tag, response_id, error_type,
         video_content_removed, has_content, usage_provenance,
-        added_wait_ms, added_wait_cause${resilienceCol}
+        added_wait_ms, added_wait_cause${resilienceCol}${workspaceCol}${projectIdCol}
       )
       VALUES (
         @id, @timestamp, @method, @path, @status, @model, @requestedModel, @provider,
@@ -771,7 +805,7 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
         @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
         @correlationId, @modelPinned, @sessionTag, @responseId, @errorType,
         @videoContentRemoved, @hasContent, @usageProvenance,
-        @addedWaitMs, @addedWaitCause${resilienceParam}
+        @addedWaitMs, @addedWaitCause${resilienceParam}${workspaceParam}${projectIdParam}
       )
     `
   );
