@@ -709,11 +709,32 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
   let projectId: string | null = null;
   try {
     const { extractWorkspaceFromContext } = await import("@/lib/projectScanner.ts");
+
+    // Primary workspace extraction from headers/body (adds new workspaces)
     const candidateRoot = extractWorkspaceFromContext(
       entry.headers ?? null,
       entry.body ?? entry.requestBody ?? null
     );
-    if (candidateRoot) {
+
+    // Session affinity fallback: if no workspace found, inherit from session_tag
+    if (!candidateRoot && entry.sessionTag) {
+      const { getDbInstance } = await import("../db/core");
+      const db = getDbInstance();
+      const latestRow = db
+        .prepare(
+          "SELECT workspace_root FROM call_logs WHERE session_tag = ? ORDER BY timestamp DESC LIMIT 1"
+        )
+        .get(entry.sessionTag) as { workspace_root?: string } | undefined;
+
+      if (latestRow?.workspace_root) {
+        workspaceRoot = latestRow.workspace_root;
+        const projectRegistry = await import("@/lib/db/projectRegistry.ts");
+        const project = projectRegistry.getProjectByBasePath(workspaceRoot);
+        if (project) {
+          projectId = project.id;
+        }
+      }
+    } else if (candidateRoot) {
       workspaceRoot = candidateRoot;
       const projectRegistry = await import("@/lib/db/projectRegistry.ts");
       const { scanProjectDirectory } = await import("@/lib/projectScanner.ts");

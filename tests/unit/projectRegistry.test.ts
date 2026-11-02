@@ -303,3 +303,67 @@ test("callLogs buildCallLogRow auto-registers new workspace into projectRegistry
     fs.rmSync(tempProjectDir, { recursive: true, force: true });
   } catch {}
 });
+
+test("callLogs buildCallLogRow inherits workspace_root from session_tag affinity", async () => {
+  const callLogsModule = await import("../../src/lib/usage/callLogs.ts");
+
+  const tempProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-sess-disc-"));
+  fs.writeFileSync(
+    path.join(tempProjectDir, "package.json"),
+    JSON.stringify({
+      name: "session-discovered-app",
+      description: "Discovered via session continuity",
+    })
+  );
+
+  const sessionTag = "test-session-affinity-001";
+
+  // First call in session has explicit workspace header
+  await callLogsModule.saveCallLog({
+    method: "POST",
+    path: "/v1/chat/completions",
+    status: 200,
+    model: "claude-3-7-sonnet",
+    sessionTag,
+    headers: {
+      "x-omniroute-workspace-root": tempProjectDir,
+    },
+    body: {
+      messages: [{ role: "user", content: "first turn with workspace" }],
+    },
+  });
+
+  // Second call in same session has NO headers and truncated body without workspace info
+  await callLogsModule.saveCallLog({
+    method: "POST",
+    path: "/v1/chat/completions",
+    status: 200,
+    model: "claude-3-7-sonnet",
+    sessionTag,
+    body: {
+      _truncated: true,
+      _originalBytes: 1500000,
+    },
+  });
+
+  // Verify that the workspace was retained and registered
+  const registered = reg.getProjectByBasePath(tempProjectDir);
+  assert.ok(registered, "Workspace should be registered and linked via sessionTag");
+  assert.equal(registered.name, "session-discovered-app");
+
+  // Verify call_logs row for second call has workspace_root set
+  const db = core.getDbInstance();
+  const secondLog = db
+    .prepare(
+      "SELECT workspace_root, project_id FROM call_logs WHERE session_tag = ? ORDER BY id DESC LIMIT 1"
+    )
+    .get(sessionTag) as { workspace_root?: string; project_id?: string } | undefined;
+
+  assert.equal(secondLog?.workspace_root, tempProjectDir);
+  assert.equal(secondLog?.project_id, registered.id);
+
+  // Cleanup
+  try {
+    fs.rmSync(tempProjectDir, { recursive: true, force: true });
+  } catch {}
+});
