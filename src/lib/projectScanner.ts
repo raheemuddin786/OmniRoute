@@ -1,8 +1,9 @@
 /**
- * lib/projectScanner.ts — Local filesystem inspection for registered projects.
+ * lib/projectScanner.ts — Local filesystem inspection and workspace derivation.
  *
  * Discovers project name, description, tech stack, cloud stack, files and docs
- * counts from the local workspace without external network calls.
+ * counts from local workspace roots and derives active workspaces from proxy request
+ * corpuses/logs without external network calls.
  */
 
 import fs from "fs";
@@ -10,6 +11,7 @@ import path from "path";
 
 export interface ProjectScanResult {
   name: string;
+  basePath: string;
   description: string;
   techStack: string[];
   cloudStack: string[];
@@ -17,6 +19,7 @@ export interface ProjectScanResult {
   filesCount: number;
   docsCount: number;
   memoryLocations: string[];
+  provenance: "derived" | "manual";
 }
 
 const EXCLUDE_DIRS = new Set([
@@ -36,7 +39,10 @@ const DOC_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst", ".adoc"]);
 /**
  * Scans a project directory on the local filesystem.
  */
-export function scanProjectDirectory(basePath: string): ProjectScanResult {
+export function scanProjectDirectory(
+  basePath: string,
+  provenance: "derived" | "manual" = "derived"
+): ProjectScanResult {
   const resolved = path.resolve(basePath);
 
   let name = path.basename(resolved);
@@ -49,6 +55,7 @@ export function scanProjectDirectory(basePath: string): ProjectScanResult {
   if (!fs.existsSync(resolved)) {
     return {
       name,
+      basePath: resolved,
       description,
       techStack: ["Unknown"],
       cloudStack: [],
@@ -56,6 +63,7 @@ export function scanProjectDirectory(basePath: string): ProjectScanResult {
       filesCount: 0,
       docsCount: 0,
       memoryLocations: [],
+      provenance,
     };
   }
 
@@ -159,6 +167,7 @@ export function scanProjectDirectory(basePath: string): ProjectScanResult {
 
   return {
     name,
+    basePath: resolved,
     description,
     techStack: Array.from(techStack),
     cloudStack: Array.from(cloudStack),
@@ -166,5 +175,108 @@ export function scanProjectDirectory(basePath: string): ProjectScanResult {
     filesCount,
     docsCount,
     memoryLocations,
+    provenance,
   };
+}
+
+/**
+ * Automatically derives candidate project workspaces from:
+ * 1. Current working directory
+ * 2. Active worktrees under .claude/worktrees
+ * 3. Sibling workspace directories
+ * 4. Extracted directory paths from request summaries/logs
+ */
+export function autoDiscoverWorkspaces(logSnippets: string[] = []): ProjectScanResult[] {
+  const candidatePaths = new Set<string>();
+
+  // 1. Current workspace root
+  candidatePaths.add(process.cwd());
+
+  // 2. Active worktrees if present
+  const worktreeDir = path.join(process.cwd(), ".claude", "worktrees");
+  if (fs.existsSync(worktreeDir)) {
+    try {
+      const worktrees = fs.readdirSync(worktreeDir, { withFileTypes: true });
+      for (const wt of worktrees) {
+        if (wt.isDirectory()) {
+          candidatePaths.add(path.join(worktreeDir, wt.name));
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  // 3. Check sibling development roots (up to 1 level up if under 'work' or 'dev')
+  try {
+    const parentDir = path.dirname(process.cwd());
+    const grandParentDir = path.dirname(parentDir);
+    const parentName = path.basename(parentDir).toLowerCase();
+    if (parentName === "work" || parentName === "dev" || parentName === "tools") {
+      const siblings = fs.readdirSync(parentDir, { withFileTypes: true });
+      for (const s of siblings) {
+        if (s.isDirectory() && !s.name.startsWith(".")) {
+          const sPath = path.join(parentDir, s.name);
+          if (
+            fs.existsSync(path.join(sPath, "package.json")) ||
+            fs.existsSync(path.join(sPath, ".git"))
+          ) {
+            candidatePaths.add(sPath);
+          }
+        }
+      }
+    } else {
+      // Check grandparent for sibling clusters (e.g. /Users/raheem/work/...)
+      const grandParentName = path.basename(grandParentDir).toLowerCase();
+      if (grandParentName === "work" || grandParentName === "dev") {
+        const grandSiblings = fs.readdirSync(grandParentDir, { withFileTypes: true });
+        for (const gs of grandSiblings) {
+          if (gs.isDirectory() && !gs.name.startsWith(".")) {
+            const gsPath = path.join(grandParentDir, gs.name);
+            if (
+              fs.existsSync(path.join(gsPath, "package.json")) ||
+              fs.existsSync(path.join(gsPath, ".git"))
+            ) {
+              candidatePaths.add(gsPath);
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore
+  }
+
+  // 4. Extract paths from proxy request logs / summaries
+  const pathRegex = /(?:\/Users|\/home|[a-zA-Z]:\\)[\w\-./\\]+/g;
+  for (const snippet of logSnippets) {
+    if (!snippet || typeof snippet !== "string") continue;
+    const matches = snippet.match(pathRegex);
+    if (matches) {
+      for (const rawMatch of matches) {
+        let cleanPath = rawMatch.trim();
+        // Remove trailing punctuation
+        cleanPath = cleanPath.replace(/[,;:'")\]}]+$/, "");
+        if (fs.existsSync(cleanPath)) {
+          const stats = fs.statSync(cleanPath);
+          const dir = stats.isDirectory() ? cleanPath : path.dirname(cleanPath);
+          if (
+            fs.existsSync(path.join(dir, "package.json")) ||
+            fs.existsSync(path.join(dir, ".git"))
+          ) {
+            candidatePaths.add(dir);
+          }
+        }
+      }
+    }
+  }
+
+  const results: ProjectScanResult[] = [];
+  for (const candidate of candidatePaths) {
+    if (fs.existsSync(candidate)) {
+      results.push(scanProjectDirectory(candidate, "derived"));
+    }
+  }
+
+  return results;
 }

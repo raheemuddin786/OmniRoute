@@ -13,7 +13,6 @@ import NotionSourceCard from "./components/NotionSourceCard";
 import ObsidianSourceCard from "./components/ObsidianSourceCard";
 import VscodeTokenAliasCard from "./VscodeTokenAliasCard";
 import SmartProxyBridgeTab from "./SmartProxyBridgeTab";
-import { ProjectsAnalyticsTab } from "./ProjectsAnalyticsTab";
 
 const BUILD_TIME_CLOUD_URL = process.env.NEXT_PUBLIC_CLOUD_URL || null;
 const CLOUD_ACTION_TIMEOUT_MS = 15000;
@@ -108,7 +107,7 @@ type EndpointTunnelVisibility = {
   showNgrokTunnel: boolean;
 };
 
-type EndpointTab = "apis" | "mcp" | "a2a" | "context-sources" | "smart-proxy" | "projects";
+type EndpointTab = "apis" | "mcp" | "a2a" | "context-sources" | "smart-proxy";
 
 const ENDPOINT_TABS: Array<{
   value: EndpointTab;
@@ -120,7 +119,6 @@ const ENDPOINT_TABS: Array<{
   { value: "mcp", labelKey: "tabMcp", icon: "extension" },
   { value: "a2a", labelKey: "tabA2a", icon: "hub" },
   { value: "smart-proxy", label: "Smart Proxy", icon: "cpu" },
-  { value: "projects", label: "Projects & Analytics", icon: "account_tree" },
   { value: "context-sources", labelKey: "tabContextSources", icon: "database" },
 ];
 
@@ -1288,7 +1286,6 @@ export default function APIPageClient({ machineId }: Readonly<APIPageClientProps
       {activeEndpointTab === "mcp" ? <McpDashboardPage /> : null}
       {activeEndpointTab === "a2a" ? <A2ADashboardPage /> : null}
       {activeEndpointTab === "smart-proxy" ? <SmartProxyBridgeTab /> : null}
-      {activeEndpointTab === "projects" ? <ProjectsAnalyticsTab /> : null}
       {activeEndpointTab === "context-sources" ? (
         <div className="flex flex-col gap-4">
           <NotionSourceCard />

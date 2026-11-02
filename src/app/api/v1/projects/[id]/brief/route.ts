@@ -13,13 +13,17 @@ export async function POST(request: Request, context: RouteContext) {
   if (authError) return authError;
 
   const { id } = await context.params;
-  const project = getProject(id);
-  if (!project) {
-    return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+  const isGlobal = id === "__global__" || id === "global";
+
+  if (!isGlobal) {
+    const project = getProject(id);
+    if (!project) {
+      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    }
   }
 
   try {
-    const brief = await generateProjectBrief(id);
+    const brief = await generateProjectBrief(isGlobal ? null : id);
     if (!brief) {
       return NextResponse.json(
         { success: false, error: "Failed to generate brief" },

@@ -1,29 +1,53 @@
 import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { listProjects, insertProject, getProjectByBasePath } from "@/lib/db/projectRegistry";
-import { scanProjectDirectory } from "@/lib/projectScanner";
+import { scanProjectDirectory, autoDiscoverWorkspaces } from "@/lib/projectScanner";
+import { getDbInstance } from "@/lib/db/core";
 import { randomUUID } from "crypto";
 
-// Auto-seed current project if registry is empty
-function ensureCurrentProjectSeeded() {
-  const currentPath = process.cwd();
-  const existing = getProjectByBasePath(currentPath);
-  if (!existing) {
-    const scan = scanProjectDirectory(currentPath);
-    const id = `proj_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-    insertProject(
-      id,
-      scan.name || "OmniRoute",
-      currentPath,
-      scan.description,
-      scan.techStack,
-      scan.cloudStack,
-      scan.features,
-      scan.filesCount,
-      scan.docsCount,
-      "active",
-      scan.memoryLocations
-    );
+// Auto-seed current project and auto-derive workspaces from request logs and worktrees
+function ensureWorkspacesDerived() {
+  const db = getDbInstance();
+  const logSnippets: string[] = [];
+
+  try {
+    const logs = db
+      .prepare(
+        `SELECT request_summary, session_tag, model
+         FROM call_logs
+         ORDER BY id DESC
+         LIMIT 50`
+      )
+      .all() as Array<{ request_summary?: string; session_tag?: string }>;
+
+    for (const row of logs) {
+      if (row.request_summary) logSnippets.push(row.request_summary);
+      if (row.session_tag) logSnippets.push(row.session_tag);
+    }
+  } catch {
+    // Graceful fallback if call_logs table doesn't exist yet
+  }
+
+  const discovered = autoDiscoverWorkspaces(logSnippets);
+  for (const scan of discovered) {
+    const existing = getProjectByBasePath(scan.basePath);
+    if (!existing) {
+      const id = `proj_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      insertProject(
+        id,
+        scan.name,
+        scan.basePath,
+        scan.description,
+        scan.techStack,
+        scan.cloudStack,
+        scan.features,
+        scan.filesCount,
+        scan.docsCount,
+        "active",
+        scan.provenance,
+        scan.memoryLocations
+      );
+    }
   }
 }
 
@@ -33,7 +57,7 @@ export async function GET(request: Request) {
   if (authError) return authError;
 
   try {
-    ensureCurrentProjectSeeded();
+    ensureWorkspacesDerived();
     const projects = listProjects();
     return NextResponse.json({
       success: true,
@@ -56,15 +80,10 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const basePath = typeof body.basePath === "string" ? body.basePath.trim() : "";
-
     if (!basePath) {
-      return NextResponse.json(
-        { success: false, error: "basePath is required to register a project" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "basePath is required" }, { status: 400 });
     }
 
-    // Check if already registered
     const existing = getProjectByBasePath(basePath);
     if (existing) {
       return NextResponse.json({
@@ -75,7 +94,8 @@ export async function POST(request: Request) {
     }
 
     // Scan directory
-    const scan = scanProjectDirectory(basePath);
+    const provenance = body.provenance === "manual" ? "manual" : "derived";
+    const scan = scanProjectDirectory(basePath, provenance);
     const id = `proj_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
     const project = insertProject(
@@ -89,6 +109,7 @@ export async function POST(request: Request) {
       typeof body.filesCount === "number" ? body.filesCount : scan.filesCount,
       typeof body.docsCount === "number" ? body.docsCount : scan.docsCount,
       "active",
+      provenance,
       Array.isArray(body.memoryLocations) ? body.memoryLocations : scan.memoryLocations
     );
 

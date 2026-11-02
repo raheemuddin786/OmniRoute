@@ -35,6 +35,7 @@ test("insertProject creates and returns a valid project record", () => {
     42,
     5,
     "active",
+    "derived",
     ["/tmp/test-alpha/docs"]
   );
 
@@ -47,6 +48,7 @@ test("insertProject creates and returns a valid project record", () => {
   assert.equal(p.filesCount, 42);
   assert.equal(p.docsCount, 5);
   assert.equal(p.status, "active");
+  assert.equal(p.provenance, "derived");
 });
 
 test("getProject and listProjects retrieve stored records", () => {
@@ -58,38 +60,39 @@ test("getProject and listProjects retrieve stored records", () => {
   assert.ok(list.length >= 1);
   const matched = list.find((item) => item.id === "proj_test_001");
   assert.ok(matched);
+  assert.equal(matched.name, "Test Project Alpha");
 });
 
-test("updateProjectMeta updates specific allowed fields", () => {
+test("updateProjectMeta patches project metadata safely", () => {
   const updated = reg.updateProjectMeta("proj_test_001", {
     name: "Updated Alpha",
-    filesCount: 100,
-    techStack: ["TypeScript", "Next.js", "Tailwind"],
+    filesCount: 99,
+    docsCount: 12,
   });
   assert.equal(updated, true);
 
   const found = reg.getProject("proj_test_001");
   assert.ok(found);
   assert.equal(found.name, "Updated Alpha");
-  assert.equal(found.filesCount, 100);
-  assert.deepEqual(found.techStack, ["TypeScript", "Next.js", "Tailwind"]);
+  assert.equal(found.filesCount, 99);
+  assert.equal(found.docsCount, 12);
 });
 
-test("setAnalyticsCache and setBriefCache store and retrieve cached objects", () => {
+test("setAnalyticsCache and setBriefCache store and retrieve on-demand data", () => {
   reg.setAnalyticsCache("proj_test_001", {
     tokenEconomics: {
-      success: 5000,
-      wasted: 120,
-      cached: 1000,
-      saved: 800,
-      costUsd: 0.045,
+      success: 1000,
+      wasted: 50,
+      cached: 200,
+      saved: 170,
+      costUsd: 0.005,
     },
     sessions: {
       total: 10,
       uniquePrompts: 8,
     },
     agents: {
-      skills: { total: 3 },
+      skills: { total: 4 },
       models: { total: 10, byModel: { "claude-sonnet-5-5": 10 } },
     },
     lastComputedAt: 1700000000,
@@ -97,7 +100,7 @@ test("setAnalyticsCache and setBriefCache store and retrieve cached objects", ()
 
   const withAnalytics = reg.getProject("proj_test_001");
   assert.ok(withAnalytics?.analyticsCache);
-  assert.equal(withAnalytics.analyticsCache.tokenEconomics.success, 5000);
+  assert.equal(withAnalytics.analyticsCache.tokenEconomics.success, 1000);
   assert.equal(withAnalytics.analyticsCache.sessions.total, 10);
 
   reg.setBriefCache("proj_test_001", {
@@ -121,7 +124,17 @@ test("scanProjectDirectory inspects directory structure safely", () => {
   assert.ok(scanned.techStack.includes("Node.js") || scanned.techStack.includes("TypeScript"));
 });
 
-test("calculateProjectAnalytics computes metrics on-demand without errors", async () => {
+test("autoDiscoverWorkspaces derives candidate workspaces from filesystem and logs", () => {
+  const workspaces = scanner.autoDiscoverWorkspaces([`Executed query in ${process.cwd()}/src/app`]);
+  assert.ok(Array.isArray(workspaces));
+  assert.ok(workspaces.length >= 1);
+  const foundSelf = workspaces.find((w) => w.basePath === process.cwd());
+  assert.ok(foundSelf);
+  assert.equal(foundSelf.provenance, "derived");
+});
+
+test("calculateProjectAnalytics computes metrics on-demand for project and global", async () => {
+  // Project-scoped analytics
   const result = await analytics.calculateProjectAnalytics("proj_test_001");
   assert.ok(result);
   assert.ok(typeof result.tokenEconomics.success === "number");
@@ -129,14 +142,26 @@ test("calculateProjectAnalytics computes metrics on-demand without errors", asyn
   assert.ok(typeof result.tokenEconomics.costUsd === "number");
   assert.ok(typeof result.sessions.total === "number");
   assert.ok(Array.isArray(result.optimizations));
+
+  // Global-scoped analytics
+  const globalResult = await analytics.calculateProjectAnalytics(null);
+  assert.ok(globalResult);
+  assert.ok(typeof globalResult.tokenEconomics.success === "number");
+  assert.ok(typeof globalResult.sessions.total === "number");
 });
 
-test("generateProjectBrief generates executive brief on-demand", async () => {
+test("generateProjectBrief generates executive brief on-demand for project and global", async () => {
+  // Project-scoped brief
   const brief = await analytics.generateProjectBrief("proj_test_001");
   assert.ok(brief);
   assert.ok(brief.summary.includes("Updated Alpha"));
   assert.ok(Array.isArray(brief.optimizations));
   assert.ok(Array.isArray(brief.recommendations));
+
+  // Global-scoped brief
+  const globalBrief = await analytics.generateProjectBrief("__global__");
+  assert.ok(globalBrief);
+  assert.ok(globalBrief.summary.includes("Global Application Overview"));
 });
 
 test("deleteProject removes the project record", () => {

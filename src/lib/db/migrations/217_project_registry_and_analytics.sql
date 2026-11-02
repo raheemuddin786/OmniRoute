@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS project_registry (
   files_count INTEGER DEFAULT 0,
   docs_count INTEGER DEFAULT 0,
   status TEXT DEFAULT 'active',
+  provenance TEXT DEFAULT 'derived',
   memory_locations TEXT DEFAULT '[]',
   rag_status TEXT DEFAULT 'idle',
   rag_indexed_count INTEGER DEFAULT 0,
@@ -26,3 +27,4 @@ CREATE TABLE IF NOT EXISTS project_registry (
 
 CREATE INDEX IF NOT EXISTS idx_project_registry_path ON project_registry(base_path);
 CREATE INDEX IF NOT EXISTS idx_project_registry_status ON project_registry(status);
+CREATE INDEX IF NOT EXISTS idx_project_registry_provenance ON project_registry(provenance);

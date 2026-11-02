@@ -23,6 +23,7 @@ export interface ProjectRegistry {
   filesCount?: number;
   docsCount?: number;
   status?: "active" | "inactive" | "archiving";
+  provenance?: "derived" | "manual";
   memoryLocations?: string[];
   ragStatus?: "idle" | "indexing" | "healthy";
   ragIndexedCount?: number;
@@ -91,6 +92,7 @@ interface RawProjectRow {
   files_count: number | null;
   docs_count: number | null;
   status: string | null;
+  provenance: string | null;
   memory_locations: string | null;
   rag_status: string | null;
   rag_indexed_count: number | null;
@@ -141,6 +143,7 @@ function mapRowToProject(row: RawProjectRow): ProjectRegistry {
     filesCount: row.files_count ?? 0,
     docsCount: row.docs_count ?? 0,
     status: (row.status as ProjectRegistry["status"]) ?? "active",
+    provenance: (row.provenance as ProjectRegistry["provenance"]) ?? "derived",
     memoryLocations: jsonOrEmpty(row.memory_locations),
     ragStatus: (row.rag_status as ProjectRegistry["ragStatus"]) ?? "idle",
     ragIndexedCount: row.rag_indexed_count ?? 0,
@@ -168,6 +171,7 @@ export function insertProject(
   filesCount?: number,
   docsCount?: number,
   status: "active" | "inactive" | "archiving" = "active",
+  provenance: "derived" | "manual" = "derived",
   memoryLocations?: string[]
 ): ProjectRegistry {
   const db = getDbInstance();
@@ -175,9 +179,9 @@ export function insertProject(
   db.prepare(
     `INSERT OR REPLACE INTO project_registry (
       id, name, base_path, description, tech_stack, cloud_stack, features,
-      files_count, docs_count, status, memory_locations,
+      files_count, docs_count, status, provenance, memory_locations,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     name,
@@ -189,6 +193,7 @@ export function insertProject(
     filesCount ?? 0,
     docsCount ?? 0,
     status,
+    provenance,
     JSON.stringify(memoryLocations ?? []),
     nowMs,
     nowMs
@@ -238,6 +243,10 @@ export function updateProjectMeta(id: string, patch: Partial<ProjectRegistry>): 
   if (patch.status !== undefined) {
     fields.push("status = ?");
     params.push(patch.status);
+  }
+  if (patch.provenance !== undefined) {
+    fields.push("provenance = ?");
+    params.push(patch.provenance);
   }
   if (patch.memoryLocations !== undefined) {
     fields.push("memory_locations = ?");

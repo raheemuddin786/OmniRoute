@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { scanProjectDirectory } from "@/lib/projectScanner";
 
-// POST /api/v1/projects/scan — Preview metadata from local filesystem
+// POST /api/v1/projects/scan — Preview filesystem metadata for a given path
 export async function POST(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
@@ -10,10 +10,9 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const basePath = typeof body.basePath === "string" ? body.basePath.trim() : "";
-
     if (!basePath) {
       return NextResponse.json(
-        { success: false, error: "basePath is required to scan directory" },
+        { success: false, error: "basePath is required in the request body" },
         { status: 400 }
       );
     }

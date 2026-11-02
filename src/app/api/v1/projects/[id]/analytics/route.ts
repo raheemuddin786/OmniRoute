@@ -13,13 +13,17 @@ export async function POST(request: Request, context: RouteContext) {
   if (authError) return authError;
 
   const { id } = await context.params;
-  const project = getProject(id);
-  if (!project) {
-    return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+  const isGlobal = id === "__global__" || id === "global";
+
+  if (!isGlobal) {
+    const project = getProject(id);
+    if (!project) {
+      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    }
   }
 
   try {
-    const analytics = await calculateProjectAnalytics(id);
+    const analytics = await calculateProjectAnalytics(isGlobal ? null : id);
     if (!analytics) {
       return NextResponse.json(
         { success: false, error: "Failed to calculate analytics" },

@@ -119,6 +119,19 @@ test("API: POST /api/v1/projects registers a custom project", async () => {
   assert.equal(anaData.success, true);
   assert.ok(anaData.analytics.tokenEconomics);
 
+  // POST /api/v1/projects/__global__/analytics
+  const globalAnaReq = mockRequest(
+    "POST",
+    `http://localhost:20128/api/v1/projects/__global__/analytics`
+  );
+  const globalAnaRes = await calculateAnalytics(globalAnaReq, {
+    params: Promise.resolve({ id: "__global__" }),
+  });
+  assert.equal(globalAnaRes.status, 200);
+  const globalAnaData = await globalAnaRes.json();
+  assert.equal(globalAnaData.success, true);
+  assert.ok(globalAnaData.analytics.tokenEconomics);
+
   // POST /api/v1/projects/[id]/brief
   const briefReq = mockRequest("POST", `http://localhost:20128/api/v1/projects/${projectId}/brief`);
   const briefRes = await generateBrief(briefReq, { params: Promise.resolve({ id: projectId }) });
@@ -126,6 +139,19 @@ test("API: POST /api/v1/projects registers a custom project", async () => {
   const briefData = await briefRes.json();
   assert.equal(briefData.success, true);
   assert.ok(briefData.brief.summary.includes("Custom Test Project"));
+
+  // POST /api/v1/projects/__global__/brief
+  const globalBriefReq = mockRequest(
+    "POST",
+    `http://localhost:20128/api/v1/projects/__global__/brief`
+  );
+  const globalBriefRes = await generateBrief(globalBriefReq, {
+    params: Promise.resolve({ id: "__global__" }),
+  });
+  assert.equal(globalBriefRes.status, 200);
+  const globalBriefData = await globalBriefRes.json();
+  assert.equal(globalBriefData.success, true);
+  assert.ok(globalBriefData.brief.summary.includes("Global Application Overview"));
 
   // DELETE /api/v1/projects/[id]
   const delReq = mockRequest("DELETE", `http://localhost:20128/api/v1/projects/${projectId}`);
