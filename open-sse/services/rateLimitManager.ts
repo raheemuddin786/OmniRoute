@@ -11,7 +11,7 @@
 import { AsyncResource } from "node:async_hooks";
 import Bottleneck from "bottleneck";
 import { applyBottleneckDoExpirePatch, applyBottleneckHeartbeatPatch } from "./bottleneckPatch.ts";
-import { parseRetryAfterFromBody } from "./accountFallback.ts";
+import { parseRetryAfterFromBody, setRateLimitPauseChecker } from "./accountFallback.ts";
 import {
   isValidRequestCap,
   parseRequestCapFromBody,
@@ -1330,7 +1330,6 @@ export function updateFromResponseBody(
     const budgetMs = resolveRequestQueueMaxWaitMs(provider, undefined, connectionId);
     const retry = { provider, connectionId, scopedModel, requestedModel, status, reason };
     if (!bodyRetryPause.lockModelForLongBodyRetry(retry, budgetMs, responseBody)) {
-      const fresh = !limiters.has(key);
       const pausedAt = Date.now(); // Bottleneck's refresh clock starts when the limiter is built
       const limiter = getLimiter(provider, connectionId, model);
       logRateLimit(
@@ -1341,7 +1340,7 @@ export function updateFromResponseBody(
         reservoirRefreshAmount: 60,
         reservoirRefreshInterval: retryAfterMs,
       });
-      if (fresh) bodyRetryPause.rememberLimiterPause(limiter, pausedAt + retryAfterMs);
+      bodyRetryPause.rememberLimiterPause(limiter, pausedAt + retryAfterMs);
     }
     // Record retry-after hint for dynamic queue budget
     recordUpstreamRetryAfterHint(provider, connectionId, retryAfterMs);
@@ -1388,3 +1387,22 @@ export function updateFromResponseBody(
   );
   updateLimiterSettings(limiter, { reservoir: 0, ...settings });
 }
+
+/**
+ * Check if a provider/connection/model limiter has an active local rate-limit pause.
+ */
+export function isProviderModelRateLimitPaused(
+  provider: string,
+  connectionId: string,
+  model: string | null | undefined,
+  now: number = Date.now()
+): boolean {
+  try {
+    const limiter = getLimiter(provider, connectionId, model);
+    return bodyRetryPause.isLimiterPaused(limiter, now);
+  } catch {
+    return false;
+  }
+}
+
+setRateLimitPauseChecker(isProviderModelRateLimitPaused);

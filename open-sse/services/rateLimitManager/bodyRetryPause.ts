@@ -153,3 +153,11 @@ export function checkLimiterPause(
     LEGACY_RATE_LIMIT_QUEUE_TIMEOUT_CODE
   );
 }
+
+/**
+ * Returns true if the limiter has an active local pause running into the future.
+ */
+export function isLimiterPaused(limiter: object, now: number = Date.now()): boolean {
+  const until = pausedUntil.get(limiter);
+  return until !== undefined && until > now;
+}

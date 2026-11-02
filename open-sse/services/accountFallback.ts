@@ -26,6 +26,18 @@ import * as rot from "./rotationConfig.ts";
 import { isContentPolicyRefusal } from "../utils/contentPolicyError.ts";
 import { isRegistryPassthroughProvider } from "./passthroughRegistry.ts";
 import { getProviderCategory, isLocalProvider } from "../config/providerRegistry.ts";
+
+type RateLimitPauseChecker = (
+  provider: string,
+  connectionId: string,
+  model: string | null | undefined,
+  now?: number
+) => boolean;
+let rateLimitPauseChecker: RateLimitPauseChecker | null = null;
+
+export function setRateLimitPauseChecker(checker: RateLimitPauseChecker): void {
+  rateLimitPauseChecker = checker;
+}
 import {
   DEFAULT_RESILIENCE_SETTINGS,
   resolveResilienceSettings,
@@ -1043,11 +1055,16 @@ export function isModelLocked(
   model: string | null | undefined
 ): boolean {
   if (!model) return false;
-  return exactModelLock.isAnyKeyLocked(
+  const locked = exactModelLock.isAnyKeyLocked(
     modelLockouts,
     cleanupModelLockKey,
     getModelLockKeys(provider, connectionId, model)
   );
+  if (locked) return true;
+  if (rateLimitPauseChecker && rateLimitPauseChecker(provider, connectionId, model)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -2391,10 +2408,18 @@ export function cooldownUntilMs(value: string | number | Date | null | undefined
 /**
  * Check if account is currently unavailable (cooldown not expired)
  */
-export function isAccountUnavailable(unavailableUntil: string | Date | null | undefined): boolean {
-  if (!unavailableUntil) return false;
-  const ms = cooldownUntilMs(unavailableUntil);
-  return Number.isFinite(ms) && ms > Date.now();
+export function isAccountUnavailable(
+  unavailableUntil: string | Date | null | undefined,
+  provider?: string,
+  connectionId?: string
+): boolean {
+  if (unavailableUntil && cooldownUntilMs(unavailableUntil) > Date.now()) return true;
+  if (provider && connectionId && rateLimitPauseChecker) {
+    if (rateLimitPauseChecker(provider, connectionId, null)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
