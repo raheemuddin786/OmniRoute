@@ -176,6 +176,12 @@ export {
 };
 export { resolveShadowTargets, scheduleShadowRouting };
 export { preScreenTargets };
+export {
+  getModelHealthCache,
+  recordModelHealthResult,
+  recordModelHealthSuccess,
+  recordModelHealthFailure,
+} from "./combo/modelHealthCache.ts";
 export { resolveComboRuntimeUnits, resolveComboTargets, filterTargetsByRequestCompatibility };
 export {
   getComboFromData,

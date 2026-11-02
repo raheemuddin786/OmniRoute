@@ -1308,6 +1308,34 @@ export async function getProviderCredentials(
             "AUTH",
             `${provider} | all ${allConnections.length} accounts rate limited (${formatRetryAfter(earliest)})`
           );
+
+          // Proactive sibling account rotation for claude-web
+          // When one account is rate limited, find and use a healthy sibling account
+          if (provider === "claude-web") {
+            const healthyAccount = allConnections.find(
+              (conn) =>
+                conn.isActive &&
+                (!conn.rateLimitedUntil || cooldownUntilMs(conn.rateLimitedUntil) <= Date.now())
+            );
+            if (
+              healthyAccount &&
+              healthyAccount.id !== (options.forcedConnectionId as string | undefined)
+            ) {
+              log.info(
+                "AUTH",
+                `Claude Web proactive rotation: switching from rate-limited account to healthy sibling ${healthyAccount.id?.slice(0, 8)}`
+              );
+              // Retry with the healthy account directly
+              return getProviderCredentials(
+                provider,
+                excludeConnectionId,
+                [healthyAccount.id],
+                requestedModel,
+                { ...options, forcedConnectionId: healthyAccount.id }
+              );
+            }
+          }
+
           invalidateManagedLease(options, "HEALTH_OR_COOLDOWN");
           return {
             allRateLimited: true,

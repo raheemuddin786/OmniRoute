@@ -28,6 +28,7 @@ import { lookupPositiveCap } from "./concurrencyCaps.ts";
 import { recordComboDecision } from "./decisionTrace.ts";
 import { recordPersistedSkipBypass } from "../comboMetrics.ts";
 import { getExhaustedTargetSkipReason } from "./comboPredicates.ts";
+import { getModelHealthCache } from "./modelHealthCache.ts";
 import { resolveAndRecordPersistedCooldown } from "./persistedConnectionCooldown.ts";
 import { resolveQuotaExhaustionCutoffForTarget } from "./quotaExhaustionCutoff.ts";
 import type { ProtectedPriorityStopCause } from "./protectedPriorityStopStatus.ts";
@@ -188,18 +189,26 @@ export async function evaluateExecuteTargetGates(opts: {
 
   const preScreenEntry = deps.preScreenMap.get(target.executionKey);
   if (preScreenEntry && preScreenEntry.available === false) {
-    deps.log.info("COMBO", `Skipping ${modelStr} — target marked unavailable during pre-screen`);
-    recordComboDecision(deps.traceInvocationId, {
-      step: target.executionKey,
-      target: modelStr,
-      decision: "skipped_before_dispatch",
-      reason: "availability",
-    });
-    bumpFallback();
-    return {
-      kind: "skip",
-      result: stopProtectedPriorityTarget(`Model ${modelStr} is unavailable (pre-screen)`),
-    };
+    // Transient retry logic: if the pre-screen failure was due to stale state,
+    // attempt to re-validate the model health before skipping
+    if (await shouldRetryPreScreenCheck(target, preScreenEntry, deps)) {
+      deps.log.debug("COMBO", `Retrying pre-screen for ${modelStr} after stale state detection`);
+      // Clear stale state and allow this target to proceed
+      deps.preScreenMap.set(target.executionKey, { ...preScreenEntry, available: true });
+    } else {
+      deps.log.info("COMBO", `Skipping ${modelStr} — target marked unavailable during pre-screen`);
+      recordComboDecision(deps.traceInvocationId, {
+        step: target.executionKey,
+        target: modelStr,
+        decision: "skipped_before_dispatch",
+        reason: "availability",
+      });
+      bumpFallback();
+      return {
+        kind: "skip",
+        result: stopProtectedPriorityTarget(`Model ${modelStr} is unavailable (pre-screen)`),
+      };
+    }
   }
 
   const profile = preScreenEntry?.profile ?? (await getRuntimeProviderProfile(provider));
@@ -520,4 +529,40 @@ export async function evaluateExecuteTargetGates(opts: {
     profile,
     protectedPriorityTarget,
   };
+}
+
+/**
+ * Check if a pre-screen failure should be retried due to stale state
+ * Returns true if the target should be re-validated instead of skipped
+ */
+async function shouldRetryPreScreenCheck(
+  target: ResolvedComboTarget,
+  _preScreenEntry: { profile?: unknown; available?: boolean },
+  _deps: AttemptLoopDeps
+): Promise<boolean> {
+  // Only retry for provider models that have per-model quota (antigravity, gemini, etc.)
+  const provider = target.provider;
+  const modelStr = target.modelStr;
+
+  // Check if this is a model with per-model quota that might have stale lockout
+  const hasPerModelQuota =
+    provider === "antigravity" ||
+    provider === "gemini" ||
+    provider === "vertex" ||
+    provider === "github";
+
+  if (!hasPerModelQuota) return false;
+
+  // Check model health cache to see if this is a transient vs persistent failure
+  try {
+    const health = await getModelHealthCache(modelStr, provider);
+    // If continuous failures < 1 hour, it might be transient - allow retry
+    if (health.continuousFailures < 60 * 60) {
+      return true;
+    }
+  } catch {
+    // If health check fails, don't block retry
+  }
+
+  return false;
 }
