@@ -111,40 +111,89 @@ function extractSubTasks(prompt: string, primaryTaskType: TaskType): SubTask[] {
   // Common patterns for independent parallel tasks
   const parallelPatterns = [
     {
-      keywords: ["security", "audit", "vulnerability", "penetration"],
+      keywords: ["security", "audit", "vulnerability", "penetration", "threat", "scan"],
       name: "Security Analysis",
       type: "reasoning" as TaskType,
       artifact: "ANALYSIS" as const,
     },
     {
-      keywords: ["performance", "optimize", "benchmark", "profiling"],
+      keywords: ["performance", "optimize", "benchmark", "profiling", "measure", "efficiency"],
       name: "Performance Analysis",
       type: "reasoning" as TaskType,
       artifact: "ANALYSIS" as const,
     },
     {
-      keywords: ["architecture", "design", "structure", "pattern"],
+      keywords: [
+        "architecture",
+        "design",
+        "structure",
+        "pattern",
+        "design pattern",
+        "system architecture",
+      ],
       name: "Architecture Review",
       type: "reasoning" as TaskType,
       artifact: "SCHEMA" as const,
     },
     {
-      keywords: ["test", "testing", "unit test", "integration test"],
+      keywords: ["test", "testing", "unit test", "integration test", "assert", "coverage", "spec"],
       name: "Test Generation",
       type: "code" as TaskType,
       artifact: "TEST_RESULTS" as const,
     },
     {
-      keywords: ["document", "documentation", "readme", "comments"],
+      keywords: ["document", "documentation", "readme", "comments", "docstring", "api doc"],
       name: "Documentation",
       type: "creative" as TaskType,
       artifact: "CODE" as const,
     },
     {
-      keywords: ["refactor", "cleanup", "modernize", "lint"],
+      keywords: ["refactor", "cleanup", "modernize", "lint", "reorganize", "restructure"],
       name: "Refactoring",
       type: "code" as TaskType,
       artifact: "PATCH" as const,
+    },
+    {
+      keywords: ["fix", "bug", "issue", "error", "bug fix", "debug", "resolve"],
+      name: "Bug Fix",
+      type: "code" as TaskType,
+      artifact: "PATCH" as const,
+    },
+    {
+      keywords: ["implement", "add", "create", "build", "write", "generate", "new feature"],
+      name: "Implementation",
+      type: "code" as TaskType,
+      artifact: "CODE" as const,
+    },
+    {
+      keywords: ["verify", "validate", "check", "inspect", "review", "analysis"],
+      name: "Verification",
+      type: "reasoning" as TaskType,
+      artifact: "ANALYSIS" as const,
+    },
+    {
+      keywords: ["analysis", "analyze", "investigate", "explore", "study", "examine"],
+      name: "Analysis",
+      type: "reasoning" as TaskType,
+      artifact: "ANALYSIS" as const,
+    },
+    {
+      keywords: ["run", "execute", "execute test", "run script", "execute command", "shell"],
+      name: "Execution",
+      type: "creative" as TaskType,
+      artifact: "CODE" as const,
+    },
+    {
+      keywords: ["migrate", "move", "transfer", "convert", "transform"],
+      name: "Migration",
+      type: "code" as TaskType,
+      artifact: "PATCH" as const,
+    },
+    {
+      keywords: ["configure", "setup", "install", "initialize", "create environment"],
+      name: "Setup",
+      type: "creative" as TaskType,
+      artifact: "CODE" as const,
     },
   ];
 

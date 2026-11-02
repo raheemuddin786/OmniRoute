@@ -360,9 +360,10 @@ export function enhanceInboundPrompt(
 
   enhancedText += resolvedPrompt;
 
-  // Append strict zero-omission completion mandate
+  // Append strict zero-omission completion mandate and anti-looping directive
   const zeroOmissionMandate =
-    "\n\n[Completion Standard: Output complete, production-ready implementation. Strictly ZERO placeholders, NO '// TODO', and NO truncated code blocks.]";
+    "\n\n[Completion Standard: Output complete, production-ready implementation. Strictly ZERO placeholders, NO '// TODO', and NO truncated code blocks.]" +
+    "\n[Execution Standard: DO NOT repeatedly read or inspect the same files. After reading necessary context, immediately proceed to editing or test execution. Continuous reading without action is strictly prohibited.]";
   if (!enhancedText.includes("Completion Standard")) {
     enhancedText += zeroOmissionMandate;
     appliedOptimizations.push("Zero-Omission & Completeness Mandate");
@@ -410,6 +411,8 @@ export function assignRoleDirective(
           "NEVER output instructions asking the user to manually run commands (e.g., npm run test:e2e, $ test, git). " +
           "NEVER halt prematurely before capturing all evidence, test outputs, and status proofs. " +
           "If a test or verification pipeline must be invoked, invoke it via tools (bash, MCP, browser). " +
+          "EXECUTION PRIORITY: Limit read operations to 1-2 files maximum. If inspection is complete, transition immediately to concrete verification or reporting. " +
+          "NEVER loop through the same files repeatedly. " +
           "Your scope includes: running verification pipelines, capturing live inspection outputs, preserving intent-adherence scores, " +
           "and generating concise completion summaries backed by verified execution output.";
 
@@ -420,6 +423,8 @@ export function assignRoleDirective(
       roleScope =
         "Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations. " +
         "Strictly preserve all existing code and architecture. Never output manual terminal commands to the user when task requires autonomous execution. " +
+        "EXECUTION MANDATE: You MUST perform concrete file modifications (Write/Edit) within your target scope. " +
+        "DO NOT spend turns merely reading or inspecting files without applying changes. " +
         "If the user requests an E2E test run or screenshot capture, invoke the verification pipeline via tools rather than echoing commands back.";
 
       return { assignedRole, roleScope };

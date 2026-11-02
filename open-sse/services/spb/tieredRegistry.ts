@@ -211,22 +211,25 @@ export function detectAndRecoverFromStagnation(
 
   // Detect stagnation based on consecutive read/inspection turns
   // Lower threshold to 2 turns to immediately catch read loops
-  if (consecutiveReads >= 2 && taskPhase === "INSPECTION_SYNTHESIS") {
+  if (
+    consecutiveReads >= 2 &&
+    (taskPhase === "INSPECTION_SYNTHESIS" || taskPhase === "DETERMINISTIC_ROUTING")
+  ) {
     isStagnant = true;
 
     // Generate strict recovery directive to break the loop
     recoveryDirective =
       "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections. " +
-      "Proceed immediately to concrete execution using editing tools (Write/Edit) or tests.";
+      "Proceed immediately to concrete execution using editing tools (Write/Edit) or tests. Do not perform any further read-only exploration.";
     const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
     // Escalate tier assignment:
-    // If consecutiveReads >= 4, escalate to Tier 1 Apex regardless of checkpoint
+    // If consecutiveReads >= 3, escalate to Tier 1 Apex regardless of checkpoint
     // to break any persistent inspection loops. Otherwise, escalate to Tier 2 Resilient.
     if (
-      (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 4) ||
-      consecutiveReads >= 4
+      (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 3) ||
+      consecutiveReads >= 3
     ) {
       escalationTier = "tier_1_apex";
       newTaskPhase = "ARCHITECTURAL_PLANNING";

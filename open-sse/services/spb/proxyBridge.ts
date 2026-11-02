@@ -219,10 +219,13 @@ export async function processSmartProxyRouting(
     let isStagnant = false;
     let autoRecoveryDirective: string | undefined;
 
-    // Calculate consecutiveReads: increment if INSPECTION_SYNTHESIS, reset otherwise
+    // Calculate consecutiveReads: increment if INSPECTION_SYNTHESIS or DETERMINISTIC_ROUTING, reset otherwise
     const priorConsecutiveReads = existingCheckpoint?.consecutiveReads ?? 0;
-    if (intent.taskPhase === "INSPECTION_SYNTHESIS") {
-      // Active inspection turn — increment the counter
+    if (
+      intent.taskPhase === "INSPECTION_SYNTHESIS" ||
+      intent.taskPhase === "DETERMINISTIC_ROUTING"
+    ) {
+      // Active inspection or read-only turn — increment the counter
       consecutiveReads = (priorConsecutiveReads || 0) + 1;
     } else {
       // Non-inspection turn (CODE_GENERATION, TESTING_AND_VERIFICATION, etc.) — reset
