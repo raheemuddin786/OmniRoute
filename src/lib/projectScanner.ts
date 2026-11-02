@@ -123,21 +123,73 @@ export function extractWorkspaceFromContext(
       return path.resolve(bodyObj.workspaceRoot);
     }
 
+    // Helper to extract workspace root from text containing working directory markers
+    const extractFromText = (text: string): string | null => {
+      // 1. Anthropic / Claude Code session environment banner:
+      // "Primary working directory: /Users/.../project"
+      const pwdMatch = text.match(/Primary working directory:\s*([^\r\n]+)/i);
+      if (pwdMatch && pwdMatch[1]) {
+        const cand = pwdMatch[1].trim();
+        if (isValidWorkspaceRoot(cand)) {
+          return path.resolve(cand);
+        }
+      }
+
+      // 2. Workspace roots XML: <workspace_roots><root>/path</root></workspace_roots>
+      const rootMatch = text.match(/<root>([^<]+)<\/root>/);
+      if (rootMatch && rootMatch[1] && isValidWorkspaceRoot(rootMatch[1])) {
+        return path.resolve(rootMatch[1]);
+      }
+
+      // 3. Common working directory / cwd / workspace markers:
+      const cwdMatch = text.match(/(?:working directory|cwd|workspace):\s*([/\\].+)/i);
+      if (cwdMatch && cwdMatch[1]) {
+        const cand = cwdMatch[1].trim().split(/[\r\n\s]+/)[0];
+        if (cand && isValidWorkspaceRoot(cand)) {
+          return path.resolve(cand);
+        }
+      }
+
+      return null;
+    };
+
+    // Check system prompt string or array (Anthropic / OpenAI format)
+    if (typeof bodyObj.system === "string") {
+      const match = extractFromText(bodyObj.system);
+      if (match) return match;
+    } else if (Array.isArray(bodyObj.system)) {
+      for (const sysItem of bodyObj.system) {
+        if (typeof sysItem === "string") {
+          const match = extractFromText(sysItem);
+          if (match) return match;
+        } else if (
+          sysItem &&
+          typeof sysItem === "object" &&
+          typeof (sysItem as { text?: unknown }).text === "string"
+        ) {
+          const match = extractFromText((sysItem as { text: string }).text);
+          if (match) return match;
+        }
+      }
+    }
+
     // Inspect messages / system prompts for workspace_roots XML or working directory markers
     const messages = Array.isArray(bodyObj.messages) ? bodyObj.messages : [];
     for (const msg of messages) {
       if (!msg || typeof msg !== "object") continue;
       const content = (msg as { content?: unknown }).content;
       if (typeof content === "string") {
-        const rootMatch = content.match(/<root>([^<]+)<\/root>/);
-        if (rootMatch && rootMatch[1] && isValidWorkspaceRoot(rootMatch[1])) {
-          return path.resolve(rootMatch[1]);
-        }
-        const cwdMatch = content.match(/(?:working directory|cwd|workspace):\s*([/\\].+)/i);
-        if (cwdMatch && cwdMatch[1]) {
-          const cand = cwdMatch[1].trim().split(/\s+/)[0];
-          if (cand && isValidWorkspaceRoot(cand)) {
-            return path.resolve(cand);
+        const match = extractFromText(content);
+        if (match) return match;
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (
+            part &&
+            typeof part === "object" &&
+            typeof (part as { text?: unknown }).text === "string"
+          ) {
+            const match = extractFromText((part as { text: string }).text);
+            if (match) return match;
           }
         }
       }

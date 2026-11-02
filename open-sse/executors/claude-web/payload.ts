@@ -187,16 +187,21 @@ export function transformOpenAiTools(tools: unknown): ClaudeWebRequestPayload["t
 }
 
 /**
- * Get default personalized style
+ * Get default personalized style with optional system prompt injection
+ * System prompts are injected into the personalized style prompt field
+ * to avoid being treated as user content by Claude Web
  */
-export function getDefaultPersonalizedStyle(): ClaudeWebRequestPayload["personalized_styles"] {
+export function getDefaultPersonalizedStyle(
+  systemPrompt?: string
+): ClaudeWebRequestPayload["personalized_styles"] {
+  const basePrompt = systemPrompt ? `${systemPrompt}\n\nNormal` : "Normal\n";
   return [
     {
       type: "default",
       key: "Default",
       name: "Normal",
       nameKey: "normal_style_name",
-      prompt: "Normal\n",
+      prompt: basePrompt,
       summary: "Default responses from Claude",
       summaryKey: "normal_style_summary",
       isDefault: true,
@@ -326,6 +331,19 @@ function resolveClaudeWebThinkingMode(
   return { effort: "low", thinkingMode: "off" };
 }
 
+function extractSystemPrompt(messages: unknown[]): string | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  const systemParts: string[] = [];
+  for (const candidate of messages) {
+    if (!isRecord(candidate)) continue;
+    if (candidate.role === "system") {
+      const text = messageText(candidate.content);
+      if (text) systemParts.push(text);
+    }
+  }
+  return systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
+}
+
 function buildClaudeWebPayload(
   body: Record<string, unknown>,
   model: string,
@@ -333,11 +351,12 @@ function buildClaudeWebPayload(
   turn: ClaudeWebTurnFields
 ): ClaudeWebRequestPayload {
   const thinking = resolveClaudeWebThinkingMode(model, reasoningEffort);
+  const systemPrompt = extractSystemPrompt(Array.isArray(body.messages) ? body.messages : []);
   return {
     prompt: turn.prompt,
     model,
     timezone: turn.timezone,
-    personalized_styles: getDefaultPersonalizedStyle(),
+    personalized_styles: getDefaultPersonalizedStyle(systemPrompt),
     locale: turn.locale,
     tools: transformOpenAiTools(body.tools),
     turn_message_uuids: {

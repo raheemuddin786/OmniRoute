@@ -206,6 +206,54 @@ test("extractWorkspaceFromContext extracts valid project roots from headers or b
     scanner.extractWorkspaceFromContext({ "x-project-path": "/Users/test/.nvm/bin" }),
     null
   );
+
+  // Claude Code session-start banner in Anthropic system prompt
+  const claudeBanner = `SessionStart:startup hook success: brand-forge: no brand configured — run /brand-new to create one
+
+Environment
+You have been invoked in the following environment:
+
+Primary working directory: ${currentDir}
+Is a git repository: true
+Platform: darwin
+Shell: zsh
+OS Version: Darwin 27.0.0
+You are powered by the model agentic-code-fast.
+
+Output Style: english-only
+Always respond to the user in English.`;
+
+  // Anthropic Messages API: system as string
+  assert.equal(scanner.extractWorkspaceFromContext(null, { system: claudeBanner }), currentDir);
+
+  // Anthropic Messages API: system as array of text blocks
+  assert.equal(
+    scanner.extractWorkspaceFromContext(null, {
+      system: [{ type: "text", text: claudeBanner }],
+    }),
+    currentDir
+  );
+
+  // OpenAI Chat Completions API: system message with banner content
+  assert.equal(
+    scanner.extractWorkspaceFromContext(null, {
+      messages: [{ role: "system", content: claudeBanner }],
+    }),
+    currentDir
+  );
+
+  // OpenAI Chat Completions API: system message with banner content as content array
+  assert.equal(
+    scanner.extractWorkspaceFromContext(null, {
+      messages: [
+        {
+          role: "system",
+          content: [{ type: "text", text: claudeBanner }],
+        },
+      ],
+    }),
+    currentDir
+  );
 });
 
 test("deleteProject removes the project record", () => {

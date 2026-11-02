@@ -52,10 +52,16 @@ export const claude_webProvider: RegistryEntry = {
     },
     { id: "claude-opus-4-7", name: "Claude Opus 4.7 (web)", toolCalling: false },
     { id: "claude-opus-4-6", name: "Claude Opus 4.6 (web)", toolCalling: false },
-    { id: "claude-sonnet-5", name: "Claude Sonnet 5 (web)", toolCalling: true },
+    {
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5 (web)",
+      aliases: ["claude-sonnet-5-web"],
+      toolCalling: true,
+    },
     {
       id: "claude-sonnet-5-5",
       name: "Claude Sonnet 5.5 (web)",
+      aliases: ["claude-sonnet-5-web-5"],
       toolCalling: true,
       supportsReasoning: true,
       supportedThinkingEfforts: ["low", "medium", "high", "xhigh", "max"],

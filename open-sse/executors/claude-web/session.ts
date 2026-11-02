@@ -128,8 +128,11 @@ function normalizeMessages(body: Record<string, unknown>): NormalizedMessage[] {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
     const message = candidate as Record<string, unknown>;
     if (typeof message.role !== "string" || !message.role.trim()) continue;
+    const role = message.role.trim().toLowerCase();
+    // Skip system messages - they are handled via personalized_styles in payload
+    if (role === "system") continue;
     normalized.push({
-      role: message.role.trim().toLowerCase(),
+      role,
       content: normalizeContent(message.content),
     });
   }
