@@ -1011,3 +1011,50 @@ test("Stagnation Recovery: Tier 2 persistent stagnation (>= 5 reads) escalates t
   assert.equal(recovery.newTaskPhase, "ARCHITECTURAL_PLANNING");
   assert.ok(recovery.recoveryDirective?.includes("ARCHITECTURAL RESOLUTION MANDATE"));
 });
+
+test("Stagnation Recovery: code mutation tool result turn resets consecutive reads counter", async () => {
+  const sessionId = "spb_code_mutation_reset_" + Date.now();
+  const { saveCheckpoint, getCheckpoint } = await import("../../src/lib/db/spbState.ts");
+
+  // Save an existing checkpoint simulating 2 consecutive reads
+  saveCheckpoint({
+    sessionId,
+    promptAnchorHash: "sha256:test_anchor_reset",
+    taskPhase: "INSPECTION_SYNTHESIS",
+    modelTier: "tier_3_local",
+    consecutiveReads: 2,
+    stagnationRecovered: 0,
+    statePayload: JSON.stringify({ messagesCount: 2 }),
+    createdAt: Date.now(),
+  });
+
+  // Verify checkpoint was written with consecutiveReads = 2
+  const cpBefore = getCheckpoint(sessionId);
+  assert.equal(cpBefore?.consecutiveReads, 2);
+
+  // Invoke routing with a tool result containing an edit/write mutation
+  await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: "Update the timeout setting" },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_123",
+            content: "File successfully edited: updated timeout from 30s to 60s",
+          },
+        ] as unknown as string,
+      },
+    ],
+  });
+
+  // Since a code mutation occurred, consecutiveReads must be reset to 0 in the checkpoint
+  const cpAfter = getCheckpoint(sessionId);
+  assert.equal(
+    cpAfter?.consecutiveReads,
+    0,
+    "consecutiveReads must be reset to 0 upon code modification"
+  );
+});

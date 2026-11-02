@@ -232,6 +232,11 @@ export async function processSmartProxyRouting(
       consecutiveReads = 0;
     }
 
+    // Reset consecutiveReads on actual code modification (if tool result shows edit/write)
+    if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
+      consecutiveReads = 0;
+    }
+
     // Detect stagnation using the unified recovery mechanism
     const stagnationRecovery = detectAndRecoverFromStagnation(
       sessionId,

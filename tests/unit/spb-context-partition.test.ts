@@ -130,3 +130,49 @@ test("contextPartition: executeSequentialPhase executes dependent tasks with con
   assert.ok(receivedPrompt.includes("Context from dependencies:"));
   assert.ok(receivedPrompt.includes("export function authenticate"));
 });
+
+test("contextPartition: extracts all granular subtask patterns accurately", () => {
+  const promptsAndExpected = [
+    {
+      prompt: "Fix the bug in the auth service",
+      expectedName: "Bug Fix",
+      expectedArtifact: "PATCH",
+    },
+    {
+      prompt: "Refactor and cleanup the database queries",
+      expectedName: "Refactoring",
+      expectedArtifact: "PATCH",
+    },
+    {
+      prompt: "Write comprehensive documentation and comments for the API",
+      expectedName: "Documentation",
+      expectedArtifact: "CODE",
+    },
+    {
+      prompt: "Migrate and convert the SQLite tables to Postgres",
+      expectedName: "Migration",
+      expectedArtifact: "PATCH",
+    },
+    {
+      prompt: "Configure and setup the new docker environment",
+      expectedName: "Setup",
+      expectedArtifact: "CODE",
+    },
+    {
+      prompt: "Run and execute script to benchmark performance",
+      expectedName: "Performance Analysis",
+      expectedArtifact: "ANALYSIS",
+    },
+  ];
+
+  for (const { prompt, expectedName, expectedArtifact } of promptsAndExpected) {
+    const res = decomposeRequestIntoSubTasks(prompt);
+    const allTasks = [...res.partitioned.parallelTasks, ...res.partitioned.sequentialTasks];
+    const matching = allTasks.find((t) => t.name === expectedName);
+    assert.ok(
+      matching,
+      `Expected pattern "${expectedName}" was not found in subtasks for prompt: "${prompt}"`
+    );
+    assert.equal(matching.expectedArtifactType, expectedArtifact);
+  }
+});

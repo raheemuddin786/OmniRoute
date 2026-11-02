@@ -31,6 +31,7 @@ export interface IntentProfile {
   complexityScore: number; // 0.0 to 1.0
   promptAnchorHash: string;
   isToolResultTurn: boolean;
+  isCodeMutationToolResult?: boolean;
   guidanceContract?: GuidanceContract;
   originalPrompt?: string; // preserved context for recovery and debugging
 }
@@ -319,6 +320,7 @@ export function classifyIntent(
     complexityScore,
     promptAnchorHash,
     isToolResultTurn,
+    isCodeMutationToolResult: !!isCodeMutationToolResult,
     originalPrompt: originalPromptText || "",
   };
 }
