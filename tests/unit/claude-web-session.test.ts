@@ -87,15 +87,13 @@ describe("Claude Web conversation sessions", () => {
     );
 
     assert.notEqual(recovered.payload.prompt, "new question");
-    for (const expected of [
-      "system rules",
-      "old question",
-      "old answer",
-      "tool result",
-      "new question",
-    ]) {
+    for (const expected of ["old question", "old answer", "tool result", "new question"]) {
       assert.match(recovered.payload.prompt, new RegExp(expected));
     }
+    // System prompt is now injected into personalized_styles, not the recovery prompt
+    assert.ok(recovered.payload.personalized_styles);
+    const stylePrompt = recovered.payload.personalized_styles?.[0]?.prompt || "";
+    assert.match(stylePrompt, /system rules/);
     assert.ok(recovered.payload.create_conversation_params);
   });
 
