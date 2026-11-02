@@ -12,9 +12,15 @@ const lazyRequire = createRequire(import.meta.url);
 const tierCache = new Map<string, TierAssignment>();
 let currentConfig: TierConfig = DEFAULT_TIER_CONFIG;
 let configLoadedFromDb = false;
+let lastConfigLoadTime = 0;
+const CONFIG_CACHE_TTL_MS = 2000; // 2-second TTL for config reload across processes
 
-function ensureConfigLoaded(): void {
-  if (configLoadedFromDb) return;
+function ensureConfigLoaded(force = false): void {
+  const now = Date.now();
+  if (!force && configLoadedFromDb && now - lastConfigLoadTime < CONFIG_CACHE_TTL_MS) {
+    return;
+  }
+  lastConfigLoadTime = now;
   configLoadedFromDb = true;
   try {
     const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
@@ -33,6 +39,46 @@ function ensureConfigLoaded(): void {
     } catch {
       currentConfig = DEFAULT_TIER_CONFIG;
     }
+  }
+}
+
+/**
+ * Recursively expand a combo from the SQLite combos table into concrete model strings.
+ * Supports direct models, nested combos, and kind="combo-ref".
+ */
+export function expandComboModelsFromDb(comboName: string, visited = new Set<string>()): string[] {
+  if (!comboName || visited.has(comboName)) return [];
+  visited.add(comboName);
+
+  try {
+    const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+    const db = getDbInstance();
+    const row = db.prepare("SELECT data FROM combos WHERE name = ?").get(comboName) as
+      { data: string } | undefined;
+    if (!row?.data) return [];
+
+    const comboData = JSON.parse(row.data);
+    const models = Array.isArray(comboData.models) ? comboData.models : [];
+    const resolved: string[] = [];
+
+    for (const entry of models) {
+      const modelStr = typeof entry === "string" ? entry : entry?.comboName || entry?.model;
+      if (!modelStr || typeof modelStr !== "string") continue;
+
+      const trimmed = modelStr.trim();
+      if (!trimmed) continue;
+
+      // If it exists as another combo in DB, expand recursively
+      const nested = expandComboModelsFromDb(trimmed, new Set(visited));
+      if (nested.length > 0) {
+        resolved.push(...nested);
+      } else {
+        resolved.push(trimmed);
+      }
+    }
+    return resolved;
+  } catch {
+    return [];
   }
 }
 
@@ -293,6 +339,7 @@ export function classifyTier(provider: string, model: string): TierAssignment {
 }
 
 export function setTierConfig(config?: Partial<TierConfig> | null): void {
+  lastConfigLoadTime = Date.now();
   if (config === null || config === undefined) {
     try {
       const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
@@ -360,7 +407,16 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
   let tierKey: "apex" | "resilient" | "local" | null = null;
   if (lower.includes("apex") || lower.includes("tier-1") || lower.includes("tier_1")) {
     tierKey = "apex";
-  } else if (lower.includes("resilient") || lower.includes("tier-2") || lower.includes("tier_2")) {
+  } else if (
+    lower.includes("resilient") ||
+    lower.includes("tier-2") ||
+    lower.includes("tier_2") ||
+    lower === "auto/spb" ||
+    lower === "auto/smart-proxy-bridge" ||
+    lower === "auto" ||
+    lower === "default" ||
+    lower === "spb"
+  ) {
     tierKey = "resilient";
   } else if (
     lower.includes("local") ||
@@ -375,22 +431,41 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
 
   const tierModels = currentConfig.tierModels?.[tierKey] || [];
 
-  // Filter out any self-referential virtual identifiers to prevent loops
-  const concreteModels = tierModels.filter((model) => {
-    const m = model.toLowerCase();
-    return (
-      !m.startsWith("apex/") &&
-      !m.startsWith("resilient/") &&
-      !m.startsWith("local/") &&
-      !m.startsWith("spb-") &&
-      !m.startsWith("tier_") &&
-      !m.includes("spb-tier") &&
-      m !== lower
-    );
-  });
+  const concreteModels: string[] = [];
 
-  if (concreteModels.length > 0) {
-    return concreteModels;
+  for (const model of tierModels) {
+    if (!model || typeof model !== "string") continue;
+    const trimmed = model.trim();
+    if (!trimmed) continue;
+
+    // 1. Expand combo models configured for the tier from the SQLite combos table
+    const expandedCombo = expandComboModelsFromDb(trimmed);
+    if (expandedCombo.length > 0) {
+      concreteModels.push(...expandedCombo);
+      continue;
+    }
+
+    // 2. Check if model is self-referential or a bare virtual alias that doesn't exist as a DB combo
+    const m = trimmed.toLowerCase();
+    const isSelfReferential =
+      m === lower ||
+      m.startsWith("apex/") ||
+      m.startsWith("resilient/") ||
+      m.startsWith("local/") ||
+      m.startsWith("spb-") ||
+      m.startsWith("tier_") ||
+      m.includes("spb-tier");
+
+    if (!isSelfReferential) {
+      concreteModels.push(trimmed);
+    }
+  }
+
+  // Deduplicate while preserving resolution priority
+  const uniqueConcrete = Array.from(new Set(concreteModels));
+
+  if (uniqueConcrete.length > 0) {
+    return uniqueConcrete;
   }
 
   // Dynamic fallback: discover active models from database provider connections and provider registry

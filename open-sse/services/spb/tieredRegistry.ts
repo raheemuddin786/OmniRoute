@@ -101,12 +101,18 @@ export function selectModelTier(
     !!guidanceContract &&
     (guidanceContract.origin === "supervisor" || guidanceContract.supervisorTier === "tier_1_apex");
 
+  // INSPECTION_SYNTHESIS tool result turns are read-only inspection (grep, search, read)
+  // and should route to Tier 3 Local per the intent classification hierarchy.
+  // Only CODE_GENERATION tool results (active code mutation) should stay in Tier 2.
+  const isInspectionToolResult = isToolResultTurn && taskPhase === "INSPECTION_SYNTHESIS";
+
   console.log(
-    `[SPB TieredRegistry] Evaluating taskPhase: ${taskPhase}, isInToolExecution: ${isInToolExecution}, guidanceContract present: ${!!guidanceContract}, isSupervisedCodeGen: ${isSupervisedCodeGen}`
+    `[SPB TieredRegistry] Evaluating taskPhase: ${taskPhase}, isInToolExecution: ${isInToolExecution}, isInspectionToolResult: ${isInspectionToolResult}, guidanceContract present: ${!!guidanceContract}, isSupervisedCodeGen: ${isSupervisedCodeGen}`
   );
-  // Keep active tool execution turns in resilient tier to prevent oscillation
+  // Keep active code mutation tool execution turns in resilient tier to prevent oscillation
+  // Allow read-only inspection tool results (INSPECTION_SYNTHESIS) to route to Tier 3
   if (
-    !isInToolExecution &&
+    (!isInToolExecution || isInspectionToolResult) &&
     (taskPhase === "INSPECTION_SYNTHESIS" ||
       taskPhase === "FAST_REFACTOR" ||
       taskPhase === "DETERMINISTIC_ROUTING" ||

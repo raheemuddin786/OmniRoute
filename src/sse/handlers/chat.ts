@@ -1,5 +1,9 @@
 import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
-import { getTierConfig, resolveVirtualTierModels } from "@omniroute/open-sse/services/tierResolver";
+import {
+  getTierConfig,
+  resolveVirtualTierModels,
+  expandComboModelsFromDb,
+} from "@omniroute/open-sse/services/tierResolver";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -1393,7 +1397,7 @@ async function handleChatImplementation(
       );
     };
 
-    // Expand virtual tier identifiers to concrete candidate models
+    // Expand virtual tier identifiers and configured combo models to concrete candidate models
     const rawCandidates: string[] = [];
     for (const m of candidateModels) {
       const modelName = typeof m === "string" ? m : (m as any)?.model || "";
@@ -1401,9 +1405,21 @@ async function handleChatImplementation(
         const resolved = resolveVirtualTierModels(modelName);
         if (resolved.length > 0) {
           rawCandidates.push(...resolved);
+        } else {
+          // If resolveVirtualTierModels didn't resolve directly, check if it's a combo in SQLite
+          const fromCombo = expandComboModelsFromDb(modelName);
+          if (fromCombo.length > 0) {
+            rawCandidates.push(...fromCombo);
+          }
         }
       } else {
-        rawCandidates.push(modelName);
+        // Direct model or custom-named combo
+        const fromCombo = expandComboModelsFromDb(modelName);
+        if (fromCombo.length > 0) {
+          rawCandidates.push(...fromCombo);
+        } else {
+          rawCandidates.push(modelName);
+        }
       }
     }
     if (rawCandidates.length === 0) {
