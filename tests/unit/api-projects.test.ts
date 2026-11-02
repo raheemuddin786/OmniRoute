@@ -162,3 +162,47 @@ test("API: POST /api/v1/projects registers a custom project", async () => {
   const delData = await delRes.json();
   assert.equal(delData.success, true);
 });
+
+test("API: GET /api/v1/projects auto-discovers distinct workspace_root from call_logs", async () => {
+  const db = core.getDbInstance();
+
+  // Create temporary valid workspace directory
+  const tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-auto-discover-"));
+  fs.writeFileSync(
+    path.join(tempWorkspaceDir, "package.json"),
+    JSON.stringify({ name: "auto-discovered-app", description: "Auto discovered workspace" })
+  );
+
+  // Insert a mock call log with this workspace_root
+  db.prepare(
+    `INSERT INTO call_logs (id, timestamp, method, path, status, model, duration, workspace_root)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "call_auto_disc_001",
+    new Date().toISOString(),
+    "POST",
+    "/v1/chat/completions",
+    200,
+    "gpt-4o",
+    120,
+    tempWorkspaceDir
+  );
+
+  const req = mockRequest("GET", "http://localhost:20128/api/v1/projects");
+  const res = await getProjects(req);
+  assert.equal(res.status, 200);
+
+  const data = await res.json();
+  assert.equal(data.success, true);
+  const discovered = data.projects.find(
+    (p: { basePath: string }) => p.basePath === tempWorkspaceDir
+  );
+  assert.ok(discovered, "Workspace from call_logs should be auto-discovered and registered");
+  assert.equal(discovered.basePath, tempWorkspaceDir);
+  assert.equal(discovered.name, "auto-discovered-app");
+
+  // Cleanup temp dir
+  try {
+    fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
+  } catch {}
+});

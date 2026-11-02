@@ -715,8 +715,35 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
     );
     if (candidateRoot) {
       workspaceRoot = candidateRoot;
-      const { getProjectByBasePath } = await import("@/lib/db/projectRegistry.ts");
-      const project = getProjectByBasePath(candidateRoot);
+      const projectRegistry = await import("@/lib/db/projectRegistry.ts");
+      const { scanProjectDirectory } = await import("@/lib/projectScanner.ts");
+      const { randomUUID } = await import("node:crypto");
+      let project = projectRegistry.getProjectByBasePath(candidateRoot);
+      if (!project) {
+        // Auto-register the first time a request is observed from a new workspace
+        // so subsequent calls resolve the project id and project-scoped analytics
+        // without requiring manual registration.
+        try {
+          const scan = scanProjectDirectory(candidateRoot, "derived");
+          const id = `proj_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+          project = projectRegistry.insertProject(
+            id,
+            scan.name,
+            scan.basePath,
+            scan.description,
+            scan.techStack,
+            scan.cloudStack,
+            scan.features,
+            scan.filesCount,
+            scan.docsCount,
+            "active",
+            scan.provenance,
+            scan.memoryLocations
+          );
+        } catch {
+          // Best-effort: leave project null if scanning/insertion fails
+        }
+      }
       if (project) {
         projectId = project.id;
       }

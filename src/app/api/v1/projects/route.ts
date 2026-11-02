@@ -31,6 +31,50 @@ function ensureWorkspacesDerived() {
     // Graceful fallback
   }
 
+  // 1. Direct workspace roots already observed in call_logs (migration 219)
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(call_logs)").all() as Array<{ name?: string }>;
+    const hasWorkspaceCol = tableInfo.some((r) => r.name === "workspace_root");
+    if (hasWorkspaceCol) {
+      const distinctRoots = db
+        .prepare(
+          `SELECT DISTINCT workspace_root
+           FROM call_logs
+           WHERE workspace_root IS NOT NULL AND length(trim(workspace_root)) > 0
+           LIMIT 100`
+        )
+        .all() as Array<{ workspace_root: string }>;
+
+      for (const row of distinctRoots) {
+        const rootPath = row.workspace_root?.trim();
+        if (rootPath && isValidWorkspaceRoot(rootPath)) {
+          const existing = getProjectByBasePath(rootPath);
+          if (!existing) {
+            const scan = scanProjectDirectory(rootPath, "derived");
+            const id = `proj_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+            insertProject(
+              id,
+              scan.name,
+              scan.basePath,
+              scan.description,
+              scan.techStack,
+              scan.cloudStack,
+              scan.features,
+              scan.filesCount,
+              scan.docsCount,
+              "active",
+              scan.provenance,
+              scan.memoryLocations
+            );
+          }
+        }
+      }
+    }
+  } catch {
+    // Graceful fallback if call_logs schema or query fails
+  }
+
+  // 2. Discover candidate workspaces from unstructured log snippets, current working directory, and worktrees
   try {
     const logs = db
       .prepare(

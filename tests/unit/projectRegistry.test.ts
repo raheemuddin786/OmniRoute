@@ -263,3 +263,43 @@ test("deleteProject removes the project record", () => {
   const found = reg.getProject("proj_test_001");
   assert.equal(found, null);
 });
+
+test("callLogs buildCallLogRow auto-registers new workspace into projectRegistry", async () => {
+  const callLogsModule = await import("../../src/lib/usage/callLogs.ts");
+
+  const tempProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-ingress-disc-"));
+  fs.writeFileSync(
+    path.join(tempProjectDir, "package.json"),
+    JSON.stringify({ name: "ingress-discovered-app", description: "Discovered at proxy ingress" })
+  );
+
+  const entry = {
+    method: "POST",
+    path: "/v1/chat/completions",
+    status: 200,
+    model: "claude-3-7-sonnet",
+    headers: {
+      "x-omniroute-workspace-root": tempProjectDir,
+    },
+    body: {
+      messages: [{ role: "user", content: "test prompt" }],
+    },
+  };
+
+  // Trigger call log save
+  await callLogsModule.saveCallLog(entry);
+
+  // Verify that the workspace was automatically registered in project_registry
+  const registered = reg.getProjectByBasePath(tempProjectDir);
+  assert.ok(
+    registered,
+    "Workspace should be automatically registered in project_registry upon first request"
+  );
+  assert.equal(registered.basePath, tempProjectDir);
+  assert.equal(registered.name, "ingress-discovered-app");
+
+  // Cleanup
+  try {
+    fs.rmSync(tempProjectDir, { recursive: true, force: true });
+  } catch {}
+});
