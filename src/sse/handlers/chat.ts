@@ -1523,6 +1523,10 @@ async function handleChatImplementation(
                   currentTierConfig.fallbackTimeout >= 60000
                 ? currentTierConfig.fallbackTimeout
                 : DEFAULT_COMBO_TARGET_TIMEOUT_MS,
+          // Preserve SPB-selected model as primary to bypass 58-model fallback cascade
+          candidatePool: uniqueTierModels
+            .map((m) => (typeof m === "string" ? m : (m as any).model || ""))
+            .filter(Boolean),
         },
       };
     } else if (isVirtualTierModel || isSpbModel) {
