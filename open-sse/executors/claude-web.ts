@@ -146,7 +146,7 @@ interface CachedOrgId {
   expiresAt: number;
 }
 const organizationIdCache = new Map<string, CachedOrgId>();
-const ORG_ID_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const ORG_ID_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours for stable authenticated sessions
 const MAX_ORG_ID_CACHE_ENTRIES = 500;
 
 export function __clearClaudeWebOrgCacheForTesting(): void {

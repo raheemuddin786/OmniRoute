@@ -457,6 +457,13 @@ export function __resetClaudeWebSessionForTesting(): void {
   conversationCache.clear();
 }
 
+/**
+ * Resets all cached Claude Web state across session conversation tracking.
+ */
+export function resetClaudeWebCaches(): void {
+  conversationCache.clear();
+}
+
 export function __setClaudeWebSessionNowForTesting(value: number | null): void {
   testNow = value;
 }
