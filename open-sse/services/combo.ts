@@ -44,6 +44,7 @@ import { lookupPositiveCap } from "./combo/concurrencyCaps.ts";
 import { acquireQuotaShareConcurrencySlot } from "./combo/quotaShareConcurrency.ts";
 
 import { resolveConnectionTimeoutMs } from "../handlers/chatCore/upstreamTimeouts.ts";
+import { REGISTRY } from "../config/providers/index.ts";
 import { getCachedProviderConnectionById } from "../../src/lib/db/readCache.ts";
 
 import { expandPromptCacheAffinityTargetsFromConnections } from "./combo/promptCacheAffinity.ts";
@@ -654,7 +655,14 @@ export async function resolveTargetTimeoutMsForTarget(
   try {
     const connection = await getCachedProviderConnectionById(connectionId);
     if (!connection) return undefined;
-    const timeoutMs = resolveConnectionTimeoutMs(connection.providerSpecificData);
+    let timeoutMs = resolveConnectionTimeoutMs(connection.providerSpecificData);
+    if (timeoutMs === undefined && typeof connection.provider === "string" && connection.provider) {
+      const canonicalProvider = resolveProviderId(connection.provider);
+      const registryEntry = REGISTRY[canonicalProvider];
+      if (typeof registryEntry?.timeoutMs === "number" && registryEntry.timeoutMs > 0) {
+        timeoutMs = registryEntry.timeoutMs;
+      }
+    }
     if (timeoutMs === undefined) return undefined;
     return resolveComboTargetTimeoutMsForCombo(config, timeoutMs, strategy, comboCooldownWait);
   } catch (err) {
