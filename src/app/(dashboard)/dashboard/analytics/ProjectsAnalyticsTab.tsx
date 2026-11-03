@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import type { ProjectRegistry, ProjectAnalytics, ProjectBrief } from "@/lib/db/projectRegistry";
 import { matchesSearch } from "@/shared/utils/turkishText";
 import { fmtCompact } from "@/shared/utils/formatting";
+import { PromptAnalyticsTab } from "./tabs/PromptAnalyticsTab";
 
 export function ProjectsAnalyticsTab() {
   const [projects, setProjects] = useState<ProjectRegistry[]>([]);
@@ -22,6 +23,12 @@ export function ProjectsAnalyticsTab() {
     type: "success" | "error" | "info";
     message: string;
   } | null>(null);
+
+  // View modes: "overview" (metrics/models/brief) vs "prompts" (interactive prompt analytics)
+  const [projectViewMode, setProjectViewMode] = useState<"overview" | "prompts">("overview");
+
+  // Archive/filter states
+  const [showArchived, setShowArchived] = useState<boolean>(false);
 
   // Modal states
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -88,7 +95,11 @@ export function ProjectsAnalyticsTab() {
 
   // Filtered and sorted projects
   const filteredProjects = useMemo(() => {
-    let list = [...projects];
+    // Separate by archive status: "archiving" status represents archived projects
+    let list = projects.filter((p) => {
+      const isArchived = p.status === "archiving";
+      return showArchived ? isArchived : !isArchived;
+    });
 
     if (searchQuery.trim()) {
       const q = searchQuery.trim();
@@ -125,7 +136,7 @@ export function ProjectsAnalyticsTab() {
     });
 
     return list;
-  }, [projects, searchQuery, filterProvenance, sortBy]);
+  }, [projects, showArchived, searchQuery, filterProvenance, sortBy]);
 
   const handleOpenEditModal = () => {
     if (selectedProject) {
@@ -492,7 +503,39 @@ export function ProjectsAnalyticsTab() {
                   </div>
                 </div>
                 <span className="text-xs text-slate-500 font-mono shrink-0 ml-2">
-                  {projects.length} proj
+                  {projects.filter((p) => p.status !== "archiving").length} active
+                </span>
+              </button>
+            </div>
+
+            {/* Active vs Archived Sub-tabs */}
+            <div className="flex border-b border-slate-800/80 mb-3 text-xs">
+              <button
+                type="button"
+                onClick={() => setShowArchived(false)}
+                className={`flex-1 py-1.5 px-3 text-center font-medium border-b-2 transition-colors flex items-center justify-center space-x-1.5 ${
+                  !showArchived
+                    ? "border-indigo-500 text-indigo-400 bg-indigo-500/5"
+                    : "border-transparent text-slate-400 hover:text-slate-300"
+                }`}
+              >
+                <span>Active</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-400 font-mono">
+                  {projects.filter((p) => p.status !== "archiving").length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowArchived(true)}
+                className={`flex-1 py-1.5 px-3 text-center font-medium border-b-2 transition-colors flex items-center justify-center space-x-1.5 ${
+                  showArchived
+                    ? "border-amber-500 text-amber-400 bg-amber-500/5"
+                    : "border-transparent text-slate-400 hover:text-slate-300"
+                }`}
+              >
+                <span>Archived</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-400 font-mono">
+                  {projects.filter((p) => p.status === "archiving").length}
                 </span>
               </button>
             </div>
@@ -705,6 +748,30 @@ export function ProjectsAnalyticsTab() {
               <div className="flex items-center space-x-2">
                 {!isGlobalView && selectedProject && (
                   <>
+                    {/* View Mode Switcher - Project Details Section */}
+                    <div className="hidden lg:flex items-center space-x-1 bg-slate-950/60 rounded-lg border border-slate-700 p-0.5">
+                      <button
+                        onClick={() => setProjectViewMode("overview")}
+                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                          projectViewMode === "overview"
+                            ? "bg-slate-800 text-slate-200 shadow-sm"
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
+                        }`}
+                      >
+                        Overview
+                      </button>
+                      <button
+                        onClick={() => setProjectViewMode("prompts")}
+                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                          projectViewMode === "prompts"
+                            ? "bg-slate-800 text-slate-200 shadow-sm"
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
+                        }`}
+                      >
+                        Prompt Analytics
+                      </button>
+                    </div>
+
                     <button
                       onClick={handleOpenEditModal}
                       className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700"
@@ -854,209 +921,264 @@ export function ProjectsAnalyticsTab() {
             )}
           </div>
 
-          {/* Token Economics Section (6 Key Dimensions) */}
-          <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div className="flex items-center space-x-2">
-                <span className="text-lg">💎</span>
-                <h3 className="font-semibold text-slate-100">
-                  {isGlobalView
-                    ? "Global Token Economics & Consumption"
-                    : "Project Token Economics & Consumption"}
-                </h3>
-              </div>
-              {activeAnalytics ? (
-                <span className="text-xs text-slate-500 font-mono">
-                  Computed: {new Date(activeAnalytics.lastComputedAt * 1000).toLocaleTimeString()}
-                </span>
-              ) : (
-                <span className="text-xs text-amber-400/90 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                  On-Demand (Click Calculate to Load)
-                </span>
-              )}
-            </div>
-
-            {activeAnalytics ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                {/* 1. Success Tokens */}
-                <div className="bg-slate-950/60 p-3.5 rounded-xl border border-emerald-500/20">
-                  <span className="text-[11px] text-emerald-400 font-medium uppercase tracking-wider block">
-                    Success
-                  </span>
-                  <div
-                    className="text-base font-bold text-slate-100 mt-1 font-mono"
-                    title={`${activeAnalytics.tokenEconomics.success.toLocaleString()} tokens`}
-                  >
-                    {fmtCompact(activeAnalytics.tokenEconomics.success)}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">2xx responses</span>
+          {/* Conditional View: Prompts Analytics vs Standard Overview */}
+          {projectViewMode === "prompts" ? (
+            <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center space-x-2">
+                  <span className="text-lg">💬</span>
+                  <h3 className="font-semibold text-slate-100">
+                    Comprehensive Prompt Analytics & Session History
+                  </h3>
                 </div>
-
-                {/* 2. Wasted Tokens */}
-                <div className="bg-slate-950/60 p-3.5 rounded-xl border border-rose-500/20">
-                  <span className="text-[11px] text-rose-400 font-medium uppercase tracking-wider block">
-                    Wasted
-                  </span>
-                  <div
-                    className="text-base font-bold text-slate-100 mt-1 font-mono"
-                    title={`${activeAnalytics.tokenEconomics.wasted.toLocaleString()} tokens`}
-                  >
-                    {fmtCompact(activeAnalytics.tokenEconomics.wasted)}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">Errors / Aborts</span>
-                </div>
-
-                {/* 3. Cache Hits */}
-                <div className="bg-slate-950/60 p-3.5 rounded-xl border border-blue-500/20">
-                  <span className="text-[11px] text-blue-400 font-medium uppercase tracking-wider block">
-                    Cache Hits
-                  </span>
-                  <div
-                    className="text-base font-bold text-slate-100 mt-1 font-mono"
-                    title={`${activeAnalytics.tokenEconomics.cached.toLocaleString()} tokens`}
-                  >
-                    {fmtCompact(activeAnalytics.tokenEconomics.cached)}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">
-                    Prompt cache reads
-                  </span>
-                </div>
-
-                {/* 4. Saved Tokens */}
-                <div className="bg-slate-950/60 p-3.5 rounded-xl border border-indigo-500/20">
-                  <span className="text-[11px] text-indigo-400 font-medium uppercase tracking-wider block">
-                    Saved Tokens
-                  </span>
-                  <div
-                    className="text-base font-bold text-slate-100 mt-1 font-mono"
-                    title={`${activeAnalytics.tokenEconomics.saved.toLocaleString()} tokens`}
-                  >
-                    {fmtCompact(activeAnalytics.tokenEconomics.saved)}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">Combo & Caching</span>
-                </div>
-
-                {/* 5. Pricing / USD */}
-                <div className="bg-slate-950/60 p-3.5 rounded-xl border border-amber-500/20">
-                  <span className="text-[11px] text-amber-400 font-medium uppercase tracking-wider block">
-                    Pricing (USD)
-                  </span>
-                  <div className="text-base font-bold text-slate-100 mt-1 font-mono">
-                    ${activeAnalytics.tokenEconomics.costUsd.toFixed(4)}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">Ledger cost</span>
-                </div>
-
-                {/* 6. Unique Prompts */}
-                <div className="bg-slate-950/60 p-3.5 rounded-xl border border-purple-500/20">
-                  <span className="text-[11px] text-purple-400 font-medium uppercase tracking-wider block">
-                    Unique Prompts
-                  </span>
-                  <div
-                    className="text-base font-bold text-slate-100 mt-1 font-mono"
-                    title={`${activeAnalytics.sessions.uniquePrompts.toLocaleString()} unique prompts`}
-                  >
-                    {fmtCompact(activeAnalytics.sessions.uniquePrompts)}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">Distinct queries</span>
-                </div>
-              </div>
-            ) : (
-              <div className="py-8 text-center bg-slate-950/30 rounded-xl border border-slate-800/40">
-                <p className="text-xs text-slate-400">
-                  Token analytics are computed on-demand to maintain zero overhead on inference.
-                </p>
                 <button
-                  onClick={handleCalculateAnalytics}
-                  className="mt-3 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                  type="button"
+                  onClick={() => setProjectViewMode("overview")}
+                  className="px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
                 >
-                  ⚡ Run On-Demand Analytics
+                  ← Back to Overview
                 </button>
               </div>
-            )}
-          </div>
 
-          {/* Model Distribution & Agents/Combos breakdown */}
-          {activeAnalytics && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Models used */}
-              <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
-                <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
-                  <span>🤖</span>
-                  <span>Models Distribution</span>
-                </h4>
-                {activeAnalytics.agents.models?.byModel &&
-                Object.keys(activeAnalytics.agents.models.byModel).length > 0 ? (
-                  <div className="space-y-2">
-                    {Object.entries(activeAnalytics.agents.models.byModel).map(([model, count]) => (
-                      <div key={model} className="flex items-center justify-between text-xs">
-                        <span className="font-mono text-slate-300 truncate pr-2">{model}</span>
-                        <span className="font-mono text-slate-500">{count} calls</span>
+              <PromptAnalyticsTab
+                recentPrompts={activeAnalytics?.sessions?.recentPrompts ?? []}
+                tokensInSuccess={activeAnalytics?.tokenEconomics?.success ?? 0}
+                tokensOutSuccess={activeAnalytics?.tokenEconomics?.success ?? 0}
+                tokenEconomics={activeAnalytics?.tokenEconomics}
+                selectedProjectId={isGlobalView ? "Global Application" : selectedProject?.name}
+                onRefresh={handleCalculateAnalytics}
+                calculating={calculatingAnalytics}
+              />
+            </div>
+          ) : (
+            <>
+              {/* Token Economics Section (6 Key Dimensions) */}
+              <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-lg">💎</span>
+                    <h3 className="font-semibold text-slate-100">
+                      {isGlobalView
+                        ? "Global Token Economics & Consumption"
+                        : "Project Token Economics & Consumption"}
+                    </h3>
+                  </div>
+                  {activeAnalytics ? (
+                    <span className="text-xs text-slate-500 font-mono">
+                      Computed:{" "}
+                      {new Date(activeAnalytics.lastComputedAt * 1000).toLocaleTimeString()}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-amber-400/90 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                      On-Demand (Click Calculate to Load)
+                    </span>
+                  )}
+                </div>
+
+                {activeAnalytics ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {/* 1. Success Tokens */}
+                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-emerald-500/20">
+                      <span className="text-[11px] text-emerald-400 font-medium uppercase tracking-wider block">
+                        Success
+                      </span>
+                      <div
+                        className="text-base font-bold text-slate-100 mt-1 font-mono"
+                        title={`${activeAnalytics.tokenEconomics.success.toLocaleString()} tokens`}
+                      >
+                        {fmtCompact(activeAnalytics.tokenEconomics.success)}
                       </div>
-                    ))}
+                      <span className="text-[10px] text-slate-500 block mt-0.5">2xx responses</span>
+                    </div>
+
+                    {/* 2. Wasted Tokens */}
+                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-rose-500/20">
+                      <span className="text-[11px] text-rose-400 font-medium uppercase tracking-wider block">
+                        Wasted
+                      </span>
+                      <div
+                        className="text-base font-bold text-slate-100 mt-1 font-mono"
+                        title={`${activeAnalytics.tokenEconomics.wasted.toLocaleString()} tokens`}
+                      >
+                        {fmtCompact(activeAnalytics.tokenEconomics.wasted)}
+                      </div>
+                      <span className="text-[10px] text-slate-500 block mt-0.5">
+                        Errors / Aborts
+                      </span>
+                    </div>
+
+                    {/* 3. Cache Hits */}
+                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-blue-500/20">
+                      <span className="text-[11px] text-blue-400 font-medium uppercase tracking-wider block">
+                        Cache Hits
+                      </span>
+                      <div
+                        className="text-base font-bold text-slate-100 mt-1 font-mono"
+                        title={`${activeAnalytics.tokenEconomics.cached.toLocaleString()} tokens`}
+                      >
+                        {fmtCompact(activeAnalytics.tokenEconomics.cached)}
+                      </div>
+                      <span className="text-[10px] text-slate-500 block mt-0.5">
+                        Prompt cache reads
+                      </span>
+                    </div>
+
+                    {/* 4. Saved Tokens */}
+                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-indigo-500/20">
+                      <span className="text-[11px] text-indigo-400 font-medium uppercase tracking-wider block">
+                        Saved Tokens
+                      </span>
+                      <div
+                        className="text-base font-bold text-slate-100 mt-1 font-mono"
+                        title={`${activeAnalytics.tokenEconomics.saved.toLocaleString()} tokens`}
+                      >
+                        {fmtCompact(activeAnalytics.tokenEconomics.saved)}
+                      </div>
+                      <span className="text-[10px] text-slate-500 block mt-0.5">
+                        Combo & Caching
+                      </span>
+                    </div>
+
+                    {/* 5. Pricing / USD */}
+                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-amber-500/20">
+                      <span className="text-[11px] text-amber-400 font-medium uppercase tracking-wider block">
+                        Pricing (USD)
+                      </span>
+                      <div className="text-base font-bold text-slate-100 mt-1 font-mono">
+                        ${activeAnalytics.tokenEconomics.costUsd.toFixed(4)}
+                      </div>
+                      <span className="text-[10px] text-slate-500 block mt-0.5">Ledger cost</span>
+                    </div>
+
+                    {/* 6. Unique Prompts */}
+                    <div
+                      onClick={() => setProjectViewMode("prompts")}
+                      className="bg-slate-950/60 p-3.5 rounded-xl border border-purple-500/20 hover:border-purple-500/50 hover:bg-slate-950/80 cursor-pointer transition-all duration-200 group"
+                      title="Click to view detailed prompt analytics and session history"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-purple-400 font-medium uppercase tracking-wider block">
+                          Unique Prompts
+                        </span>
+                        <span className="text-[10px] text-purple-400/70 group-hover:text-purple-300 transition-colors">
+                          View ↗
+                        </span>
+                      </div>
+                      <div
+                        className="text-base font-bold text-slate-100 mt-1 font-mono group-hover:text-purple-200 transition-colors"
+                        title={`${activeAnalytics.sessions.uniquePrompts.toLocaleString()} unique prompts`}
+                      >
+                        {fmtCompact(activeAnalytics.sessions.uniquePrompts)}
+                      </div>
+                      <span className="text-[10px] text-slate-500 block mt-0.5">
+                        Distinct queries
+                      </span>
+                    </div>
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-500">No model calls recorded yet.</p>
+                  <div className="py-8 text-center bg-slate-950/30 rounded-xl border border-slate-800/40">
+                    <p className="text-xs text-slate-400">
+                      Token analytics are computed on-demand to maintain zero overhead on inference.
+                    </p>
+                    <button
+                      onClick={handleCalculateAnalytics}
+                      className="mt-3 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                    >
+                      ⚡ Run On-Demand Analytics
+                    </button>
+                  </div>
                 )}
               </div>
 
-              {/* Combos & Agents */}
-              <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
-                <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
-                  <span>⚡</span>
-                  <span>Agents & Routing Combos</span>
-                </h4>
-                <div className="space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Total Skills Enabled:</span>
-                    <span className="font-mono text-slate-200">
-                      {activeAnalytics.agents.skills.total}
-                    </span>
+              {/* Model Distribution & Agents/Combos breakdown */}
+              {activeAnalytics && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Models used */}
+                  <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
+                      <span>🤖</span>
+                      <span>Models Distribution</span>
+                    </h4>
+                    {activeAnalytics.agents.models?.byModel &&
+                    Object.keys(activeAnalytics.agents.models.byModel).length > 0 ? (
+                      <div className="space-y-2">
+                        {Object.entries(activeAnalytics.agents.models.byModel).map(
+                          ([model, count]) => (
+                            <div key={model} className="flex items-center justify-between text-xs">
+                              <span className="font-mono text-slate-300 truncate pr-2">
+                                {model}
+                              </span>
+                              <span className="font-mono text-slate-500">{count} calls</span>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500">No model calls recorded yet.</p>
+                    )}
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">MCP Server Tools:</span>
-                    <span className="font-mono text-slate-200">
-                      {activeAnalytics.agents.mcpTools ?? 110}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Active Combos:</span>
-                    <span className="font-mono text-slate-200">
-                      {(activeAnalytics.agents.combos ?? []).join(", ") || "Auto-Combo"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
-          {/* Executive Brief & Optimization Suggestions */}
-          {activeBrief && (
-            <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-6 shadow-sm space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center space-x-2">
-                  <span className="text-lg">✨</span>
-                  <h3 className="font-semibold text-slate-100">Executive Brief & Optimization</h3>
-                </div>
-                <span className="text-xs text-slate-500 font-mono">
-                  Generated: {new Date(activeBrief.generatedAt * 1000).toLocaleTimeString()}
-                </span>
-              </div>
-              <p className="text-sm text-slate-300 leading-relaxed">{activeBrief.summary}</p>
-
-              {activeBrief.optimizations && activeBrief.optimizations.length > 0 && (
-                <div className="pt-2">
-                  <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider block mb-2">
-                    Optimization Insights:
-                  </span>
-                  <ul className="list-disc list-inside space-y-1 text-xs text-slate-300">
-                    {activeBrief.optimizations.map((opt, idx) => (
-                      <li key={idx}>{opt}</li>
-                    ))}
-                  </ul>
+                  {/* Combos & Agents */}
+                  <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
+                      <span>⚡</span>
+                      <span>Agents & Routing Combos</span>
+                    </h4>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">Total Skills Enabled:</span>
+                        <span className="font-mono text-slate-200">
+                          {activeAnalytics.agents.skills.total}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">MCP Server Tools:</span>
+                        <span className="font-mono text-slate-200">
+                          {activeAnalytics.agents.mcpTools ?? 110}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">Active Combos:</span>
+                        <span className="font-mono text-slate-200">
+                          {(activeAnalytics.agents.combos ?? []).join(", ") || "Auto-Combo"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
-            </div>
+
+              {/* Executive Brief & Optimization Suggestions */}
+              {activeBrief && (
+                <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-lg">✨</span>
+                      <h3 className="font-semibold text-slate-100">
+                        Executive Brief & Optimization
+                      </h3>
+                    </div>
+                    <span className="text-xs text-slate-500 font-mono">
+                      Generated: {new Date(activeBrief.generatedAt * 1000).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-300 leading-relaxed">{activeBrief.summary}</p>
+
+                  {activeBrief.optimizations && activeBrief.optimizations.length > 0 && (
+                    <div className="pt-2">
+                      <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider block mb-2">
+                        Optimization Insights:
+                      </span>
+                      <ul className="list-disc list-inside space-y-1 text-xs text-slate-300">
+                        {activeBrief.optimizations.map((opt, idx) => (
+                          <li key={idx}>{opt}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
