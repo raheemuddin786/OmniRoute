@@ -745,33 +745,33 @@ export function ProjectsAnalyticsTab() {
                 </p>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* View Mode Switcher - Available in both Global and Project Scopes */}
+                <div className="flex items-center space-x-1 bg-slate-950/60 rounded-lg border border-slate-700 p-0.5">
+                  <button
+                    onClick={() => setProjectViewMode("overview")}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                      projectViewMode === "overview"
+                        ? "bg-slate-800 text-slate-200 shadow-sm"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
+                    }`}
+                  >
+                    Overview
+                  </button>
+                  <button
+                    onClick={() => setProjectViewMode("prompts")}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                      projectViewMode === "prompts"
+                        ? "bg-slate-800 text-slate-200 shadow-sm"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
+                    }`}
+                  >
+                    Prompt Analytics
+                  </button>
+                </div>
+
                 {!isGlobalView && selectedProject && (
                   <>
-                    {/* View Mode Switcher - Project Details Section */}
-                    <div className="hidden lg:flex items-center space-x-1 bg-slate-950/60 rounded-lg border border-slate-700 p-0.5">
-                      <button
-                        onClick={() => setProjectViewMode("overview")}
-                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                          projectViewMode === "overview"
-                            ? "bg-slate-800 text-slate-200 shadow-sm"
-                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
-                        }`}
-                      >
-                        Overview
-                      </button>
-                      <button
-                        onClick={() => setProjectViewMode("prompts")}
-                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                          projectViewMode === "prompts"
-                            ? "bg-slate-800 text-slate-200 shadow-sm"
-                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
-                        }`}
-                      >
-                        Prompt Analytics
-                      </button>
-                    </div>
-
                     <button
                       onClick={handleOpenEditModal}
                       className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700"
