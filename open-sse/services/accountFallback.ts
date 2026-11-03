@@ -968,6 +968,8 @@ export function hasPerModelQuota(
   if (isRegistryPassthroughProvider(canonicalId)) return true;
   if (isCompatibleProvider(canonicalId)) return true;
   if (isLocalProviderId(canonicalId) || isSelfHostedChatProvider(canonicalId)) return true;
+  // Claude Web multiplexes multiple models behind one cookie/session; lock the model, not the session
+  if (canonicalId === "claude-web") return true;
   return false;
 }
 
