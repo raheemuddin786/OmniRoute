@@ -601,3 +601,52 @@ test("mergeInjectedFallbackOwnerNames: no preConversionClientToolNames provided 
 
   assert.deepEqual(result.builtinToolNames, ["omniroute_web_search"]);
 });
+
+test("claude-web provider suppresses memory and skills tools injection", async () => {
+  const { updateSettings } = await import("../../src/lib/db/settings.ts");
+  const { invalidateMemorySettingsCache: invCW } = await import("../../src/lib/memory/settings.ts");
+
+  await updateSettings({ memoryEnabled: true, memoryMaxTokens: 2000, skillsEnabled: true });
+  invCW();
+  resetSkillsRegistry();
+
+  await skillRegistry.register({
+    name: "claude-web-test-skill",
+    version: "1.0.0",
+    description: "test skill",
+    schema: { input: {}, output: {} },
+    handler: "test-handler",
+    enabled: true,
+    apiKeyId: "owner-claude-web",
+    mode: "on",
+  });
+
+  const body: Record<string, unknown> = {
+    model: "claude-sonnet-4-6",
+    stream: false,
+    messages: [{ role: "user", content: "test prompt" }],
+  };
+
+  const result = await injectMemoryAndSkills({
+    body,
+    memoryOwnerId: "owner-claude-web",
+    provider: "claude-web",
+    effectiveModel: "claude-sonnet-4-6",
+    sourceFormat: FORMATS.CLAUDE,
+    targetFormat: FORMATS.CLAUDE,
+    backgroundReason: null,
+    log: { debug: () => {} },
+  });
+
+  const tools = (result.body.tools as unknown[] | undefined) ?? [];
+  assert.equal(tools.length, 0, "claude-web must not have memory or skill tools injected");
+  assert.equal(result.builtinToolNames.length, 0, "no builtin tools for claude-web");
+  assert.equal(
+    result.injectedCustomSkillNames.length,
+    0,
+    "no custom skills injected for claude-web"
+  );
+
+  resetSkillsRegistry();
+  invCW();
+});
