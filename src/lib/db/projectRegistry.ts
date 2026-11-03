@@ -273,25 +273,85 @@ export function updateProjectMeta(id: string, patch: Partial<ProjectRegistry>): 
   return (result?.changes ?? 0) > 0;
 }
 
+// ---------------------------------------------------------------------------
+// Schema-drift resilience
+// ---------------------------------------------------------------------------
+//
+// The production database was created from a pre-217 schema snapshot that
+// lacked the `provenance` and `status` columns declared in migration 217's
+// CREATE TABLE. SQLite's ALTER TABLE ADD COLUMN is the only safe way to add
+// columns to an existing table, so until migration 220 runs, any SELECT that
+// references those columns throws "no such column". The auto-registration path
+// in saveCallLog wraps its work in a best-effort try/catch, so that throw
+// silently swallowed the entire insert — the workspace was discovered but
+// never registered, leaving call_logs.workspace_root populated with
+// project_id NULL.
+//
+// To make the system robust regardless of migration state, every read helper
+// here resolves the column set dynamically and never assumes a column exists.
+// Writes always use the full column list (INSERT OR REPLACE / UPDATE), which
+// is safe because the migration adds the columns before any write runs.
+
+function projectRegistryColumns(db: ReturnType<typeof getDbInstance>): Set<string> {
+  try {
+    return new Set(
+      (db.prepare("PRAGMA table_info(project_registry)").all() as Array<{ name?: string }>).map(
+        (r) => r.name ?? ""
+      )
+    );
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function selectProjectSql(db: ReturnType<typeof getDbInstance>): string {
+  const cols = projectRegistryColumns(db);
+  const wanted = [
+    "id",
+    "name",
+    "base_path",
+    "description",
+    "tech_stack",
+    "cloud_stack",
+    "features",
+    "files_count",
+    "docs_count",
+    "status",
+    "provenance",
+    "memory_locations",
+    "rag_status",
+    "rag_indexed_count",
+    "analytics_cache",
+    "analytics_cached_at",
+    "brief_cache",
+    "brief_generated_at",
+    "created_at",
+    "updated_at",
+  ];
+  const available = wanted.filter((c) => cols.has(c));
+  return `SELECT ${available.join(", ")} FROM project_registry`;
+}
+
 export function getProject(id: string): ProjectRegistry | null {
   const db = getDbInstance();
-  const row = db.prepare(`SELECT * FROM project_registry WHERE id = ?`).get(id) as
+  const row = db.prepare(`${selectProjectSql(db)} WHERE id = ?`).get(id) as
     RawProjectRow | undefined;
   return row ? mapRowToProject(row) : null;
 }
 
 export function getProjectByBasePath(basePath: string): ProjectRegistry | null {
   const db = getDbInstance();
-  const row = db.prepare(`SELECT * FROM project_registry WHERE base_path = ?`).get(basePath) as
+  const row = db.prepare(`${selectProjectSql(db)} WHERE base_path = ?`).get(basePath) as
     RawProjectRow | undefined;
   return row ? mapRowToProject(row) : null;
 }
 
 export function listProjects(status?: ProjectRegistry["status"]): ProjectRegistry[] {
   const db = getDbInstance();
+  const baseSql = selectProjectSql(db);
   const sql = status
-    ? `SELECT * FROM project_registry WHERE status = ? ORDER BY name ASC`
-    : `SELECT * FROM project_registry ORDER BY name ASC`;
+    ? `${baseSql} WHERE status = ? ORDER BY name ASC`
+    : `${baseSql} ORDER BY name ASC`;
   const rows = (status ? db.prepare(sql).all(status) : db.prepare(sql).all()) as RawProjectRow[];
   return rows.map(mapRowToProject);
 }
@@ -300,6 +360,41 @@ export function deleteProject(id: string): boolean {
   const db = getDbInstance();
   const result = db.prepare(`DELETE FROM project_registry WHERE id = ?`).run(id);
   return (result?.changes ?? 0) > 0;
+}
+
+/**
+ * Archive a project. Archiving keeps the row (and its analytics cache) intact
+ * so historical call_logs rows referencing it remain queryable, but hides it
+ * from the default active list. Unlike DELETE, archive is reversible via
+ * reactivateProject().
+ */
+export function archiveProject(id: string): ProjectRegistry | null {
+  return updateProjectStatus(id, "archiving");
+}
+
+/**
+ * Reactivate an archived project back to the active state.
+ */
+export function reactivateProject(id: string): ProjectRegistry | null {
+  return updateProjectStatus(id, "active");
+}
+
+function updateProjectStatus(
+  id: string,
+  status: ProjectRegistry["status"]
+): ProjectRegistry | null {
+  const db = getDbInstance();
+  const cols = projectRegistryColumns(db);
+  if (!cols.has("status")) {
+    // Pre-migration schema: nothing to update, return the row as-is.
+    return getProject(id);
+  }
+  db.prepare(`UPDATE project_registry SET status = ?, updated_at = ? WHERE id = ?`).run(
+    status,
+    nowSeconds(),
+    id
+  );
+  return getProject(id);
 }
 
 export function setAnalyticsCache(id: string, analytics: ProjectAnalytics): void {

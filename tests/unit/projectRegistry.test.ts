@@ -367,3 +367,30 @@ test("callLogs buildCallLogRow inherits workspace_root from session_tag affinity
     fs.rmSync(tempProjectDir, { recursive: true, force: true });
   } catch {}
 });
+
+test("archiveProject and reactivateProject toggle status without deleting records", () => {
+  const p = reg.insertProject(
+    "proj_arch_test",
+    "Archivable Unit Project",
+    "/tmp/test-arch",
+    "Description",
+    [],
+    [],
+    [],
+    10,
+    1,
+    "active",
+    "manual"
+  );
+  assert.equal(p.status, "active");
+
+  const archived = reg.archiveProject("proj_arch_test");
+  assert.ok(archived);
+  assert.equal(archived.status, "archiving");
+
+  const reactivated = reg.reactivateProject("proj_arch_test");
+  assert.ok(reactivated);
+  assert.equal(reactivated.status, "active");
+
+  reg.deleteProject("proj_arch_test");
+});

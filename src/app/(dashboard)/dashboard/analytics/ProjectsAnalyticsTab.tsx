@@ -345,6 +345,57 @@ export function ProjectsAnalyticsTab() {
     }
   };
 
+  const handleArchiveProject = async (projectId: string, archive: boolean) => {
+    const project = projects.find((p) => p.id === projectId);
+    const label = archive ? "archive" : "restore";
+    if (
+      !confirm(
+        archive
+          ? `Archive "${project?.name ?? projectId}"? It will be hidden from the active list but its call-log linkage and analytics cache are preserved.`
+          : `Restore "${project?.name ?? projectId}" back to the active list?`
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/v1/projects/${projectId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: archive ? "archive" : "reactivate" }),
+      });
+      const data = await res.json();
+      if (data.success && data.project) {
+        showNotice("success", archive ? "Project archived" : "Project restored to active");
+        setProjects((prev) => prev.map((p) => (p.id === projectId ? data.project : p)));
+      } else {
+        showNotice("error", data.error || `Failed to ${label} project`);
+      }
+    } catch {
+      showNotice("error", `Failed to ${label} project`);
+    }
+  };
+
+  const handleRefreshProjects = async () => {
+    setScanning(true);
+    try {
+      const res = await fetch("/api/v1/projects/refresh", { method: "POST" });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.projects)) {
+        setProjects(data.projects);
+        showNotice(
+          "success",
+          `Workspace discovery complete — ${data.total} project(s) tracked, ${data.backfilled ?? 0} call-log rows backfilled`
+        );
+      } else {
+        showNotice("error", data.error || "Failed to refresh workspaces");
+      }
+    } catch {
+      showNotice("error", "Failed to refresh workspaces");
+    } finally {
+      setScanning(false);
+    }
+  };
+
   // Determine active analytics & brief to show
   const activeAnalytics: ProjectAnalytics | null = isGlobalView
     ? globalAnalytics
@@ -384,14 +435,27 @@ export function ProjectsAnalyticsTab() {
                 <span className="text-lg">🌿</span>
                 <h3 className="font-semibold text-slate-100">Workspaces & Projects</h3>
               </div>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors flex items-center space-x-1"
-                title="Add manual project directory"
-              >
-                <span>+</span>
-                <span>Manual</span>
-              </button>
+              <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={handleRefreshProjects}
+                  disabled={scanning}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 hover:text-white transition-colors border border-slate-700/80 flex items-center justify-center"
+                  title="Refresh / auto-discover workspaces and sync project linkages"
+                  aria-label="Refresh workspaces"
+                >
+                  <span className={`inline-block text-xs ${scanning ? "animate-spin" : ""}`}>
+                    🔄
+                  </span>
+                </button>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors flex items-center space-x-1"
+                  title="Add manual project directory"
+                >
+                  <span>+</span>
+                  <span>Manual</span>
+                </button>
+              </div>
             </div>
 
             {/* Global Application View Option */}
@@ -556,6 +620,47 @@ export function ProjectsAnalyticsTab() {
                           )}
                         </div>
                       )}
+
+                      {/* Per-project actions: archive / delete */}
+                      <div className="flex items-center justify-end gap-1.5 mt-2 pt-2 border-t border-slate-800/60">
+                        {p.status !== "archiving" && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleArchiveProject(p.id, true);
+                            }}
+                            className="px-2 py-1 text-[10px] font-medium rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors"
+                            title="Archive project (preserves linkage & analytics cache)"
+                          >
+                            Archive
+                          </button>
+                        )}
+                        {p.status === "archiving" && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleArchiveProject(p.id, false);
+                            }}
+                            className="px-2 py-1 text-[10px] font-medium rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors"
+                            title="Restore project to active"
+                          >
+                            Restore
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDeleteProject(p.id);
+                          }}
+                          className="px-2 py-1 text-[10px] font-medium rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-colors"
+                          title="Remove project from registry"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -594,13 +699,39 @@ export function ProjectsAnalyticsTab() {
               </div>
 
               <div className="flex items-center space-x-2">
-                {!isGlobalView && (
-                  <button
-                    onClick={handleOpenEditModal}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700"
-                  >
-                    Edit Metadata
-                  </button>
+                {!isGlobalView && selectedProject && (
+                  <>
+                    <button
+                      onClick={handleOpenEditModal}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700"
+                    >
+                      Edit Metadata
+                    </button>
+                    {selectedProject.status !== "archiving" ? (
+                      <button
+                        onClick={() => void handleArchiveProject(selectedProject.id, true)}
+                        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors border border-amber-500/30"
+                        title="Archive project (keeps call logs and analytics cache)"
+                      >
+                        Archive
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => void handleArchiveProject(selectedProject.id, false)}
+                        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 transition-colors border border-emerald-500/30"
+                        title="Restore project to active"
+                      >
+                        Restore
+                      </button>
+                    )}
+                    <button
+                      onClick={() => void handleDeleteProject(selectedProject.id)}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-colors border border-rose-500/30"
+                      title="Delete project from registry"
+                    >
+                      Delete
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={handleCalculateAnalytics}

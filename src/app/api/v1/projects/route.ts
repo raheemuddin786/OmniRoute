@@ -5,6 +5,7 @@ import {
   insertProject,
   getProjectByBasePath,
   deleteProject,
+  type ProjectRegistry,
 } from "@/lib/db/projectRegistry";
 import {
   scanProjectDirectory,
@@ -15,7 +16,7 @@ import { getDbInstance } from "@/lib/db/core";
 import { randomUUID } from "crypto";
 
 // Auto-seed current project and auto-derive workspaces from request logs and worktrees
-function ensureWorkspacesDerived() {
+export function ensureWorkspacesDerived() {
   const db = getDbInstance();
   const logSnippets: string[] = [];
 
@@ -35,6 +36,7 @@ function ensureWorkspacesDerived() {
   try {
     const tableInfo = db.prepare("PRAGMA table_info(call_logs)").all() as Array<{ name?: string }>;
     const hasWorkspaceCol = tableInfo.some((r) => r.name === "workspace_root");
+    const hasProjectCol = tableInfo.some((r) => r.name === "project_id");
     if (hasWorkspaceCol) {
       const distinctRoots = db
         .prepare(
@@ -48,11 +50,11 @@ function ensureWorkspacesDerived() {
       for (const row of distinctRoots) {
         const rootPath = row.workspace_root?.trim();
         if (rootPath && isValidWorkspaceRoot(rootPath)) {
-          const existing = getProjectByBasePath(rootPath);
-          if (!existing) {
+          let project = getProjectByBasePath(rootPath);
+          if (!project) {
             const scan = scanProjectDirectory(rootPath, "derived");
             const id = `proj_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-            insertProject(
+            project = insertProject(
               id,
               scan.name,
               scan.basePath,
@@ -66,6 +68,20 @@ function ensureWorkspacesDerived() {
               scan.provenance,
               scan.memoryLocations
             );
+          }
+
+          // Backfill any call_logs rows that recorded this workspace_root before the
+          // project was inserted or when project_id was NULL.
+          if (project && hasProjectCol) {
+            try {
+              db.prepare(
+                `UPDATE call_logs
+                 SET project_id = ?
+                 WHERE workspace_root = ? AND (project_id IS NULL OR project_id = '')`
+              ).run(project.id, rootPath);
+            } catch {
+              // Best-effort backfill
+            }
           }
         }
       }
@@ -123,8 +139,16 @@ export async function GET(request: Request) {
   if (authError) return authError;
 
   try {
+    const url = new URL(request.url);
+    const statusParam = url.searchParams.get("status");
+    const validStatuses: ProjectRegistry["status"][] = ["active", "inactive", "archiving"];
+    const status =
+      statusParam && validStatuses.includes(statusParam as ProjectRegistry["status"])
+        ? (statusParam as ProjectRegistry["status"])
+        : undefined;
+
     ensureWorkspacesDerived();
-    const projects = listProjects();
+    const projects = listProjects(status);
     return NextResponse.json({
       success: true,
       projects,
@@ -133,6 +157,76 @@ export async function GET(request: Request) {
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed to list projects" },
+      { status: 500 }
+    );
+  }
+}
+
+// POST /api/v1/projects/refresh — Manually trigger workspace auto-discovery and
+// backfill of call_logs.project_id for any rows left dangling after a new
+// project is registered. Used by the dashboard refresh button.
+export async function POST_REFRESH(request: Request) {
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
+  try {
+    ensureWorkspacesDerived();
+
+    const db = getDbInstance();
+    const tableInfo = db.prepare("PRAGMA table_info(call_logs)").all() as Array<{ name?: string }>;
+    const hasProjectCol = tableInfo.some((r) => r.name === "project_id");
+
+    let backfilled = 0;
+    let totalLinked = 0;
+    if (hasProjectCol) {
+      const rows = db
+        .prepare(
+          `SELECT DISTINCT workspace_root
+           FROM call_logs
+           WHERE workspace_root IS NOT NULL AND length(trim(workspace_root)) > 0
+           LIMIT 200`
+        )
+        .all() as Array<{ workspace_root: string }>;
+
+      for (const row of rows) {
+        const rootPath = row.workspace_root?.trim();
+        if (!rootPath) continue;
+        const project = getProjectByBasePath(rootPath);
+        if (project) {
+          const result = db
+            .prepare(
+              `UPDATE call_logs
+               SET project_id = ?
+               WHERE workspace_root = ? AND (project_id IS NULL OR project_id = '')`
+            )
+            .run(project.id, rootPath);
+          backfilled += result?.changes ?? 0;
+        }
+      }
+
+      const linked = db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM call_logs WHERE project_id IS NOT NULL AND length(trim(project_id)) > 0`
+        )
+        .get() as { c?: number };
+      totalLinked = linked?.c ?? 0;
+    }
+
+    const projects = listProjects();
+    return NextResponse.json({
+      success: true,
+      projects,
+      total: projects.length,
+      backfilled,
+      totalLinked,
+      message: `Workspace discovery complete; ${backfilled} call_logs rows backfilled, ${totalLinked} linked to a project`,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to refresh projects",
+      },
       { status: 500 }
     );
   }

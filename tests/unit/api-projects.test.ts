@@ -16,7 +16,9 @@ const {
   GET: getProjectById,
   PATCH: patchProject,
   DELETE: deleteProject,
+  POST: postProjectArchive,
 } = await import("../../src/app/api/v1/projects/[id]/route.ts");
+const { POST: postRefresh } = await import("../../src/app/api/v1/projects/refresh/route.ts");
 const { POST: calculateAnalytics } =
   await import("../../src/app/api/v1/projects/[id]/analytics/route.ts");
 const { POST: generateBrief } = await import("../../src/app/api/v1/projects/[id]/brief/route.ts");
@@ -202,6 +204,88 @@ test("API: GET /api/v1/projects auto-discovers distinct workspace_root from call
   assert.equal(discovered.name, "auto-discovered-app");
 
   // Cleanup temp dir
+  try {
+    fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
+  } catch {}
+});
+
+test("API: POST /api/v1/projects/[id] toggles archive status (archive & restore)", async () => {
+  // Create a project first
+  const req = mockRequest("POST", "http://localhost:20128/api/v1/projects", {
+    basePath: "/tmp/archivable-proj",
+    name: "Archivable Project",
+    provenance: "manual",
+  });
+  const res = await createProject(req);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  const projectId = data.project.id;
+
+  // Archive project
+  const archiveReq = mockRequest("POST", `http://localhost:20128/api/v1/projects/${projectId}`, {
+    action: "archive",
+  });
+  const archiveRes = await postProjectArchive(archiveReq, {
+    params: Promise.resolve({ id: projectId }),
+  });
+  assert.equal(archiveRes.status, 200);
+  const archiveData = await archiveRes.json();
+  assert.equal(archiveData.success, true);
+  assert.equal(archiveData.project.status, "archiving");
+
+  // Reactivate project
+  const restoreReq = mockRequest("POST", `http://localhost:20128/api/v1/projects/${projectId}`, {
+    action: "reactivate",
+  });
+  const restoreRes = await postProjectArchive(restoreReq, {
+    params: Promise.resolve({ id: projectId }),
+  });
+  assert.equal(restoreRes.status, 200);
+  const restoreData = await restoreRes.json();
+  assert.equal(restoreData.success, true);
+  assert.equal(restoreData.project.status, "active");
+
+  // Delete cleanup
+  const delReq = mockRequest("DELETE", `http://localhost:20128/api/v1/projects/${projectId}`);
+  await deleteProject(delReq, { params: Promise.resolve({ id: projectId }) });
+});
+
+test("API: POST /api/v1/projects/refresh triggers auto-discovery and backfills dangling rows", async () => {
+  const db = core.getDbInstance();
+  const tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-refresh-"));
+  fs.writeFileSync(
+    path.join(tempWorkspaceDir, "package.json"),
+    JSON.stringify({ name: "refreshed-app", description: "Discovered on refresh" })
+  );
+
+  // Insert a mock call log with this workspace_root and project_id = NULL
+  const callId = `refresh-test-${Date.now()}`;
+  db.prepare(
+    `INSERT INTO call_logs (id, timestamp, method, path, status, model, duration, workspace_root, project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+  ).run(
+    callId,
+    new Date().toISOString(),
+    "POST",
+    "/v1/messages",
+    200,
+    "test-model",
+    100,
+    tempWorkspaceDir
+  );
+
+  const req = mockRequest("POST", "http://localhost:20128/api/v1/projects/refresh");
+  const res = await postRefresh(req);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.success, true);
+  assert.ok(data.backfilled >= 1 || data.totalLinked >= 1);
+
+  // Verify call_logs now has project_id populated
+  const updatedRow = db.prepare("SELECT project_id FROM call_logs WHERE id = ?").get(callId) as
+    { project_id?: string } | undefined;
+  assert.ok(updatedRow?.project_id, "call_logs.project_id should be backfilled");
+
   try {
     fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
   } catch {}
