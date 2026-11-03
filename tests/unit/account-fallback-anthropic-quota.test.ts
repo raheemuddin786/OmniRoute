@@ -163,3 +163,8 @@ test("Claude per-minute rate limit text is not mistaken for the monthly spend li
   );
   assert.ok(out.cooldownMs < 5 * 60 * 1000, `expected short cooldown, got ${out.cooldownMs}ms`);
 });
+
+test("Claude Web rate limit text is classified as subscription quota for claude-web", () => {
+  const out = isSubscriptionQuotaText("rate limit exceeded, please try again later", "claude-web");
+  assert.equal(out, true);
+});

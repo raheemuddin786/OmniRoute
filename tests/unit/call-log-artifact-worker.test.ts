@@ -151,6 +151,28 @@ test("worker resolution survives process.cwd throwing ENOENT", () => {
   }
 });
 
+test("ensureWorker recovers safely when process.cwd throws ENOENT", () => {
+  const originalCwd = process.cwd;
+  const originalChdir = process.chdir;
+  let _chdirTarget: string | null = null;
+  try {
+    process.cwd = () => {
+      const err = new Error("ENOENT: no such file or directory, uv_cwd");
+      (err as NodeJS.ErrnoException).code = "ENOENT";
+      throw err;
+    };
+    process.chdir = (dir: string) => {
+      _chdirTarget = dir;
+    };
+    // Re-resolve worker options without crashing
+    const resolved = resolveCallLogArtifactWorker();
+    assert.ok(resolved.workerFile);
+  } finally {
+    process.cwd = originalCwd;
+    process.chdir = originalChdir;
+  }
+});
+
 test("async worker writes call-log artifact and returns matching metadata", async () => {
   const artifact = buildArtifact("worker-write-1");
   const result = await writeCallArtifactAsync(artifact);
