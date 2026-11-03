@@ -56,7 +56,12 @@ export function isSubscriptionQuotaText(lower: string, provider?: string | null)
       (lower.includes("rate limit exceeded") ||
         lower.includes("too many requests") ||
         lower.includes("resets in") ||
-        lower.includes("please try again later")))
+        lower.includes("please try again later") ||
+        lower.includes("rate limit") ||
+        lower.includes("too many") ||
+        lower.includes("exceeded") ||
+        lower.includes("retry after") ||
+        lower.includes("try again later")))
   );
 }
 
