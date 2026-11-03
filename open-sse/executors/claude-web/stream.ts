@@ -921,6 +921,7 @@ function createStreamingResponse(
 
   const headers = responseHeaders("text/event-stream", options.responseMetadata);
   headers.set("Connection", "keep-alive");
+  headers.set("Cache-Control", "no-cache");
   return new Response(output, { status: 200, headers });
 }
 
