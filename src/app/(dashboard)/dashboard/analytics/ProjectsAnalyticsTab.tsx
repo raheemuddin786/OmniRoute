@@ -943,7 +943,7 @@ export function ProjectsAnalyticsTab() {
               <PromptAnalyticsTab
                 recentPrompts={activeAnalytics?.sessions?.recentPrompts ?? []}
                 tokensInSuccess={activeAnalytics?.tokenEconomics?.success ?? 0}
-                tokensOutSuccess={activeAnalytics?.tokenEconomics?.success ?? 0}
+                tokensOutSuccess={activeAnalytics?.tokenEconomics?.wasted ?? 0}
                 tokenEconomics={activeAnalytics?.tokenEconomics}
                 selectedProjectId={isGlobalView ? "Global Application" : selectedProject?.name}
                 onRefresh={handleCalculateAnalytics}

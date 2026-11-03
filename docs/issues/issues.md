@@ -37,3 +37,7 @@
 **info**[ProxyHealth][ProxyHealth] Starting proxy health scheduler (interval: 600000ms)
 
 **info**[ProxyHealth][ProxyHealth] egress: 5 rotatio
+
+## Claude web no user message found
+
+API Error: 400 claude-web/claude-sonnet-5: model — Error: No user message found in request (HTTP 400); claude-web/claude-sonnet-5: model — Error: No user message found in request (HTTP 400); claude-web/claude-sonnet-5: model — Error: No user message found in request (HTTP 400)

@@ -7,6 +7,8 @@
  * and global application-level views across all proxy traffic.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { getDbInstance } from "../../src/lib/db/core.ts";
 import type {
   ProjectAnalytics,
@@ -99,6 +101,11 @@ export async function calculateProjectAnalytics(
     if (project.basePath) {
       projectConditions.push("artifact_relpath LIKE ?");
       params.push(`%${project.basePath}%`);
+      const baseName = project.basePath.split("/").filter(Boolean).pop();
+      if (baseName && baseName !== project.basePath) {
+        projectConditions.push("workspace_root LIKE ?");
+        params.push(`%${baseName}%`);
+      }
     }
 
     if (projectConditions.length > 0) {
@@ -213,7 +220,77 @@ export async function calculateProjectAnalytics(
       }
     }
 
-    // If request_summary was empty in call_logs, inspect agentic_conversations turn counts
+    // If request_summary was empty in call_logs, attempt extraction from stored request artifacts on disk
+    if (seenPrompts.size === 0) {
+      try {
+        const artifactSql = `
+          SELECT artifact_relpath, timestamp
+          FROM call_logs
+          ${whereSql ? `${whereSql} AND` : "WHERE"} artifact_relpath IS NOT NULL AND length(trim(artifact_relpath)) > 0
+          ORDER BY id DESC
+          LIMIT 250
+        `;
+        const artifactRows = (db.prepare(artifactSql).all(...params) ?? []) as Array<{
+          artifact_relpath: string;
+          timestamp: string;
+        }>;
+
+        const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || "", ".omniroute");
+        const callLogsDir = path.join(dataDir, "call_logs");
+
+        for (const aRow of artifactRows) {
+          if (seenPrompts.size >= 50) break;
+          const fullPath = path.join(callLogsDir, aRow.artifact_relpath);
+          if (fs.existsSync(fullPath)) {
+            try {
+              const fileContent = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+              let body = fileContent.requestBody;
+              if (typeof body === "string") {
+                body = JSON.parse(body);
+              }
+              interface RequestMessagePart {
+                type?: string;
+                text?: string;
+              }
+              interface RequestMessage {
+                role?: string;
+                content?: string | RequestMessagePart[];
+              }
+              const messages = (body?.messages || []) as RequestMessage[];
+              const userMsg = messages.filter((m) => m.role === "user").pop();
+              let promptText = "";
+              if (userMsg) {
+                if (typeof userMsg.content === "string") {
+                  promptText = userMsg.content;
+                } else if (Array.isArray(userMsg.content)) {
+                  const textPart = userMsg.content.find((c) => c.type === "text");
+                  if (textPart && typeof textPart.text === "string") {
+                    promptText = textPart.text;
+                  }
+                }
+              }
+
+              if (promptText && promptText.trim().length > 0) {
+                const cleanPrompt = promptText.trim();
+                if (!seenPrompts.has(cleanPrompt)) {
+                  seenPrompts.add(cleanPrompt);
+                  recentPrompts.push({
+                    prompt: cleanPrompt,
+                    timestamp: aRow.timestamp || new Date().toISOString(),
+                  });
+                }
+              }
+            } catch {
+              // Ignore corrupted or unparseable single artifact
+            }
+          }
+        }
+      } catch {
+        // Fallback gracefully if filesystem probe fails
+      }
+    }
+
+    // If still empty, inspect agentic_conversations turn counts
     if (seenPrompts.size === 0) {
       try {
         const convSql = isGlobal
@@ -249,7 +326,7 @@ export async function calculateProjectAnalytics(
   const sessions: SessionSummary = {
     total: totalSessions,
     uniquePrompts,
-    recentPrompts: recentPrompts.slice(0, 15),
+    recentPrompts: recentPrompts.slice(0, 50),
   };
 
   // 4. Models & Combos breakdown

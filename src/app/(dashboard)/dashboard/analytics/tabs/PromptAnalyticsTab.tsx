@@ -356,8 +356,26 @@ export function PromptAnalyticsTab({
       <div className="space-y-3">
         {viewMode === "hierarchical" ? (
           filteredSessionGroups.length === 0 ? (
-            <div className="py-8 text-center text-slate-500 text-xs bg-slate-950/30 rounded-xl border border-slate-800/40">
-              No matching sessions or prompts found.
+            <div className="py-12 text-center bg-slate-950/40 rounded-xl border border-slate-800/60 p-6 space-y-3">
+              <span className="text-2xl block">💬</span>
+              <p className="text-slate-300 font-medium text-sm">
+                No indexed prompt turns recorded yet for {selectedProjectId || "this workspace"}.
+              </p>
+              <p className="text-slate-500 text-xs max-w-md mx-auto">
+                Prompts are automatically captured during agent operations or proxy requests routed
+                through OmniRoute. Run commands or route completions to see execution histories
+                here.
+              </p>
+              {onRefresh && (
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={calculating}
+                  className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+                >
+                  {calculating ? "Refreshing..." : "Refresh Prompt Analytics"}
+                </button>
+              )}
             </div>
           ) : (
             filteredSessionGroups.map((session, sIdx) => (
@@ -371,8 +389,12 @@ export function PromptAnalyticsTab({
             ))
           )
         ) : filteredPrompts.length === 0 ? (
-          <div className="py-8 text-center text-slate-500 text-xs bg-slate-950/30 rounded-xl border border-slate-800/40">
-            No matching prompts found.
+          <div className="py-12 text-center bg-slate-950/40 rounded-xl border border-slate-800/60 p-6 space-y-3">
+            <span className="text-2xl block">📋</span>
+            <p className="text-slate-300 font-medium text-sm">No matching prompts found.</p>
+            <p className="text-slate-500 text-xs">
+              Try adjusting your search criteria or refresh on-demand analytics.
+            </p>
           </div>
         ) : (
           filteredPrompts.map((promptItem, pIdx) => (
