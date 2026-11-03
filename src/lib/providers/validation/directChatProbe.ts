@@ -31,9 +31,18 @@ export async function validateDirectChatProvider({
       response.ok ||
       response.status === 400 ||
       response.status === 422 ||
-      response.status === 429
+      response.status === 429 ||
+      response.status === 402
     ) {
-      return { valid: true, error: null };
+      return {
+        valid: true,
+        error: null,
+        statusCode: response.status,
+        warning:
+          response.status === 402
+            ? "Provider accepted the key but requires payment/credits (402)"
+            : null,
+      };
     }
 
     if (response.status >= 500) {

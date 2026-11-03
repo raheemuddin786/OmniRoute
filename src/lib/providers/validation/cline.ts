@@ -36,9 +36,15 @@ export async function validateClineProvider({
   const headers = buildClinepassHeaders({ apiKey }, undefined, { clientType: "omniroute" });
   headers["Content-Type"] = "application/json";
 
+  const entry = getRegistryEntry(provider);
+  const freeModel = entry?.models?.find(
+    (m) => m.id.startsWith("cline-free/") || m.id.endsWith(":free")
+  )?.id;
+
   const model =
     providerSpecificData.validationModelId ||
-    getRegistryEntry(provider)?.models?.[0]?.id ||
+    freeModel ||
+    entry?.models?.[0]?.id ||
     CLINE_DEFAULT_VALIDATION_MODEL_ID;
 
   return validateDirectChatProvider({
