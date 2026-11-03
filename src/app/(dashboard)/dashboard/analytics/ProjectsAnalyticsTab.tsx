@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import type { ProjectRegistry, ProjectAnalytics, ProjectBrief } from "@/lib/db/projectRegistry";
 import { matchesSearch } from "@/shared/utils/turkishText";
+import { fmtCompact } from "@/shared/utils/formatting";
 
 export function ProjectsAnalyticsTab() {
   const [projects, setProjects] = useState<ProjectRegistry[]>([]);
@@ -597,8 +598,11 @@ export function ProjectsAnalyticsTab() {
                             {p.basePath}
                           </p>
                         </div>
-                        <span className="text-[11px] text-slate-500 font-mono shrink-0">
-                          {p.filesCount} files
+                        <span
+                          className="text-[11px] text-slate-500 font-mono shrink-0"
+                          title={`${p.filesCount} files tracked`}
+                        >
+                          {fmtCompact(p.filesCount)} files
                         </span>
                       </div>
 
@@ -771,16 +775,22 @@ export function ProjectsAnalyticsTab() {
                   <span className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">
                     Files Tracked
                   </span>
-                  <div className="text-lg font-bold text-slate-100 mt-1">
-                    {selectedProject.filesCount?.toLocaleString() ?? 0}
+                  <div
+                    className="text-lg font-bold text-slate-100 mt-1"
+                    title={`${selectedProject.filesCount ?? 0} files tracked`}
+                  >
+                    {fmtCompact(selectedProject.filesCount ?? 0)}
                   </div>
                 </div>
                 <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
                   <span className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">
                     Docs & Corpuses
                   </span>
-                  <div className="text-lg font-bold text-slate-100 mt-1">
-                    {selectedProject.docsCount?.toLocaleString() ?? 0}
+                  <div
+                    className="text-lg font-bold text-slate-100 mt-1"
+                    title={`${selectedProject.docsCount ?? 0} documents`}
+                  >
+                    {fmtCompact(selectedProject.docsCount ?? 0)}
                   </div>
                 </div>
                 <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
@@ -873,8 +883,11 @@ export function ProjectsAnalyticsTab() {
                   <span className="text-[11px] text-emerald-400 font-medium uppercase tracking-wider block">
                     Success
                   </span>
-                  <div className="text-base font-bold text-slate-100 mt-1 font-mono">
-                    {activeAnalytics.tokenEconomics.success.toLocaleString()}
+                  <div
+                    className="text-base font-bold text-slate-100 mt-1 font-mono"
+                    title={`${activeAnalytics.tokenEconomics.success.toLocaleString()} tokens`}
+                  >
+                    {fmtCompact(activeAnalytics.tokenEconomics.success)}
                   </div>
                   <span className="text-[10px] text-slate-500 block mt-0.5">2xx responses</span>
                 </div>
@@ -884,8 +897,11 @@ export function ProjectsAnalyticsTab() {
                   <span className="text-[11px] text-rose-400 font-medium uppercase tracking-wider block">
                     Wasted
                   </span>
-                  <div className="text-base font-bold text-slate-100 mt-1 font-mono">
-                    {activeAnalytics.tokenEconomics.wasted.toLocaleString()}
+                  <div
+                    className="text-base font-bold text-slate-100 mt-1 font-mono"
+                    title={`${activeAnalytics.tokenEconomics.wasted.toLocaleString()} tokens`}
+                  >
+                    {fmtCompact(activeAnalytics.tokenEconomics.wasted)}
                   </div>
                   <span className="text-[10px] text-slate-500 block mt-0.5">Errors / Aborts</span>
                 </div>
@@ -895,8 +911,11 @@ export function ProjectsAnalyticsTab() {
                   <span className="text-[11px] text-blue-400 font-medium uppercase tracking-wider block">
                     Cache Hits
                   </span>
-                  <div className="text-base font-bold text-slate-100 mt-1 font-mono">
-                    {activeAnalytics.tokenEconomics.cached.toLocaleString()}
+                  <div
+                    className="text-base font-bold text-slate-100 mt-1 font-mono"
+                    title={`${activeAnalytics.tokenEconomics.cached.toLocaleString()} tokens`}
+                  >
+                    {fmtCompact(activeAnalytics.tokenEconomics.cached)}
                   </div>
                   <span className="text-[10px] text-slate-500 block mt-0.5">
                     Prompt cache reads
@@ -908,8 +927,11 @@ export function ProjectsAnalyticsTab() {
                   <span className="text-[11px] text-indigo-400 font-medium uppercase tracking-wider block">
                     Saved Tokens
                   </span>
-                  <div className="text-base font-bold text-slate-100 mt-1 font-mono">
-                    {activeAnalytics.tokenEconomics.saved.toLocaleString()}
+                  <div
+                    className="text-base font-bold text-slate-100 mt-1 font-mono"
+                    title={`${activeAnalytics.tokenEconomics.saved.toLocaleString()} tokens`}
+                  >
+                    {fmtCompact(activeAnalytics.tokenEconomics.saved)}
                   </div>
                   <span className="text-[10px] text-slate-500 block mt-0.5">Combo & Caching</span>
                 </div>
@@ -930,8 +952,11 @@ export function ProjectsAnalyticsTab() {
                   <span className="text-[11px] text-purple-400 font-medium uppercase tracking-wider block">
                     Unique Prompts
                   </span>
-                  <div className="text-base font-bold text-slate-100 mt-1 font-mono">
-                    {activeAnalytics.sessions.uniquePrompts.toLocaleString()}
+                  <div
+                    className="text-base font-bold text-slate-100 mt-1 font-mono"
+                    title={`${activeAnalytics.sessions.uniquePrompts.toLocaleString()} unique prompts`}
+                  >
+                    {fmtCompact(activeAnalytics.sessions.uniquePrompts)}
                   </div>
                   <span className="text-[10px] text-slate-500 block mt-0.5">Distinct queries</span>
                 </div>
