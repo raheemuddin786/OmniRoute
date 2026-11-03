@@ -180,6 +180,10 @@ function ensureWorker(): Worker {
   // Ensure the process has a valid, existing cwd before instantiating Worker thread.
   // When the parent's cwd has been removed, Node's worker_threads initialization throws
   // ENOENT in uv_cwd within the internal worker bootstrap.
+  // We validate cwd before passing to Worker, not inside Worker thread, to give us
+  // control over the fallback and avoid the “process.cwd failed... uv_cwd” crash.
+  // The Worker constructor will call fs.access on the worker file, which re-runs
+  // the cwd check internally, so we preserve the fallback by ensuring cwd exists.
   try {
     process.cwd();
   } catch (cwdErr) {
@@ -189,13 +193,19 @@ function ensureWorker(): Worker {
       "code" in cwdErr &&
       (cwdErr as NodeJS.ErrnoException).code === "ENOENT"
     ) {
+      // Use the directory containing the worker file as a safe cwd fallback.
+      // This works because the worker file exists as a regular file at this point
+      // (resolveCallLogArtifactWorker ensures it).
+      const safeDir = path.dirname(workerFile);
       try {
-        process.chdir(path.dirname(workerFile));
+        process.chdir(safeDir);
       } catch {
+        // Last resort: try root; if that fails, we're stuck but the Worker constructor
+        // will also fail, and the existing error handling will capture it.
         try {
           process.chdir("/");
         } catch {
-          // Ignore fallback chdir failure
+          // Ignore fallback chdir failure, the Worker constructor will surface the error.
         }
       }
     }
