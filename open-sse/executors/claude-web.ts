@@ -14,6 +14,7 @@ import { tlsFetchClaude } from "../services/claudeTlsClient.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
 import { currentAppliedProxySink } from "../utils/proxyFetch.ts";
+import { acquire, buildAccountSemaphoreKey } from "../services/accountSemaphore.ts";
 import {
   BaseExecutor,
   mergeAbortSignals,
@@ -35,6 +36,7 @@ import {
 } from "./claude-web/session.ts";
 import { createClaudeWebResponse } from "./claude-web/stream.ts";
 import { isClaudeWebChallenge, sendClaudeWebDirect } from "./claude-web/transport.ts";
+import { wrapReadableStreamWithFinalize } from "../handlers/chatCore/streamFinalize.ts";
 
 const CLAUDE_WEB_API_BASE = "https://claude.ai/api";
 const CLAUDE_WEB_ORGS_URL = `${CLAUDE_WEB_API_BASE}/organizations`;
@@ -563,7 +565,25 @@ export class ClaudeWebExecutor extends BaseExecutor {
     const auditUrl = makeAuditUrl(turn);
     const auditHeaders = makeAuditHeaders();
 
+    // Per-account serialization: acquire semaphore keyed on accountScope before dispatching.
+    // Use provider-level timeout (300_000ms) + 60_000ms buffer = 360_000ms.
+    const semaphoreKey = buildAccountSemaphoreKey({
+      provider: "claude-web",
+      accountKey: turn.accountScope,
+    });
+    let releaseSemaphore: (() => void) | null = null;
+    const SEMAPHORE_TIMEOUT_MS = 360_000;
+
     try {
+      releaseSemaphore = await acquire(semaphoreKey, {
+        maxConcurrency: 1,
+        timeoutMs: SEMAPHORE_TIMEOUT_MS,
+        signal,
+        // Unbounded queue (maxQueueSize <= 0) per chatCore default; failFast = false to wait.
+        maxQueueSize: 0,
+        failFast: false,
+      });
+
       let transportResult: ClaudeWebTransportResult;
       if (forceBrowserTransport()) {
         transportResult = await this.sendBrowser(transportRequest);
@@ -576,6 +596,8 @@ export class ClaudeWebExecutor extends BaseExecutor {
       }
 
       if (transportResult.status < 200 || transportResult.status >= 300) {
+        releaseSemaphore();
+        releaseSemaphore = null;
         return makeExecutionResult(
           await errorResponseForTransport(transportResult, turn),
           auditBody,
@@ -585,6 +607,8 @@ export class ClaudeWebExecutor extends BaseExecutor {
       }
       if (!transportResult.body) {
         invalidateClaudeWebTurn(turn);
+        releaseSemaphore();
+        releaseSemaphore = null;
         return makeExecutionResult(
           makeErrorResponse(502, "Claude Web returned no response body"),
           auditBody,
@@ -602,6 +626,8 @@ export class ClaudeWebExecutor extends BaseExecutor {
         process.env.OMNIROUTE_CLAUDE_WEB_MINIMAL_RESPONSE === "1" ||
         process.env.OMNIROUTE_CLAUDE_WEB_MINIMAL_RESPONSE === "true";
 
+      // Create the response; for streaming, wrap the body so the semaphore releases
+      // only after the stream is fully consumed/cancelled/errored.
       const response = await createClaudeWebResponse(transportResult.body, {
         model,
         stream,
@@ -611,10 +637,41 @@ export class ClaudeWebExecutor extends BaseExecutor {
         log,
         minimalResponse,
       });
+
+      // If streaming, the response body is a ReadableStream. Wrap it with finalize
+      // to release the semaphore when the downstream consumer finishes or aborts.
+      if (
+        stream &&
+        response.body &&
+        typeof response.body === "object" &&
+        "getReader" in response.body
+      ) {
+        const streamBody = response.body as ReadableStream<Uint8Array>;
+        const wrappedBody = wrapReadableStreamWithFinalize(streamBody, () => {
+          if (releaseSemaphore) {
+            releaseSemaphore();
+            releaseSemaphore = null;
+          }
+        });
+        // Return a new Response with the wrapped body to preserve headers/status
+        const wrappedResponse = new Response(wrappedBody, {
+          status: response.status,
+          headers: response.headers,
+        });
+        return makeExecutionResult(wrappedResponse, auditBody, auditUrl, auditHeaders);
+      }
+
+      // Non-streaming (buffered): release immediately since the full response is ready.
+      releaseSemaphore();
+      releaseSemaphore = null;
       return makeExecutionResult(response, auditBody, auditUrl, auditHeaders);
-    } catch {
+    } catch (error) {
       invalidateClaudeWebTurn(turn);
-      log?.error?.("CLAUDE-WEB", "Transport failed");
+      if (releaseSemaphore) {
+        releaseSemaphore();
+        releaseSemaphore = null;
+      }
+      log?.error?.("CLAUDE-WEB", "Transport failed", { error: String(error) });
       return makeExecutionResult(
         makeErrorResponse(502, "Claude Web connection failed"),
         auditBody,
