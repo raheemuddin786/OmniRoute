@@ -171,7 +171,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                 Estimated Cost
               </span>
               <span className="text-sm font-bold font-mono text-amber-400 mt-0.5 block">
-                ${(item.costUsd ?? 0.0002).toFixed(4)}
+                ${(item.costUsd ?? 0).toFixed(4)}
               </span>
             </div>
 
@@ -180,7 +180,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                 Tokens Processed
               </span>
               <span className="text-sm font-bold font-mono text-emerald-400 mt-0.5 block">
-                {fmtCompact((item.tokensIn ?? 120) + (item.tokensOut ?? 350))}
+                {fmtCompact((item.tokensIn ?? 0) + (item.tokensOut ?? 0))}
               </span>
             </div>
 
@@ -189,7 +189,9 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                 Latency / Duration
               </span>
               <span className="text-sm font-bold font-mono text-sky-400 mt-0.5 block">
-                {item.durationMs ? `${item.durationMs}ms` : "1.2s"}
+                {item.durationMs !== undefined && item.durationMs > 0
+                  ? `${item.durationMs}ms`
+                  : "0ms"}
               </span>
             </div>
 
@@ -198,7 +200,18 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                 Estimated Savings
               </span>
               <span className="text-sm font-bold font-mono text-indigo-400 mt-0.5 block">
-                ~85% cache hit
+                {(() => {
+                  const cacheRead = item.tokensCacheRead ?? 0;
+                  const totalIn = item.tokensIn ?? 0;
+                  if (totalIn > 0 && cacheRead > 0) {
+                    const pct = Math.min(
+                      100,
+                      Math.round((cacheRead / (totalIn + cacheRead)) * 100)
+                    );
+                    return `~${pct}% cache hit`;
+                  }
+                  return cacheRead > 0 ? `${fmtCompact(cacheRead)} cached` : "0% cache hit";
+                })()}
               </span>
             </div>
           </div>

@@ -51,10 +51,33 @@ export interface TokenEconomics {
   costUsd: number;
 }
 
+export interface RecentPromptRecord {
+  prompt: string;
+  timestamp: string;
+  model?: string;
+  requestedModel?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensCacheRead?: number;
+  tokensCacheCreation?: number;
+  tokensReasoning?: number;
+  costUsd?: number;
+  durationMs?: number;
+  status?: number;
+  toolsUsed?: string[];
+  filesModified?: string[];
+  sessionTag?: string;
+  responseSummary?: string;
+  provider?: string;
+  comboName?: string;
+  errorType?: string | null;
+  errorSummary?: string | null;
+}
+
 export interface SessionSummary {
   total: number;
   uniquePrompts: number;
-  recentPrompts?: Array<{ prompt: string; timestamp: string }>;
+  recentPrompts?: RecentPromptRecord[];
 }
 
 export interface AgentUsageSummary {

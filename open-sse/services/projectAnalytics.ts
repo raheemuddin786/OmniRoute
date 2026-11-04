@@ -14,6 +14,7 @@ import type {
   ProjectAnalytics,
   TokenEconomics,
   SessionSummary,
+  RecentPromptRecord,
   AgentUsageSummary,
   ProjectBrief,
 } from "../../src/lib/db/projectRegistry.ts";
@@ -46,9 +47,26 @@ interface ComboCountRow {
   count: number;
 }
 
-interface PromptRow {
-  request_summary: string | null;
+interface DetailedCallLogRow {
+  id: string;
   timestamp: string;
+  status: number | null;
+  model: string | null;
+  requested_model: string | null;
+  provider: string | null;
+  duration: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  tokens_cache_read: number | null;
+  tokens_cache_creation: number | null;
+  tokens_reasoning: number | null;
+  combo_name: string | null;
+  error_summary: string | null;
+  error_type: string | null;
+  session_tag: string | null;
+  artifact_relpath: string | null;
+  request_summary: string | null;
+  ledger_cost_usd: number | null;
 }
 
 interface ConversationTurnRow {
@@ -140,25 +158,26 @@ export async function calculateProjectAnalytics(
   // 2. Cost calculations from request_cost_ledger if present
   let totalCostUsd = 0;
   try {
-    let costSql = `SELECT COALESCE(SUM(amount_usd), 0.0) AS totalAmountUsd FROM request_cost_ledger`;
     if (!isGlobal && project) {
-      costSql = `
+      const costWhereSql = whereSql
+        ? whereSql.replace(/\b(project_id|workspace_root|artifact_relpath)\b/g, "cl.$1")
+        : "";
+      const costSql = `
         SELECT COALESCE(SUM(rcl.amount_usd), 0.0) AS totalAmountUsd
         FROM request_cost_ledger rcl
-        JOIN call_logs cl ON rcl.call_log_id = cl.id
-        ${whereSql}
+        JOIN call_logs cl ON rcl.request_id = cl.id
+        ${costWhereSql}
       `;
       const costAgg = (db.prepare(costSql).get(...params) ?? {}) as Partial<CostLedgerRow>;
       totalCostUsd = Number(costAgg.totalAmountUsd ?? 0);
     } else {
+      const costSql = `SELECT COALESCE(SUM(amount_usd), 0.0) AS totalAmountUsd FROM request_cost_ledger`;
       const costAgg = (db.prepare(costSql).get() ?? {}) as Partial<CostLedgerRow>;
       totalCostUsd = Number(costAgg.totalAmountUsd ?? 0);
     }
   } catch {
-    // If ledger join fails or table is empty, compute estimate from tokens
-    const successTokens =
-      Number(logAgg.tokensInSuccess ?? 0) + Number(logAgg.tokensOutSuccess ?? 0);
-    totalCostUsd = (successTokens / 1_000_000) * 1.5; // Average blended rate $1.5/M tokens
+    // If request_cost_ledger is empty or join fails, strictly default to 0.0 without synthetic estimation
+    totalCostUsd = 0;
   }
 
   // Token breakdown
@@ -179,7 +198,7 @@ export async function calculateProjectAnalytics(
   // 3. Sessions & Prompt Histories
   let totalSessions = 0;
   let uniquePrompts = 0;
-  const recentPrompts: Array<{ prompt: string; timestamp: string }> = [];
+  const recentPrompts: RecentPromptRecord[] = [];
 
   try {
     const sessionCountSql = `
@@ -198,56 +217,113 @@ export async function calculateProjectAnalytics(
     totalSessions = Number(logAgg.totalCalls ?? 0);
   }
 
-  // Fetch unique prompts from call_logs.request_summary or agentic_conversations
+  // Fetch detailed call logs for prompt extraction and real telemetry
   try {
-    const promptSql = `
-      SELECT request_summary, timestamp
-      FROM call_logs
-      ${whereSql ? `${whereSql} AND` : "WHERE"} request_summary IS NOT NULL AND length(trim(request_summary)) > 0
-      ORDER BY id DESC
-      LIMIT 100
+    const detailedWhereSql = whereSql
+      ? whereSql.replace(/\b(project_id|workspace_root|artifact_relpath)\b/g, "cl.$1")
+      : "";
+    const detailedLogsSql = `
+      SELECT
+        cl.id,
+        cl.timestamp,
+        cl.status,
+        cl.model,
+        cl.requested_model,
+        cl.provider,
+        cl.duration,
+        cl.tokens_in,
+        cl.tokens_out,
+        cl.tokens_cache_read,
+        cl.tokens_cache_creation,
+        cl.tokens_reasoning,
+        cl.combo_name,
+        cl.error_summary,
+        cl.error_type,
+        cl.session_tag,
+        cl.artifact_relpath,
+        cl.request_summary,
+        rcl.amount_usd AS ledger_cost_usd
+      FROM call_logs cl
+      LEFT JOIN request_cost_ledger rcl ON cl.id = rcl.request_id
+      ${detailedWhereSql}
+      ORDER BY cl.id DESC
+      LIMIT 250
     `;
-    const promptRows = (db.prepare(promptSql).all(...params) ?? []) as PromptRow[];
+    const logRows = (db.prepare(detailedLogsSql).all(...params) ?? []) as DetailedCallLogRow[];
     const seenPrompts = new Set<string>();
 
-    for (const row of promptRows) {
-      if (row.request_summary && !seenPrompts.has(row.request_summary.trim())) {
-        seenPrompts.add(row.request_summary.trim());
-        recentPrompts.push({
-          prompt: row.request_summary.trim(),
-          timestamp: row.timestamp || new Date().toISOString(),
-        });
-      }
-    }
+    const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || "", ".omniroute");
+    const callLogsDir = path.join(dataDir, "call_logs");
 
-    // If request_summary was empty in call_logs, attempt extraction from stored request artifacts on disk
-    if (seenPrompts.size === 0) {
-      try {
-        const artifactSql = `
-          SELECT artifact_relpath, timestamp
-          FROM call_logs
-          ${whereSql ? `${whereSql} AND` : "WHERE"} artifact_relpath IS NOT NULL AND length(trim(artifact_relpath)) > 0
-          ORDER BY id DESC
-          LIMIT 250
-        `;
-        const artifactRows = (db.prepare(artifactSql).all(...params) ?? []) as Array<{
-          artifact_relpath: string;
-          timestamp: string;
-        }>;
+    for (const row of logRows) {
+      if (recentPrompts.length >= 50) break;
 
-        const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || "", ".omniroute");
-        const callLogsDir = path.join(dataDir, "call_logs");
+      let promptText = "";
+      let toolsUsed: string[] | undefined = undefined;
+      let filesModified: string[] | undefined = undefined;
+      let responseSummary: string | undefined = undefined;
 
-        for (const aRow of artifactRows) {
-          if (seenPrompts.size >= 50) break;
-          const fullPath = path.join(callLogsDir, aRow.artifact_relpath);
-          if (fs.existsSync(fullPath)) {
-            try {
-              const fileContent = JSON.parse(fs.readFileSync(fullPath, "utf8"));
-              let body = fileContent.requestBody;
-              if (typeof body === "string") {
+      // 1. Try reading disk artifact if available to extract full message text and tools
+      if (row.artifact_relpath) {
+        const fullPath = path.join(callLogsDir, row.artifact_relpath);
+        if (fs.existsSync(fullPath)) {
+          try {
+            const fileContent = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+            let body = fileContent.requestBody;
+            if (typeof body === "string") {
+              try {
                 body = JSON.parse(body);
+              } catch {}
+            }
+
+            // Extract tools requested or called in payload and response
+            interface ToolDefLike {
+              name?: string;
+              function?: { name?: string; arguments?: string | Record<string, unknown> };
+            }
+            const toolNames = new Set<string>();
+            if (Array.isArray(body?.tools)) {
+              for (const t of body.tools as ToolDefLike[]) {
+                const name = t?.function?.name || t?.name;
+                if (name) toolNames.add(String(name));
               }
+            }
+            if (Array.isArray(body?.functions)) {
+              for (const fn of body.functions as ToolDefLike[]) {
+                const name = fn?.name;
+                if (name) toolNames.add(String(name));
+              }
+            }
+            // Check response tool_calls
+            const respToolCalls = fileContent.responseBody?.choices?.[0]?.message?.tool_calls as
+              ToolDefLike[] | undefined;
+            if (Array.isArray(respToolCalls)) {
+              for (const tc of respToolCalls) {
+                const name = tc?.function?.name || tc?.name;
+                if (name) {
+                  toolNames.add(String(name));
+                  // Extract file path from tool arguments if modifying files
+                  try {
+                    const rawArgs = tc?.function?.arguments;
+                    const args =
+                      typeof rawArgs === "string"
+                        ? (JSON.parse(rawArgs) as Record<string, unknown>)
+                        : (rawArgs as Record<string, unknown> | undefined);
+                    const pathArg = args?.file_path || args?.path || args?.target_file;
+                    if (pathArg && typeof pathArg === "string") {
+                      if (!filesModified) filesModified = [];
+                      if (!filesModified.includes(pathArg)) filesModified.push(pathArg);
+                    }
+                  } catch {}
+                }
+              }
+            }
+            if (toolNames.size > 0) {
+              toolsUsed = Array.from(toolNames);
+            }
+
+            // Extract files touched/modified if mentioned in system reminder or tools
+            if (Array.isArray(body?.messages)) {
               interface RequestMessagePart {
                 type?: string;
                 text?: string;
@@ -256,9 +332,8 @@ export async function calculateProjectAnalytics(
                 role?: string;
                 content?: string | RequestMessagePart[];
               }
-              const messages = (body?.messages || []) as RequestMessage[];
+              const messages = body.messages as RequestMessage[];
               const userMsg = messages.filter((m) => m.role === "user").pop();
-              let promptText = "";
               if (userMsg) {
                 if (typeof userMsg.content === "string") {
                   promptText = userMsg.content;
@@ -269,24 +344,67 @@ export async function calculateProjectAnalytics(
                   }
                 }
               }
-
-              if (promptText && promptText.trim().length > 0) {
-                const cleanPrompt = promptText.trim();
-                if (!seenPrompts.has(cleanPrompt)) {
-                  seenPrompts.add(cleanPrompt);
-                  recentPrompts.push({
-                    prompt: cleanPrompt,
-                    timestamp: aRow.timestamp || new Date().toISOString(),
-                  });
-                }
-              }
-            } catch {
-              // Ignore corrupted or unparseable single artifact
             }
+
+            // Extract response summary from artifact responseBody if present
+            const respBody = fileContent.responseBody;
+            if (respBody) {
+              const choice = respBody.choices?.[0];
+              const content = choice?.message?.content || respBody.content?.[0]?.text;
+              if (typeof content === "string" && content.trim().length > 0) {
+                responseSummary =
+                  content.trim().slice(0, 160) + (content.length > 160 ? "..." : "");
+              }
+            }
+          } catch {
+            // Non-critical; fallback to row data
           }
         }
-      } catch {
-        // Fallback gracefully if filesystem probe fails
+      }
+
+      // 2. Fallback to row.request_summary if promptText could not be extracted from artifact
+      if (!promptText && row.request_summary) {
+        promptText = row.request_summary.trim();
+      }
+
+      if (promptText && promptText.trim().length > 0) {
+        const cleanPrompt = promptText.trim();
+        if (!seenPrompts.has(cleanPrompt)) {
+          seenPrompts.add(cleanPrompt);
+
+          // Calculate real prompt cost from request_cost_ledger or exact recorded rate
+          const inTokens = Number(row.tokens_in ?? 0);
+          const outTokens = Number(row.tokens_out ?? 0);
+          const cacheTokens = Number(row.tokens_cache_read ?? 0);
+          const promptCostUsd =
+            row.ledger_cost_usd !== null && row.ledger_cost_usd !== undefined
+              ? Number(row.ledger_cost_usd)
+              : 0;
+
+          recentPrompts.push({
+            prompt: cleanPrompt,
+            timestamp: row.timestamp || new Date().toISOString(),
+            model: row.model || "auto-combo",
+            requestedModel: row.requested_model || undefined,
+            tokensIn: inTokens,
+            tokensOut: outTokens,
+            tokensCacheRead: cacheTokens,
+            tokensCacheCreation: Number(row.tokens_cache_creation ?? 0),
+            tokensReasoning: Number(row.tokens_reasoning ?? 0),
+            costUsd: promptCostUsd,
+            durationMs: Number(row.duration ?? 0),
+            status: row.status !== null ? Number(row.status) : 200,
+            toolsUsed: toolsUsed && toolsUsed.length > 0 ? toolsUsed : undefined,
+            filesModified,
+            sessionTag: row.session_tag || undefined,
+            responseSummary:
+              responseSummary || (row.error_summary ? `Error: ${row.error_summary}` : undefined),
+            provider: row.provider || undefined,
+            comboName: row.combo_name || undefined,
+            errorType: row.error_type,
+            errorSummary: row.error_summary,
+          });
+        }
       }
     }
 
@@ -310,6 +428,11 @@ export async function calculateProjectAnalytics(
             recentPrompts.push({
               prompt: `Agent turn session (${row.last_messages_hash.slice(0, 12)}...)`,
               timestamp: row.last_seen_at || new Date().toISOString(),
+              model: "auto-combo",
+              tokensIn: 0,
+              tokensOut: 0,
+              costUsd: 0,
+              status: 200,
             });
           }
         }

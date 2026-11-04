@@ -9,9 +9,32 @@ import { fmtCompact } from "@/shared/utils/formatting";
 import { normalizeForSearch } from "@/shared/utils/turkishText";
 
 interface PromptAnalyticsTabProps {
-  recentPrompts?: Array<{ prompt: string; timestamp: string }>;
+  recentPrompts?: Array<{
+    prompt: string;
+    timestamp: string;
+    model?: string;
+    requestedModel?: string;
+    tokensIn?: number;
+    tokensOut?: number;
+    tokensCacheRead?: number;
+    tokensCacheCreation?: number;
+    tokensReasoning?: number;
+    costUsd?: number;
+    durationMs?: number;
+    status?: number;
+    toolsUsed?: string[];
+    filesModified?: string[];
+    sessionTag?: string;
+    responseSummary?: string;
+    provider?: string;
+    comboName?: string;
+    errorType?: string | null;
+    errorSummary?: string | null;
+  }>;
   tokensInSuccess?: number;
   tokensOutSuccess?: number;
+  _tokensInSuccess?: number;
+  _tokensOutSuccess?: number;
   tokenEconomics?: {
     success?: number;
     wasted?: number;
@@ -27,8 +50,8 @@ interface PromptAnalyticsTabProps {
 
 export function PromptAnalyticsTab({
   recentPrompts = [],
-  tokensInSuccess = 0,
-  tokensOutSuccess = 0,
+  _tokensInSuccess = 0,
+  _tokensOutSuccess = 0,
   tokenEconomics = {},
   sessionGroups: initialSessionGroups = [],
   selectedProjectId,
@@ -39,44 +62,34 @@ export function PromptAnalyticsTab({
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [copiedAll, setCopiedAll] = useState<boolean>(false);
 
-  // Normalize the prompt data from recentPrompts
+  // Map real telemetry records to PromptItemData (no estimation, no hardcoding)
   const promptList: PromptItemData[] = useMemo(() => {
     return recentPrompts.map((rp, idx) => {
-      const modelKeys = [
-        "claude-sonnet-5-5",
-        "gpt-4o",
-        "gemini-pro",
-        "claude-opus-5-5",
-        "gpt-4-turbo",
-      ];
-      const chosenModel = modelKeys[idx % modelKeys.length];
-      const totalTokens = tokensInSuccess + tokensOutSuccess;
-      const estimatedTokensIn = Math.max(
-        30,
-        Math.round(totalTokens / Math.max(1, recentPrompts.length))
-      );
-      const estimatedTokensOut = Math.max(100, Math.round(estimatedTokensIn * 3.2));
-      const promptCost = (tokenEconomics.costUsd || 0.0005) / Math.max(1, recentPrompts.length);
+      const inTokens = Number(rp.tokensIn ?? 0);
+      const outTokens = Number(rp.tokensOut ?? 0);
+      const cacheTokens = Number(rp.tokensCacheRead ?? 0);
 
       return {
-        id: `prompt_${idx + 1}`, // Unique prompt identifier for tracking
+        id: `prompt_${idx + 1}`,
         prompt: rp.prompt,
         timestamp: rp.timestamp,
-        model: chosenModel,
-        tokensIn: estimatedTokensIn,
-        tokensOut: estimatedTokensOut,
-        tokensCacheRead: Math.round(estimatedTokensIn * 0.75),
-        costUsd: promptCost,
-        durationMs: 800 + idx * 120,
-        status: 200,
-        toolsUsed: idx === 0 ? ["memory_search", "proxy_routing"] : undefined,
-        filesModified: idx === 0 ? ["/workspace/project-1/src/config.json"] : undefined,
-        responseSummary: `Successfully processed prompt with high cache hit ratio and optimal routing to ${chosenModel}.`,
+        model: rp.model || "auto-combo",
+        tokensIn: inTokens,
+        tokensOut: outTokens,
+        tokensCacheRead: cacheTokens,
+        costUsd: Number(rp.costUsd ?? 0),
+        durationMs: Number(rp.durationMs ?? 0),
+        status: Number(rp.status ?? 200),
+        toolsUsed: rp.toolsUsed && rp.toolsUsed.length > 0 ? rp.toolsUsed : undefined,
+        filesModified:
+          rp.filesModified && rp.filesModified.length > 0 ? rp.filesModified : undefined,
+        sessionTag: rp.sessionTag,
+        responseSummary: rp.responseSummary,
       };
     });
-  }, [recentPrompts, tokensInSuccess, tokensOutSuccess, tokenEconomics]);
+  }, [recentPrompts]);
 
-  // Group prompts into sessions (every 3 prompts per session)
+  // Group prompts into sessions by real session_tag, falling back to sequential grouping
   const sessionGroups: SessionGroupData[] = useMemo(() => {
     if (initialSessionGroups && initialSessionGroups.length > 0) {
       return initialSessionGroups;
@@ -84,12 +97,20 @@ export function PromptAnalyticsTab({
     if (promptList.length === 0) return [];
 
     const groups: SessionGroupData[] = [];
-    const chunkSize = 3;
+    const sessionMap = new Map<string, PromptItemData[]>();
+    const fallbackOrder: string[] = [];
 
-    for (let i = 0; i < promptList.length; i += chunkSize) {
-      const chunk = promptList.slice(i, i + chunkSize);
-      const sessionIdx = Math.floor(i / chunkSize);
+    for (const p of promptList) {
+      const key = p.sessionTag || `conv_session_${fallbackOrder.length + 1}`;
+      if (!sessionMap.has(key)) {
+        sessionMap.set(key, []);
+        fallbackOrder.push(key);
+      }
+      sessionMap.get(key)!.push(p);
+    }
 
+    for (const key of fallbackOrder) {
+      const chunk = sessionMap.get(key)!;
       const sessionCost = chunk.reduce((sum, p) => sum + (p.costUsd || 0), 0);
       const sessionTokens = chunk.reduce(
         (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0),
@@ -97,7 +118,7 @@ export function PromptAnalyticsTab({
       );
 
       groups.push({
-        sessionId: `conv_session_${sessionIdx + 1}_${promptList[i].id?.slice(0, 8) || "abc123"}`,
+        sessionId: key,
         firstSeenAt: chunk[0].timestamp,
         lastSeenAt: chunk[chunk.length - 1].timestamp,
         turnCount: chunk.length,
@@ -179,18 +200,25 @@ export function PromptAnalyticsTab({
     }
   };
 
-  // Calculate metrics for display cards
+  // Calculate metrics for display cards - prioritizing real project-level token economics when available
   const metrics = useMemo(() => {
     const totalPrompts = promptList.length;
     const uniquePrompts = promptList.filter(
       (p, idx, self) => idx === self.findIndex((t) => t.prompt === p.prompt)
     ).length;
-    const totalCost = promptList.reduce((sum, p) => sum + (p.costUsd || 0), 0);
-    const totalTokens = promptList.reduce(
-      (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0),
-      0
-    );
-    const cacheHits = promptList.reduce((sum, p) => sum + (p.tokensCacheRead || 0), 0);
+    // Prefer overall economics aggregated from database, fallback strictly to sum of loaded prompts
+    const totalCost =
+      tokenEconomics && typeof tokenEconomics.costUsd === "number" && tokenEconomics.costUsd > 0
+        ? tokenEconomics.costUsd
+        : promptList.reduce((sum, p) => sum + (p.costUsd || 0), 0);
+    const totalTokens =
+      tokenEconomics && typeof tokenEconomics.success === "number" && tokenEconomics.success > 0
+        ? tokenEconomics.success
+        : promptList.reduce((sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0), 0);
+    const cacheHits =
+      tokenEconomics && typeof tokenEconomics.cached === "number" && tokenEconomics.cached > 0
+        ? tokenEconomics.cached
+        : promptList.reduce((sum, p) => sum + (p.tokensCacheRead || 0), 0);
 
     return {
       totalPrompts,
@@ -200,7 +228,7 @@ export function PromptAnalyticsTab({
       cacheHits,
       sessionCount: sessionGroups.length,
     };
-  }, [promptList, sessionGroups]);
+  }, [promptList, sessionGroups, tokenEconomics]);
 
   return (
     <div className="space-y-6">
