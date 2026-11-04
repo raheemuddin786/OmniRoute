@@ -59,7 +59,7 @@ export function generatePromptsCSV(records: PromptExportRecord[]): string {
     csvEscape(r.timestamp),
     csvEscape(r.prompt),
     csvEscape(r.project ?? ""),
-    csvEscape(r.model ?? "auto-combo"),
+    csvEscape(r.model ?? ""),
     csvEscape(r.tokensIn ?? 0),
     csvEscape(r.tokensOut ?? 0),
     csvEscape(r.costUsd ? r.costUsd.toFixed(6) : "0.000000"),

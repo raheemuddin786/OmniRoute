@@ -384,7 +384,7 @@ export async function calculateProjectAnalytics(
           recentPrompts.push({
             prompt: cleanPrompt,
             timestamp: row.timestamp || new Date().toISOString(),
-            model: row.model || "auto-combo",
+            model: row.model || row.requested_model || undefined,
             requestedModel: row.requested_model || undefined,
             tokensIn: inTokens,
             tokensOut: outTokens,
@@ -393,7 +393,8 @@ export async function calculateProjectAnalytics(
             tokensReasoning: Number(row.tokens_reasoning ?? 0),
             costUsd: promptCostUsd,
             durationMs: Number(row.duration ?? 0),
-            status: row.status !== null ? Number(row.status) : 200,
+            status:
+              row.status !== null && row.status !== undefined ? Number(row.status) : undefined,
             toolsUsed: toolsUsed && toolsUsed.length > 0 ? toolsUsed : undefined,
             filesModified,
             sessionTag: row.session_tag || undefined,
@@ -428,11 +429,11 @@ export async function calculateProjectAnalytics(
             recentPrompts.push({
               prompt: `Agent turn session (${row.last_messages_hash.slice(0, 12)}...)`,
               timestamp: row.last_seen_at || new Date().toISOString(),
-              model: "auto-combo",
+              model: undefined,
               tokensIn: 0,
               tokensOut: 0,
               costUsd: 0,
-              status: 200,
+              status: undefined,
             });
           }
         }
