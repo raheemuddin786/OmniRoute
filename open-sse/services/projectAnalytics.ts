@@ -259,6 +259,7 @@ export async function calculateProjectAnalytics(
       if (recentPrompts.length >= 50) break;
 
       let promptText = "";
+      let systemPromptText: string | undefined = undefined;
       let toolsUsed: string[] | undefined = undefined;
       let filesModified: string[] | undefined = undefined;
       let responseSummary: string | undefined = undefined;
@@ -322,25 +323,92 @@ export async function calculateProjectAnalytics(
               toolsUsed = Array.from(toolNames);
             }
 
-            // Extract files touched/modified if mentioned in system reminder or tools
-            if (Array.isArray(body?.messages)) {
-              interface RequestMessagePart {
-                type?: string;
-                text?: string;
+            // Extract system prompt and user prompt from artifact request payload
+            interface RequestMessagePart {
+              type?: string;
+              text?: string;
+            }
+            interface RequestMessage {
+              role?: string;
+              content?: string | RequestMessagePart[];
+            }
+
+            const extractTextFromParts = (content: unknown): string => {
+              if (typeof content === "string") return content;
+              if (Array.isArray(content)) {
+                return content
+                  .map((part) => {
+                    if (typeof part === "string") return part;
+                    if (
+                      part &&
+                      typeof part === "object" &&
+                      "text" in part &&
+                      typeof (part as { text: unknown }).text === "string"
+                    ) {
+                      return (part as { text: string }).text;
+                    }
+                    return "";
+                  })
+                  .filter(Boolean)
+                  .join("\n");
               }
-              interface RequestMessage {
-                role?: string;
-                content?: string | RequestMessagePart[];
+              return "";
+            };
+
+            // 1. Anthropic Claude format: body.system (string or array of text blocks)
+            if (body && typeof body === "object") {
+              const rec = body as Record<string, unknown>;
+              if (rec.system) {
+                const sys = extractTextFromParts(rec.system).trim();
+                if (sys.length > 0) {
+                  systemPromptText = sys;
+                }
               }
-              const messages = body.messages as RequestMessage[];
-              const userMsg = messages.filter((m) => m.role === "user").pop();
-              if (userMsg) {
-                if (typeof userMsg.content === "string") {
-                  promptText = userMsg.content;
-                } else if (Array.isArray(userMsg.content)) {
-                  const textPart = userMsg.content.find((c) => c.type === "text");
-                  if (textPart && typeof textPart.text === "string") {
-                    promptText = textPart.text;
+
+              // 2. Google Gemini format: systemInstruction
+              if (
+                !systemPromptText &&
+                rec.systemInstruction &&
+                typeof rec.systemInstruction === "object"
+              ) {
+                const parts = (rec.systemInstruction as { parts?: unknown[] }).parts;
+                const sys = extractTextFromParts(parts).trim();
+                if (sys.length > 0) {
+                  systemPromptText = sys;
+                }
+              }
+
+              // 3. OpenAI / ChatCompletions format: messages or input array
+              const rawMsgs = Array.isArray(rec.messages)
+                ? (rec.messages as RequestMessage[])
+                : Array.isArray(rec.input)
+                  ? (rec.input as RequestMessage[])
+                  : null;
+
+              if (rawMsgs) {
+                const sysParts: string[] = [];
+                if (systemPromptText) sysParts.push(systemPromptText);
+
+                for (const msg of rawMsgs) {
+                  if (!msg || typeof msg !== "object") continue;
+                  const role = String(msg.role || "").toLowerCase();
+                  if (role === "system" || role === "developer") {
+                    const text = extractTextFromParts(msg.content).trim();
+                    if (text.length > 0 && !sysParts.includes(text)) {
+                      sysParts.push(text);
+                    }
+                  }
+                }
+                if (sysParts.length > 0) {
+                  systemPromptText = sysParts.join("\n\n");
+                }
+
+                // Extract user prompt (latest user turn in the request)
+                const userMsg = rawMsgs.filter((m) => m && m.role === "user").pop();
+                if (userMsg) {
+                  const text = extractTextFromParts(userMsg.content).trim();
+                  if (text.length > 0) {
+                    promptText = text;
                   }
                 }
               }
@@ -355,6 +423,16 @@ export async function calculateProjectAnalytics(
                 responseSummary =
                   content.trim().slice(0, 160) + (content.length > 160 ? "..." : "");
               }
+              // Also extract system prompt from request if available
+              if (
+                !responseSummary &&
+                fileContent.requestBody?.system &&
+                typeof fileContent.requestBody.system === "string"
+              ) {
+                responseSummary =
+                  fileContent.requestBody.system.trim().slice(0, 160) +
+                  (fileContent.requestBody.system.length > 160 ? "..." : "");
+              }
             }
           } catch {
             // Non-critical; fallback to row data
@@ -365,6 +443,11 @@ export async function calculateProjectAnalytics(
       // 2. Fallback to row.request_summary if promptText could not be extracted from artifact
       if (!promptText && row.request_summary) {
         promptText = row.request_summary.trim();
+      }
+
+      // 3. Fallback to systemPromptText if request has only system instructions
+      if (!promptText && systemPromptText) {
+        promptText = systemPromptText;
       }
 
       if (promptText && promptText.trim().length > 0) {
@@ -383,6 +466,7 @@ export async function calculateProjectAnalytics(
 
           recentPrompts.push({
             prompt: cleanPrompt,
+            systemPrompt: systemPromptText || undefined,
             timestamp: row.timestamp || new Date().toISOString(),
             model: row.model || row.requested_model || undefined,
             requestedModel: row.requested_model || undefined,

@@ -54,6 +54,7 @@ export interface TokenEconomics {
 export interface RecentPromptRecord {
   prompt: string;
   timestamp: string;
+  systemPrompt?: string;
   model?: string;
   requestedModel?: string;
   tokensIn?: number;

@@ -10,6 +10,7 @@ test("generatePromptsCSV outputs valid header and escaped CSV rows", () => {
   const records: PromptExportRecord[] = [
     {
       prompt: 'Hello, "world"!\nMultiline prompt',
+      systemPrompt: "You are a helpful coding assistant.",
       timestamp: "2026-11-04T12:00:00Z",
       project: "Project Alpha",
       model: "claude-sonnet-5-5",
@@ -29,9 +30,10 @@ test("generatePromptsCSV outputs valid header and escaped CSV rows", () => {
   const csv = generatePromptsCSV(records);
   assert.ok(
     csv.includes(
-      "Timestamp,Prompt Text,Project,Model,Tokens In,Tokens Out,Estimated Cost (USD),Tools Used"
+      "Timestamp,Prompt Text,System Prompt,Project,Model,Tokens In,Tokens Out,Estimated Cost (USD),Tools Used"
     )
   );
+  assert.ok(csv.includes("You are a helpful coding assistant."));
   assert.ok(csv.includes('"Hello, ""world""!\nMultiline prompt"'));
   assert.ok(csv.includes("Project Alpha"));
   assert.ok(csv.includes("claude-sonnet-5-5"));
@@ -43,6 +45,7 @@ test("generatePromptsJSON generates valid JSON structure with metadata", () => {
   const records: PromptExportRecord[] = [
     {
       prompt: "Explain quantum computing in one sentence",
+      systemPrompt: "Answer concisely for a high school physics student.",
       timestamp: "2026-11-04T12:10:00Z",
       project: "OmniRoute",
       model: "gpt-4o",
@@ -63,5 +66,9 @@ test("generatePromptsJSON generates valid JSON structure with metadata", () => {
   assert.equal(parsed.metadata.totalSessions, 1);
   assert.equal(parsed.prompts.length, 1);
   assert.equal(parsed.prompts[0].prompt, "Explain quantum computing in one sentence");
+  assert.equal(
+    parsed.prompts[0].systemPrompt,
+    "Answer concisely for a high school physics student."
+  );
   assert.equal(parsed.prompts[0].model, "gpt-4o");
 });

@@ -5,6 +5,7 @@
 
 export interface PromptExportRecord {
   prompt: string;
+  systemPrompt?: string;
   timestamp: string;
   project?: string;
   model?: string;
@@ -47,6 +48,7 @@ export function generatePromptsCSV(records: PromptExportRecord[]): string {
   const headers = [
     "Timestamp",
     "Prompt Text",
+    "System Prompt",
     "Project",
     "Model",
     "Tokens In",
@@ -58,6 +60,7 @@ export function generatePromptsCSV(records: PromptExportRecord[]): string {
   const rows = records.map((r) => [
     csvEscape(r.timestamp),
     csvEscape(r.prompt),
+    csvEscape(r.systemPrompt ?? ""),
     csvEscape(r.project ?? ""),
     csvEscape(r.model ?? ""),
     csvEscape(r.tokensIn ?? 0),

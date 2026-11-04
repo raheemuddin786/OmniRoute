@@ -51,7 +51,10 @@ export function SessionAccordion({
   const handleCopySessionAll = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const allText = session.prompts
-      .map((p, idx) => `--- Prompt #${idx + 1} (${p.timestamp}) ---\n${p.prompt}`)
+      .map((p, idx) => {
+        const sysHeader = p.systemPrompt ? `\n[System Directives]\n${p.systemPrompt}\n` : "";
+        return `--- Prompt #${idx + 1} (${p.timestamp}) ---${sysHeader}\n[User Turn]\n${p.prompt}`;
+      })
       .join("\n\n");
     const ok = await copyToClipboard(allText);
     if (ok) {
@@ -64,6 +67,7 @@ export function SessionAccordion({
     e.stopPropagation();
     const exportRecords: PromptExportRecord[] = session.prompts.map((p) => ({
       prompt: p.prompt,
+      systemPrompt: p.systemPrompt,
       timestamp: p.timestamp,
       project: projectName,
       model: p.model || session.modelUsed,
@@ -127,6 +131,14 @@ export function SessionAccordion({
               {session.modelUsed && (
                 <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">
                   {session.modelUsed}
+                </span>
+              )}
+              {session.prompts.some((p) => p.systemPrompt) && (
+                <span
+                  className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30"
+                  title="Session contains active system directives"
+                >
+                  🛡️ Directives
                 </span>
               )}
             </div>

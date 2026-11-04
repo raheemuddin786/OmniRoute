@@ -11,6 +11,7 @@ import { normalizeForSearch } from "@/shared/utils/turkishText";
 interface PromptAnalyticsTabProps {
   recentPrompts?: Array<{
     prompt: string;
+    systemPrompt?: string;
     timestamp: string;
     model?: string;
     requestedModel?: string;
@@ -72,6 +73,7 @@ export function PromptAnalyticsTab({
       return {
         id: `prompt_${idx + 1}`,
         prompt: rp.prompt,
+        systemPrompt: rp.systemPrompt || undefined,
         timestamp: rp.timestamp,
         model: rp.model || rp.requestedModel || undefined,
         tokensIn: inTokens,
@@ -140,6 +142,7 @@ export function PromptAnalyticsTab({
     return promptList.filter(
       (p) =>
         normalizeForSearch(p.prompt).includes(q) ||
+        (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q)) ||
         (p.model && normalizeForSearch(p.model).includes(q)) ||
         (p.toolsUsed && p.toolsUsed.some((t) => normalizeForSearch(t).includes(q)))
     );
@@ -151,17 +154,21 @@ export function PromptAnalyticsTab({
     return sessionGroups.filter(
       (s) =>
         normalizeForSearch(s.sessionId).includes(q) ||
-        s.prompts.some((p) => normalizeForSearch(p.prompt).includes(q))
+        s.prompts.some(
+          (p) =>
+            normalizeForSearch(p.prompt).includes(q) ||
+            (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q))
+        )
     );
   }, [sessionGroups, searchQuery]);
 
   // Copy all visible prompts
   const handleCopyAll = async () => {
     const allText = filteredPrompts
-      .map(
-        (p, idx) =>
-          `=== Prompt #${idx + 1} [${p.timestamp}] (${p.model || "default"}) ===\n${p.prompt}`
-      )
+      .map((p, idx) => {
+        const sysHeader = p.systemPrompt ? `\n[System Directives]\n${p.systemPrompt}\n` : "";
+        return `=== Prompt #${idx + 1} [${p.timestamp}] (${p.model || "default"}) ===${sysHeader}\n[User Turn]\n${p.prompt}`;
+      })
       .join("\n\n");
     const ok = await copyToClipboard(allText);
     if (ok) {
@@ -174,6 +181,7 @@ export function PromptAnalyticsTab({
   const handleExportAll = (format: "json" | "csv") => {
     const exportRecords = filteredPrompts.map((p) => ({
       prompt: p.prompt,
+      systemPrompt: p.systemPrompt,
       timestamp: p.timestamp,
       project: selectedProjectId || "Global",
       model: p.model,
