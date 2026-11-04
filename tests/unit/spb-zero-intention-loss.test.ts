@@ -985,7 +985,7 @@ test("Conclusion Reviewer: reconstructStreamResponse sets Reviewer Status header
   );
 });
 
-test("Stagnation Recovery: Tier 2 persistent stagnation (>= 5 reads) escalates to Tier 1 Apex", async () => {
+test("Stagnation Recovery: persistent stagnation (>= 5 reads) forces tier_2_resilient execution", async () => {
   const { detectAndRecoverFromStagnation } =
     await import("@omniroute/open-sse/services/spb/tieredRegistry.ts");
   const recovery = detectAndRecoverFromStagnation(

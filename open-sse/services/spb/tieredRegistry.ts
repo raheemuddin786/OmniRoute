@@ -209,15 +209,13 @@ export function detectAndRecoverFromStagnation(
   let newTaskPhase: TaskPhase | undefined;
   let escalationTier: "tier_1_apex" | "tier_2_resilient" | "tier_3_local" | undefined;
 
-  // Detect stagnation based on cumulative inspection turns
+  // Detect stagnation based on cumulative non-mutating turns.
+  // The counter now increments on ANY non-mutating tool result regardless of
+  // taskPhase (including CODE_GENERATION), so the guard must not be gated on
+  // taskPhase — otherwise a read-only loop classified as CODE_GENERATION evades
+  // detection entirely.
   // Lower threshold to 2 turns to immediately catch read loops
-  // Check all phases that involve inspection/verification (not code mutation)
-  if (
-    consecutiveReads >= 2 &&
-    (taskPhase === "INSPECTION_SYNTHESIS" ||
-      taskPhase === "DETERMINISTIC_ROUTING" ||
-      taskPhase === "TESTING_AND_VERIFICATION")
-  ) {
+  if (consecutiveReads >= 2) {
     isStagnant = true;
 
     // Generate strict recovery directive to break the loop

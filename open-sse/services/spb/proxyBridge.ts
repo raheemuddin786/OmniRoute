@@ -223,28 +223,28 @@ export async function processSmartProxyRouting(
     let isStagnant = false;
     let autoRecoveryDirective: string | undefined;
 
-    // Calculate cumulative inspection counter: increments on inspection phases,
-    // only resets on actual code mutation. This prevents phase oscillation from
-    // evading stagnation detection.
+    // Calculate cumulative non-mutating turn counter:
+    // Any turn that does NOT mutate code increments consecutiveReads.
+    // Specifically:
+    // 1. Read-only tool results (Read, Grep, Glob, Bash inspection) increment, regardless of taskPhase
+    // 2. Inspection phases (INSPECTION_SYNTHESIS, DETERMINISTIC_ROUTING, TESTING_AND_VERIFICATION) increment
+    // 3. Only an actual code mutation tool result resets the counter to 0.
     const priorConsecutiveReads = existingCheckpoint?.consecutiveReads ?? 0;
-    if (
+    const isNonMutatingToolResult = intent.isToolResultTurn && !intent.isCodeMutationToolResult;
+    const isInspectionPhase =
       intent.taskPhase === "INSPECTION_SYNTHESIS" ||
       intent.taskPhase === "DETERMINISTIC_ROUTING" ||
-      intent.taskPhase === "TESTING_AND_VERIFICATION"
-    ) {
-      // Any inspection or verification turn increments the counter
-      // Only resets on code mutation (below)
+      intent.taskPhase === "TESTING_AND_VERIFICATION";
+
+    if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
+      // Confirmed code mutation: reset counter
+      consecutiveReads = 0;
+    } else if (isNonMutatingToolResult || isInspectionPhase) {
+      // Any non-mutating tool execution or inspection phase accumulates stagnation
       consecutiveReads = (priorConsecutiveReads || 0) + 1;
     } else {
-      // CODE_GENERATION or ARCHITECTURAL_PLANNING — don't reset, just don't increment
-      // The counter persists across these phases
+      // Direct human instruction turns preserve the prior counter
       consecutiveReads = priorConsecutiveReads || 0;
-    }
-
-    // Reset cumulative inspection counter ONLY on actual code modification
-    // (tool result showing edit/write). This is the ONLY way to reset the counter.
-    if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
-      consecutiveReads = 0;
     }
 
     // Detect stagnation using the unified recovery mechanism
