@@ -245,6 +245,10 @@ function latestUserIndex(messages: ReadonlyArray<NormalizedMessage>): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === "user") return index;
   }
+  // Fallback: accept tool or non-assistant messages if no explicit user role is found
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== "assistant" && messages[index].content.trim()) return index;
+  }
   return -1;
 }
 

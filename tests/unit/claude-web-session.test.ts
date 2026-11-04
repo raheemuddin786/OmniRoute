@@ -286,4 +286,18 @@ describe("Claude Web conversation sessions", () => {
     );
     assert.equal(leftFollowUp.conversationId, first.conversationId);
   });
+
+  it("handles continuation messages without explicit user role (e.g. tool output fallback)", () => {
+    const turn = prepareClaudeWebTurn(
+      input({
+        messages: [
+          { role: "user", content: "perform action" },
+          { role: "assistant", content: "calling tool..." },
+          { role: "tool", content: "result: action completed" },
+        ],
+      })
+    );
+    assert.ok(turn.payload.prompt.includes("result: action completed"));
+    assert.equal(turn.operation, "completion");
+  });
 });
