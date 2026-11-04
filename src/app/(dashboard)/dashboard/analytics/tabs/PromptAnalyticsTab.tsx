@@ -70,11 +70,16 @@ export function PromptAnalyticsTab({
       const outTokens = Number(rp.tokensOut ?? 0);
       const cacheTokens = Number(rp.tokensCacheRead ?? 0);
 
+      const safePromptText = typeof rp.prompt === "string" ? rp.prompt : "";
+      const safeSystemPromptText =
+        typeof rp.systemPrompt === "string" && rp.systemPrompt ? rp.systemPrompt : undefined;
+      const safeTimestamp = typeof rp.timestamp === "string" ? rp.timestamp : "";
+
       return {
         id: `prompt_${idx + 1}`,
-        prompt: rp.prompt,
-        systemPrompt: rp.systemPrompt || undefined,
-        timestamp: rp.timestamp,
+        prompt: safePromptText,
+        systemPrompt: safeSystemPromptText,
+        timestamp: safeTimestamp,
         model: rp.model || rp.requestedModel || undefined,
         tokensIn: inTokens,
         tokensOut: outTokens,
@@ -141,7 +146,7 @@ export function PromptAnalyticsTab({
     const q = searchQuery.toLowerCase().trim();
     return promptList.filter(
       (p) =>
-        normalizeForSearch(p.prompt).includes(q) ||
+        normalizeForSearch(p.prompt || "").includes(q) ||
         (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q)) ||
         (p.model && normalizeForSearch(p.model).includes(q)) ||
         (p.toolsUsed && p.toolsUsed.some((t) => normalizeForSearch(t).includes(q)))
@@ -153,10 +158,10 @@ export function PromptAnalyticsTab({
     const q = searchQuery.toLowerCase().trim();
     return sessionGroups.filter(
       (s) =>
-        normalizeForSearch(s.sessionId).includes(q) ||
+        normalizeForSearch(s.sessionId || "").includes(q) ||
         s.prompts.some(
           (p) =>
-            normalizeForSearch(p.prompt).includes(q) ||
+            normalizeForSearch(p.prompt || "").includes(q) ||
             (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q))
         )
     );

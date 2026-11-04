@@ -38,22 +38,34 @@ export function SessionAccordion({
   const [expanded, setExpanded] = useState<boolean>(defaultExpanded);
   const [copiedSession, setCopiedSession] = useState<boolean>(false);
 
-  const formattedDate = new Date(session.lastSeenAt || session.firstSeenAt).toLocaleString(
-    undefined,
-    {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }
-  );
+  const safeLastSeenAt = session?.lastSeenAt || session?.firstSeenAt || "";
+  const formattedDate = safeLastSeenAt
+    ? (() => {
+        try {
+          const d = new Date(safeLastSeenAt);
+          return isNaN(d.getTime())
+            ? safeLastSeenAt
+            : d.toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+        } catch {
+          return safeLastSeenAt;
+        }
+      })()
+    : "Recent";
 
   const handleCopySessionAll = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const allText = session.prompts
       .map((p, idx) => {
-        const sysHeader = p.systemPrompt ? `\n[System Directives]\n${p.systemPrompt}\n` : "";
-        return `--- Prompt #${idx + 1} (${p.timestamp}) ---${sysHeader}\n[User Turn]\n${p.prompt}`;
+        const sys = typeof p.systemPrompt === "string" ? p.systemPrompt : "";
+        const usr = typeof p.prompt === "string" ? p.prompt : "";
+        const ts = typeof p.timestamp === "string" ? p.timestamp : "";
+        const sysHeader = sys ? `\n[System Directives]\n${sys}\n` : "";
+        return `--- Prompt #${idx + 1} (${ts}) ---${sysHeader}\n[User Turn]\n${usr}`;
       })
       .join("\n\n");
     const ok = await copyToClipboard(allText);
@@ -66,9 +78,9 @@ export function SessionAccordion({
   const handleExportSession = (e: React.MouseEvent, format: "json" | "csv") => {
     e.stopPropagation();
     const exportRecords: PromptExportRecord[] = session.prompts.map((p) => ({
-      prompt: p.prompt,
-      systemPrompt: p.systemPrompt,
-      timestamp: p.timestamp,
+      prompt: typeof p.prompt === "string" ? p.prompt : "",
+      systemPrompt: typeof p.systemPrompt === "string" ? p.systemPrompt : undefined,
+      timestamp: typeof p.timestamp === "string" ? p.timestamp : "",
       project: projectName,
       model: p.model || session.modelUsed,
       costUsd: p.costUsd,

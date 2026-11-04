@@ -35,9 +35,14 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
   const [copiedSystem, setCopiedSystem] = useState<boolean>(false);
   const [copiedCombined, setCopiedCombined] = useState<boolean>(false);
 
+  // Defensive guards for item properties
+  const safePrompt = typeof item?.prompt === "string" ? item.prompt : "";
+  const safeSystemPrompt = typeof item?.systemPrompt === "string" ? item.systemPrompt : undefined;
+  const safeTimestamp = typeof item?.timestamp === "string" && item.timestamp ? item.timestamp : "";
+
   // Extract a clean one-liner preview from the prompt text
   const cleanFirstLine =
-    item.prompt
+    safePrompt
       .split("\n")
       .map((s) => s.trim())
       .find((s) => s.length > 0) || "Empty prompt";
@@ -47,9 +52,9 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const textToCopy = item.systemPrompt
-      ? `[System Directives]\n${item.systemPrompt}\n\n[User Turn]\n${item.prompt}`
-      : item.prompt;
+    const textToCopy = safeSystemPrompt
+      ? `[System Directives]\n${safeSystemPrompt}\n\n[User Turn]\n${safePrompt}`
+      : safePrompt;
     const success = await copyToClipboard(textToCopy);
     if (success) {
       setCopiedUser(true);
@@ -59,7 +64,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
 
   const handleCopyUserPrompt = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const success = await copyToClipboard(item.prompt);
+    const success = await copyToClipboard(safePrompt);
     if (success) {
       setCopiedUser(true);
       setTimeout(() => setCopiedUser(false), 2000);
@@ -68,8 +73,8 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
 
   const handleCopySystemPrompt = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!item.systemPrompt) return;
-    const success = await copyToClipboard(item.systemPrompt);
+    if (!safeSystemPrompt) return;
+    const success = await copyToClipboard(safeSystemPrompt);
     if (success) {
       setCopiedSystem(true);
       setTimeout(() => setCopiedSystem(false), 2000);
@@ -78,7 +83,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
 
   const handleCopyCombinedPrompts = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const combined = `=== SYSTEM DIRECTIVES ===\n${item.systemPrompt || "None"}\n\n=== USER TURN ===\n${item.prompt}`;
+    const combined = `=== SYSTEM DIRECTIVES ===\n${safeSystemPrompt || "None"}\n\n=== USER TURN ===\n${safePrompt}`;
     const success = await copyToClipboard(combined);
     if (success) {
       setCopiedCombined(true);
@@ -86,13 +91,24 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
     }
   };
 
-  const formattedDate = new Date(item.timestamp).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  const formattedDate = safeTimestamp
+    ? (() => {
+        try {
+          const d = new Date(safeTimestamp);
+          return isNaN(d.getTime())
+            ? safeTimestamp
+            : d.toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              });
+        } catch {
+          return safeTimestamp;
+        }
+      })()
+    : "Recent";
 
   return (
     <div
@@ -182,14 +198,14 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
             type="button"
             onClick={handleCopy}
             className={`p-1.5 rounded-lg text-xs transition-colors border ${
-              copied
+              copiedUser
                 ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
                 : "bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700"
             }`}
             title="Copy prompt text"
             aria-label="Copy prompt"
           >
-            {copied ? "✓ Copied" : "📋 Copy"}
+            {copiedUser ? "✓ Copied" : "📋 Copy"}
           </button>
         </div>
       </div>
@@ -213,7 +229,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                           : "text-slate-400 hover:text-slate-200"
                       }`}
                     >
-                      💬 User Turn ({item.prompt.length}c)
+                      💬 User Turn ({safePrompt.length}c)
                     </button>
                     <button
                       type="button"
@@ -224,7 +240,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                           : "text-slate-400 hover:text-slate-200"
                       }`}
                     >
-                      🛡️ System Directives ({item.systemPrompt.length}c)
+                      🛡️ System Directives ({safeSystemPrompt.length}c)
                     </button>
                     <button
                       type="button"
@@ -277,7 +293,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                       User Prompt Payload
                     </div>
                     <div className="max-h-64 overflow-y-auto p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed">
-                      {item.prompt}
+                      {safePrompt}
                     </div>
                   </div>
                 )}
@@ -289,7 +305,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                       <span className="text-purple-400/80 font-normal">Injected Context</span>
                     </div>
                     <div className="max-h-64 overflow-y-auto p-3 rounded-lg bg-purple-950/20 border border-purple-500/30 font-mono text-xs text-purple-100 whitespace-pre-wrap select-text leading-relaxed">
-                      {item.systemPrompt}
+                      {safeSystemPrompt}
                     </div>
                   </div>
                 )}
@@ -301,7 +317,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                         1. System Directives
                       </div>
                       <div className="max-h-40 overflow-y-auto p-2.5 rounded-lg bg-purple-950/20 border border-purple-500/30 font-mono text-xs text-purple-100 whitespace-pre-wrap select-text leading-relaxed">
-                        {item.systemPrompt}
+                        {safeSystemPrompt}
                       </div>
                     </div>
                     <div>
@@ -309,7 +325,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                         2. User Turn
                       </div>
                       <div className="max-h-40 overflow-y-auto p-2.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed">
-                        {item.prompt}
+                        {safePrompt}
                       </div>
                     </div>
                   </div>
@@ -319,10 +335,10 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
               <div>
                 <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5 font-medium">
                   <span>Full Prompt Content:</span>
-                  <span className="text-slate-500 font-mono">{item.prompt.length} chars</span>
+                  <span className="text-slate-500 font-mono">{safePrompt.length} chars</span>
                 </div>
                 <div className="max-h-64 overflow-y-auto p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed">
-                  {item.prompt}
+                  {safePrompt}
                 </div>
               </div>
             )}
