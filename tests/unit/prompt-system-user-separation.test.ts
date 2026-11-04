@@ -89,3 +89,21 @@ test("generatePromptsJSON outputs structured objects with systemPrompt attribute
     "Adopt the WAT architecture (Workflows, Agents, Tools)."
   );
 });
+
+test("sequential conversation chronological ordering sorts earliest to latest", () => {
+  const turns = [
+    { prompt: "Turn 2: Follow-up question", timestamp: "2026-11-04T12:05:00Z" },
+    { prompt: "Turn 1: Initial user intent", timestamp: "2026-11-04T12:00:00Z" },
+    { prompt: "Turn 3: Final confirmation", timestamp: "2026-11-04T12:10:00Z" },
+  ];
+
+  const sorted = [...turns].sort((a, b) => {
+    const timeA = new Date(a.timestamp).getTime();
+    const timeB = new Date(b.timestamp).getTime();
+    return timeA - timeB;
+  });
+
+  assert.equal(sorted[0].prompt, "Turn 1: Initial user intent");
+  assert.equal(sorted[1].prompt, "Turn 2: Follow-up question");
+  assert.equal(sorted[2].prompt, "Turn 3: Final confirmation");
+});

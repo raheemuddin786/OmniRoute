@@ -96,7 +96,7 @@ export function PromptAnalyticsTab({
     });
   }, [recentPrompts]);
 
-  // Group prompts into sessions by real session_tag, falling back to sequential grouping
+  // Group prompts into sessions by real session_tag, ensuring chronological conversation order per session
   const sessionGroups: SessionGroupData[] = useMemo(() => {
     if (initialSessionGroups && initialSessionGroups.length > 0) {
       return initialSessionGroups;
@@ -105,35 +105,42 @@ export function PromptAnalyticsTab({
 
     const groups: SessionGroupData[] = [];
     const sessionMap = new Map<string, PromptItemData[]>();
-    const fallbackOrder: string[] = [];
+    const sessionOrder: string[] = [];
 
     for (const p of promptList) {
-      const key = p.sessionTag || `conv_session_${fallbackOrder.length + 1}`;
+      const key = p.sessionTag || `conv_session_${sessionOrder.length + 1}`;
       if (!sessionMap.has(key)) {
         sessionMap.set(key, []);
-        fallbackOrder.push(key);
+        sessionOrder.push(key);
       }
       sessionMap.get(key)!.push(p);
     }
 
-    for (const key of fallbackOrder) {
-      const chunk = sessionMap.get(key)!;
-      const sessionCost = chunk.reduce((sum, p) => sum + (p.costUsd || 0), 0);
-      const sessionTokens = chunk.reduce(
+    for (const key of sessionOrder) {
+      const rawPrompts = sessionMap.get(key)!;
+      // Sort turns chronologically ascending (Turn #1 = earliest, Turn #N = newest) for intuitive conversation flow
+      const sortedPrompts = [...rawPrompts].sort((a, b) => {
+        const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        return timeA - timeB;
+      });
+
+      const sessionCost = sortedPrompts.reduce((sum, p) => sum + (p.costUsd || 0), 0);
+      const sessionTokens = sortedPrompts.reduce(
         (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0),
         0
       );
 
       groups.push({
         sessionId: key,
-        firstSeenAt: chunk[0].timestamp,
-        lastSeenAt: chunk[chunk.length - 1].timestamp,
-        turnCount: chunk.length,
-        prompts: chunk,
+        firstSeenAt: sortedPrompts[0]?.timestamp || "",
+        lastSeenAt: sortedPrompts[sortedPrompts.length - 1]?.timestamp || "",
+        turnCount: sortedPrompts.length,
+        prompts: sortedPrompts,
         totalTokens: sessionTokens,
         totalCostUsd: sessionCost,
-        modelUsed: chunk[0].model,
-        toolsCount: chunk.filter((p) => p.toolsUsed && p.toolsUsed.length > 0).length,
+        modelUsed: sortedPrompts[0]?.model,
+        toolsCount: sortedPrompts.filter((p) => p.toolsUsed && p.toolsUsed.length > 0).length,
       });
     }
 
@@ -162,33 +169,35 @@ export function PromptAnalyticsTab({
         s.prompts.some(
           (p) =>
             normalizeForSearch(p.prompt || "").includes(q) ||
-            (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q))
+            (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q)) ||
+            (p.model && normalizeForSearch(p.model).includes(q))
         )
     );
   }, [sessionGroups, searchQuery]);
 
-  // Copy all visible prompts
   const handleCopyAll = async () => {
-    const allText = filteredPrompts
+    const text = promptList
       .map((p, idx) => {
-        const sysHeader = p.systemPrompt ? `\n[System Directives]\n${p.systemPrompt}\n` : "";
-        return `=== Prompt #${idx + 1} [${p.timestamp}] (${p.model || "default"}) ===${sysHeader}\n[User Turn]\n${p.prompt}`;
+        const sys = typeof p.systemPrompt === "string" ? p.systemPrompt : "";
+        const usr = typeof p.prompt === "string" ? p.prompt : "";
+        const ts = typeof p.timestamp === "string" ? p.timestamp : "";
+        const sysHeader = sys ? `\n[System Directives]\n${sys}\n` : "";
+        return `--- Prompt #${idx + 1} (${ts}) ---${sysHeader}\n[User Turn]\n${usr}`;
       })
       .join("\n\n");
-    const ok = await copyToClipboard(allText);
+    const ok = await copyToClipboard(text);
     if (ok) {
       setCopiedAll(true);
       setTimeout(() => setCopiedAll(false), 2000);
     }
   };
 
-  // Export full prompt history to CSV/JSON
   const handleExportAll = (format: "json" | "csv") => {
-    const exportRecords = filteredPrompts.map((p) => ({
-      prompt: p.prompt,
-      systemPrompt: p.systemPrompt,
-      timestamp: p.timestamp,
-      project: selectedProjectId || "Global",
+    const exportRecords = promptList.map((p) => ({
+      prompt: typeof p.prompt === "string" ? p.prompt : "",
+      systemPrompt: typeof p.systemPrompt === "string" ? p.systemPrompt : undefined,
+      timestamp: typeof p.timestamp === "string" ? p.timestamp : "",
+      project: selectedProjectId || "Active Workspace",
       model: p.model,
       costUsd: p.costUsd,
       tokensIn: p.tokensIn,
@@ -213,13 +222,12 @@ export function PromptAnalyticsTab({
     }
   };
 
-  // Calculate metrics for display cards - prioritizing real project-level token economics when available
+  // Calculate metrics for display cards
   const metrics = useMemo(() => {
     const totalPrompts = promptList.length;
     const uniquePrompts = promptList.filter(
       (p, idx, self) => idx === self.findIndex((t) => t.prompt === p.prompt)
     ).length;
-    // Prefer overall economics aggregated from database, fallback strictly to sum of loaded prompts
     const totalCost =
       tokenEconomics && typeof tokenEconomics.costUsd === "number" && tokenEconomics.costUsd > 0
         ? tokenEconomics.costUsd
@@ -249,52 +257,54 @@ export function PromptAnalyticsTab({
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="bg-slate-950/60 p-3.5 rounded-xl border border-purple-500/30">
           <span className="text-[11px] text-purple-400 font-medium uppercase tracking-wider block">
-            Total Prompts
+            User Prompts
           </span>
           <div className="text-xl font-bold text-slate-100 mt-1 font-mono">
             {fmtCompact(metrics.totalPrompts)}
           </div>
-          <span className="text-[10px] text-slate-500 block mt-0.5">Indexed turns</span>
+          <span className="text-[10px] text-slate-500 block mt-0.5">Sequential turns</span>
         </div>
 
         <div className="bg-slate-950/60 p-3.5 rounded-xl border border-indigo-500/30">
           <span className="text-[11px] text-indigo-400 font-medium uppercase tracking-wider block">
-            Unique Prompts
+            Unique Queries
           </span>
           <div className="text-xl font-bold text-slate-100 mt-1 font-mono">
             {fmtCompact(metrics.uniquePrompts)}
           </div>
-          <span className="text-[10px] text-slate-500 block mt-0.5">Distinct queries</span>
+          <span className="text-[10px] text-slate-500 block mt-0.5">Distinct user inputs</span>
         </div>
 
         <div className="bg-slate-950/60 p-3.5 rounded-xl border border-emerald-500/30">
           <span className="text-[11px] text-emerald-400 font-medium uppercase tracking-wider block">
-            Agent Sessions
+            Chat Sessions
           </span>
           <div className="text-xl font-bold text-slate-100 mt-1 font-mono">
             {fmtCompact(metrics.sessionCount)}
           </div>
-          <span className="text-[10px] text-slate-500 block mt-0.5">Multi-turn groups</span>
+          <span className="text-[10px] text-slate-500 block mt-0.5">Conversations</span>
         </div>
 
         <div className="bg-slate-950/60 p-3.5 rounded-xl border border-amber-500/30">
           <span className="text-[11px] text-amber-400 font-medium uppercase tracking-wider block">
             Total Cost
           </span>
-          <div className="text-xl font-bold text-slate-100 mt-1 font-mono">
+          <div className="text-xl font-bold text-amber-400 mt-1 font-mono">
             ${metrics.totalCost.toFixed(4)}
           </div>
-          <span className="text-[10px] text-slate-500 block mt-0.5">LLM usage cost</span>
+          <span className="text-[10px] text-slate-500 block mt-0.5">Ledger cost</span>
         </div>
 
-        <div className="bg-slate-950/60 p-3.5 rounded-xl border border-blue-500/30">
-          <span className="text-[11px] text-blue-400 font-medium uppercase tracking-wider block">
-            Cache Hits
+        <div className="bg-slate-950/60 p-3.5 rounded-xl border border-sky-500/30 col-span-2 sm:col-span-1">
+          <span className="text-[11px] text-sky-400 font-medium uppercase tracking-wider block">
+            Total Tokens
           </span>
           <div className="text-xl font-bold text-slate-100 mt-1 font-mono">
-            {fmtCompact(metrics.cacheHits)}
+            {fmtCompact(metrics.totalTokens)}
           </div>
-          <span className="text-[10px] text-slate-500 block mt-0.5">Estimated token savings</span>
+          <span className="text-[10px] text-slate-500 block mt-0.5">
+            {metrics.cacheHits > 0 ? `${fmtCompact(metrics.cacheHits)} cached` : "Telemetry"}
+          </span>
         </div>
       </div>
 
@@ -304,7 +314,7 @@ export function PromptAnalyticsTab({
           <span className="text-slate-500 text-xs">🔍</span>
           <input
             type="text"
-            placeholder="Search prompts, models, or tool invocations..."
+            placeholder="Search user prompts, models, or tool invocations..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="flex-1 px-3 py-1.5 text-xs rounded-lg bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
@@ -331,7 +341,7 @@ export function PromptAnalyticsTab({
                   : "text-slate-400 hover:text-slate-200"
               }`}
             >
-              🗂️ Sessions Hierarchy
+              💬 Conversation Sessions
             </button>
             <button
               type="button"
@@ -342,7 +352,7 @@ export function PromptAnalyticsTab({
                   : "text-slate-400 hover:text-slate-200"
               }`}
             >
-              📋 Flat Prompts
+              📋 All Prompts List
             </button>
           </div>
 
@@ -376,7 +386,7 @@ export function PromptAnalyticsTab({
             <button
               type="button"
               onClick={() => handleExportAll("json")}
-              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border-r border-slate-700 transition-colors"
+              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border-r border-slate-700"
               title="Export all prompts to JSON"
             >
               Export JSON
@@ -419,33 +429,32 @@ export function PromptAnalyticsTab({
               )}
             </div>
           ) : (
-            filteredSessionGroups.map((session, sIdx) => (
-              <SessionAccordion
-                key={session.sessionId}
-                session={session}
-                index={sIdx}
-                projectName={selectedProjectId || "Global Application"}
-                defaultExpanded={sIdx === 0}
-              />
-            ))
+            <div className="space-y-3">
+              {filteredSessionGroups.map((session, sIdx) => (
+                <SessionAccordion
+                  key={session.sessionId || sIdx}
+                  session={session}
+                  index={sIdx}
+                  projectName={selectedProjectId || "Active Workspace"}
+                  defaultExpanded={sIdx === 0}
+                />
+              ))}
+            </div>
           )
         ) : filteredPrompts.length === 0 ? (
-          <div className="py-12 text-center bg-slate-950/40 rounded-xl border border-slate-800/60 p-6 space-y-3">
-            <span className="text-2xl block">📋</span>
-            <p className="text-slate-300 font-medium text-sm">No matching prompts found.</p>
-            <p className="text-slate-500 text-xs">
-              Try adjusting your search criteria or refresh on-demand analytics.
+          <div className="py-12 text-center bg-slate-950/40 rounded-xl border border-slate-800/60 p-6">
+            <span className="text-2xl block mb-2">🔍</span>
+            <p className="text-slate-300 font-medium text-sm">
+              No prompts match query &quot;{searchQuery}&quot;.
             </p>
+            <p className="text-slate-500 text-xs mt-1">Try searching with a different term.</p>
           </div>
         ) : (
-          filteredPrompts.map((promptItem, pIdx) => (
-            <PromptListItem
-              key={pIdx}
-              item={promptItem}
-              index={pIdx}
-              defaultExpanded={pIdx === 0}
-            />
-          ))
+          <div className="space-y-2.5">
+            {filteredPrompts.map((item, idx) => (
+              <PromptListItem key={item.id || idx} item={item} index={idx} />
+            ))}
+          </div>
         )}
       </div>
     </div>
