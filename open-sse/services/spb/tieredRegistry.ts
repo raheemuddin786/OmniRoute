@@ -228,20 +228,10 @@ export function detectAndRecoverFromStagnation(
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
     // Escalate tier assignment:
-    // If consecutiveReads >= 3, escalate to Tier 1 Apex regardless of checkpoint
-    // to break any persistent inspection loops. Otherwise, escalate to Tier 2 Resilient.
-    if (
-      (existingCheckpoint?.modelTier === "tier_2_resilient" && consecutiveReads >= 3) ||
-      consecutiveReads >= 3
-    ) {
-      escalationTier = "tier_1_apex";
-      newTaskPhase = "ARCHITECTURAL_PLANNING";
-      recoveryDirective =
-        "ARCHITECTURAL RESOLUTION MANDATE: Stagnation detected after multiple inspection cycles. " +
-        "Escalating to Apex Architecture to establish a rigorous, step-by-step implementation contract.";
-    } else {
-      escalationTier = "tier_2_resilient";
-    }
+    // When stagnation occurs, ALWAYS enforce concrete execution via tier_2_resilient.
+    // Never escalate to ARCHITECTURAL_PLANNING / Tier 1 Apex, as planning tiers perform
+    // further read-only inspection and create secondary loops.
+    escalationTier = "tier_2_resilient";
 
     // Update the checkpoint with the reset counter to prevent immediate re-triggering
     if (existingCheckpoint) {

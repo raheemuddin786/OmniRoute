@@ -1005,11 +1005,11 @@ test("Stagnation Recovery: Tier 2 persistent stagnation (>= 5 reads) escalates t
   assert.equal(recovery.isStagnant, true);
   assert.equal(
     recovery.escalationTier,
-    "tier_1_apex",
-    "Persistent Tier 2 stagnation must escalate to Tier 1 Apex"
+    "tier_2_resilient",
+    "Persistent stagnation must force tier_2_resilient execution instead of tier_1_apex planning"
   );
-  assert.equal(recovery.newTaskPhase, "ARCHITECTURAL_PLANNING");
-  assert.ok(recovery.recoveryDirective?.includes("ARCHITECTURAL RESOLUTION MANDATE"));
+  assert.equal(recovery.newTaskPhase, "CODE_GENERATION");
+  assert.ok(recovery.recoveryDirective?.includes("EXECUTION MANDATE"));
 });
 
 test("Stagnation Recovery: code mutation tool result turn resets consecutive reads counter", async () => {
@@ -1134,6 +1134,6 @@ test("Stagnation Recovery: cumulative inspection counter persists across phase c
   );
 
   assert.equal(recovery.isStagnant, true);
-  assert.equal(recovery.escalationTier, "tier_1_apex");
-  assert.equal(recovery.newTaskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(recovery.escalationTier, "tier_2_resilient");
+  assert.equal(recovery.newTaskPhase, "CODE_GENERATION");
 });
