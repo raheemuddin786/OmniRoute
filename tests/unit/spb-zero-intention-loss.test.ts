@@ -1058,3 +1058,82 @@ test("Stagnation Recovery: code mutation tool result turn resets consecutive rea
     "consecutiveReads must be reset to 0 upon code modification"
   );
 });
+
+test("Stagnation Recovery: phase oscillation between INSPECTION_SYNTHESIS and TESTING_AND_VERIFICATION triggers stagnation", async () => {
+  const sessionId = "spb_phase_oscillation_" + Date.now();
+  const { saveCheckpoint, getCheckpoint } = await import("../../src/lib/db/spbState.ts");
+
+  // Simulate phase oscillation: INSPECTION -> TESTING -> INSPECTION -> TESTING
+  // The cumulative counter should track all inspection phases
+
+  // Turn 1: INSPECTION_SYNTHESIS
+  saveCheckpoint({
+    sessionId,
+    promptAnchorHash: "sha256:test_oscillation",
+    taskPhase: "INSPECTION_SYNTHESIS",
+    modelTier: "tier_3_local",
+    consecutiveReads: 1,
+    stagnationRecovered: 0,
+    statePayload: JSON.stringify({ messagesCount: 1 }),
+    createdAt: Date.now(),
+  });
+
+  let checkpoint = getCheckpoint(sessionId);
+  assert.equal(checkpoint?.consecutiveReads, 1);
+
+  // Turn 2: TESTING_AND_VERIFICATION (phase change but no code mutation)
+  // The counter should NOT reset - should be 2
+  const result2 = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: "Run the tests" },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_123",
+            content: "Test output: running tests...",
+          },
+        ] as unknown as string,
+      },
+    ],
+  });
+
+  // Verify the counter accumulated to 2 (or stagnation was detected)
+  checkpoint = getCheckpoint(sessionId);
+  // The counter should be >= 2 because phase oscillation shouldn't reset it
+  assert.ok(
+    (checkpoint?.consecutiveReads || 0) >= 2 || result2.intent.taskPhase === "CODE_GENERATION",
+    "Phase oscillation should accumulate counter or trigger stagnation recovery to CODE_GENERATION"
+  );
+
+  // If we reached stagnation, it should escalate to CODE_GENERATION
+  if (result2.intent.taskPhase === "CODE_GENERATION") {
+    assert.ok(
+      result2.tierAssignment.tier === "tier_2_resilient" ||
+        result2.tierAssignment.tier === "tier_1_apex"
+    );
+  }
+});
+
+test("Stagnation Recovery: cumulative inspection counter persists across phase changes", async () => {
+  const { detectAndRecoverFromStagnation } =
+    await import("../../open-sse/services/spb/tieredRegistry.ts");
+
+  // Test that detectAndRecoverFromStagnation correctly identifies stagnation
+  // even when in TESTING_AND_VERIFICATION phase with high counter
+  const recovery = detectAndRecoverFromStagnation(
+    "test_cumulative",
+    "TESTING_AND_VERIFICATION",
+    3, // 3 cumulative inspection turns
+    {
+      modelTier: "tier_2_resilient",
+      consecutiveReads: 3,
+    }
+  );
+
+  assert.equal(recovery.isStagnant, true);
+  assert.equal(recovery.escalationTier, "tier_1_apex");
+  assert.equal(recovery.newTaskPhase, "ARCHITECTURAL_PLANNING");
+});

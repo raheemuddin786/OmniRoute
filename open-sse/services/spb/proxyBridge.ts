@@ -210,29 +210,39 @@ export async function processSmartProxyRouting(
     }
 
     // 3b. Integrated stagnation detection and recovery with unified escalation
-    // Track consecutive read/inspection turns across turns. When an agent repeatedly
+    // Track cumulative inspection turns across phase changes. When an agent repeatedly
     // performs read-only operations (Read, Grep, Glob, cat, ls) without progressing
     // to code modification or test execution, we auto-steer to break the loop.
+    //
+    // KEY FIX: Use cumulative inspection counter that only resets on CODE MUTATION,
+    // not on phase changes. This prevents oscillation loops between INSPECTION_SYNTHESIS
+    // and TESTING_AND_VERIFICATION phases.
     let consecutiveReads: number;
     let stagnationDetected = false;
     let stagnationRecovered = false;
     let isStagnant = false;
     let autoRecoveryDirective: string | undefined;
 
-    // Calculate consecutiveReads: increment if INSPECTION_SYNTHESIS or DETERMINISTIC_ROUTING, reset otherwise
+    // Calculate cumulative inspection counter: increments on inspection phases,
+    // only resets on actual code mutation. This prevents phase oscillation from
+    // evading stagnation detection.
     const priorConsecutiveReads = existingCheckpoint?.consecutiveReads ?? 0;
     if (
       intent.taskPhase === "INSPECTION_SYNTHESIS" ||
-      intent.taskPhase === "DETERMINISTIC_ROUTING"
+      intent.taskPhase === "DETERMINISTIC_ROUTING" ||
+      intent.taskPhase === "TESTING_AND_VERIFICATION"
     ) {
-      // Active inspection or read-only turn — increment the counter
+      // Any inspection or verification turn increments the counter
+      // Only resets on code mutation (below)
       consecutiveReads = (priorConsecutiveReads || 0) + 1;
     } else {
-      // Non-inspection turn (CODE_GENERATION, TESTING_AND_VERIFICATION, etc.) — reset
-      consecutiveReads = 0;
+      // CODE_GENERATION or ARCHITECTURAL_PLANNING — don't reset, just don't increment
+      // The counter persists across these phases
+      consecutiveReads = priorConsecutiveReads || 0;
     }
 
-    // Reset consecutiveReads on actual code modification (if tool result shows edit/write)
+    // Reset cumulative inspection counter ONLY on actual code modification
+    // (tool result showing edit/write). This is the ONLY way to reset the counter.
     if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
       consecutiveReads = 0;
     }
