@@ -20,6 +20,8 @@ export interface PromptItemData {
   sessionTag?: string;
   responseSummary?: string;
   status?: number;
+  provider?: string;
+  comboName?: string;
 }
 
 interface PromptListItemProps {
@@ -378,6 +380,28 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                 {/* Subview 3: Tools & Metrics */}
                 {activeTechnicalTab === "tools" && (
                   <div className="space-y-3">
+                    {/* Provider & Routing Strategy Attribution */}
+                    {(item.provider || item.comboName) && (
+                      <div className="flex items-center gap-3 text-xs bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/60 flex-wrap">
+                        {item.provider && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-slate-400 font-medium">Provider:</span>
+                            <span className="text-indigo-300 font-mono font-semibold bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-800/40">
+                              {item.provider}
+                            </span>
+                          </div>
+                        )}
+                        {item.comboName && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-slate-400 font-medium">Combo Strategy:</span>
+                            <span className="text-purple-300 font-mono font-semibold bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/40">
+                              🔀 {item.comboName}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Tool Invocations */}
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-slate-400 font-medium">Tools Invocations:</span>

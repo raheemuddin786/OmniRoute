@@ -107,3 +107,39 @@ test("sequential conversation chronological ordering sorts earliest to latest", 
   assert.equal(sorted[1].prompt, "Turn 2: Follow-up question");
   assert.equal(sorted[2].prompt, "Turn 3: Final confirmation");
 });
+
+test("session groups are sorted chronologically descending by lastSeenAt (recent sessions first)", () => {
+  const sessions = [
+    { sessionId: "sess_yesterday", lastSeenAt: "2026-11-03T18:00:00Z" },
+    { sessionId: "sess_just_now", lastSeenAt: "2026-11-04T12:30:00Z" },
+    { sessionId: "sess_one_hour_ago", lastSeenAt: "2026-11-04T11:30:00Z" },
+  ];
+
+  const sorted = [...sessions].sort((a, b) => {
+    const timeA = new Date(a.lastSeenAt).getTime();
+    const timeB = new Date(b.lastSeenAt).getTime();
+    return timeB - timeA;
+  });
+
+  assert.equal(sorted[0].sessionId, "sess_just_now");
+  assert.equal(sorted[1].sessionId, "sess_one_hour_ago");
+  assert.equal(sorted[2].sessionId, "sess_yesterday");
+});
+
+test("flat prompts list is explicitly sorted chronologically descending by timestamp (newest first)", () => {
+  const prompts = [
+    { prompt: "Early morning prompt", timestamp: "2026-11-04T08:00:00Z" },
+    { prompt: "Latest afternoon prompt", timestamp: "2026-11-04T16:00:00Z" },
+    { prompt: "Midday prompt", timestamp: "2026-11-04T12:00:00Z" },
+  ];
+
+  const sorted = [...prompts].sort((a, b) => {
+    const timeA = new Date(a.timestamp).getTime();
+    const timeB = new Date(b.timestamp).getTime();
+    return timeB - timeA;
+  });
+
+  assert.equal(sorted[0].prompt, "Latest afternoon prompt");
+  assert.equal(sorted[1].prompt, "Midday prompt");
+  assert.equal(sorted[2].prompt, "Early morning prompt");
+});

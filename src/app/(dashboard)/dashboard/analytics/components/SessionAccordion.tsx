@@ -67,6 +67,14 @@ export function SessionAccordion({
   const sessionTopic =
     firstLinePreview.length > 80 ? `${firstLinePreview.slice(0, 80)}...` : firstLinePreview;
 
+  // Calculate session-level cache savings
+  const totalInTokens = session.prompts.reduce((sum, p) => sum + (p.tokensIn || 0), 0);
+  const totalCacheTokens = session.prompts.reduce((sum, p) => sum + (p.tokensCacheRead || 0), 0);
+  const cacheRatioPct =
+    totalInTokens > 0 && totalCacheTokens > 0
+      ? Math.min(100, Math.round((totalCacheTokens / (totalInTokens + totalCacheTokens)) * 100))
+      : 0;
+
   const handleCopySessionAll = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const allText = session.prompts
@@ -157,6 +165,14 @@ export function SessionAccordion({
                   {session.modelUsed}
                 </span>
               )}
+              {cacheRatioPct > 0 && (
+                <span
+                  className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1"
+                  title={`${cacheRatioPct}% of prompt tokens served from cache`}
+                >
+                  ⚡ {cacheRatioPct}% cached
+                </span>
+              )}
               {session.prompts.some((p) => p.systemPrompt) && (
                 <span
                   className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30"
@@ -231,14 +247,32 @@ export function SessionAccordion({
                 Chronological Order (Turn #1 → Turn #{session.prompts.length})
               </span>
             </div>
-            <span className="text-[11px] font-mono text-slate-500">
-              {session.prompts.length} user prompt turn{session.prompts.length !== 1 ? "s" : ""}
-            </span>
+            <div className="flex items-center gap-2">
+              {session.prompts.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById(
+                      `session-${session.sessionId}-turn-${session.prompts.length}`
+                    );
+                    el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  }}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  ↓ Jump to latest
+                </button>
+              )}
+              <span className="text-[11px] font-mono text-slate-500">
+                {session.prompts.length} user prompt turn{session.prompts.length !== 1 ? "s" : ""}
+              </span>
+            </div>
           </div>
 
           <div className="space-y-2.5">
             {session.prompts.map((promptItem, pIdx) => (
-              <PromptListItem key={pIdx} item={promptItem} index={pIdx} />
+              <div key={pIdx} id={`session-${session.sessionId}-turn-${pIdx + 1}`}>
+                <PromptListItem item={promptItem} index={pIdx} />
+              </div>
             ))}
           </div>
         </div>

@@ -61,11 +61,14 @@ export function PromptAnalyticsTab({
 }: PromptAnalyticsTabProps) {
   const [viewMode, setViewMode] = useState<"hierarchical" | "flat">("hierarchical");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [activeFilter, setActiveFilter] = useState<"all" | "tools" | "files" | "errors" | "cached">(
+    "all"
+  );
   const [copiedAll, setCopiedAll] = useState<boolean>(false);
 
   // Map real telemetry records to PromptItemData (no estimation, no hardcoding)
   const promptList: PromptItemData[] = useMemo(() => {
-    return recentPrompts.map((rp, idx) => {
+    const list = recentPrompts.map((rp, idx) => {
       const inTokens = Number(rp.tokensIn ?? 0);
       const outTokens = Number(rp.tokensOut ?? 0);
       const cacheTokens = Number(rp.tokensCacheRead ?? 0);
@@ -92,14 +95,29 @@ export function PromptAnalyticsTab({
           rp.filesModified && rp.filesModified.length > 0 ? rp.filesModified : undefined,
         sessionTag: rp.sessionTag,
         responseSummary: rp.responseSummary,
+        provider: rp.provider,
+        comboName: rp.comboName,
       };
+    });
+
+    // Explicitly sort promptList chronologically descending (newest prompt first)
+    return list.sort((a, b) => {
+      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return timeB - timeA;
     });
   }, [recentPrompts]);
 
   // Group prompts into sessions by real session_tag, ensuring chronological conversation order per session
   const sessionGroups: SessionGroupData[] = useMemo(() => {
     if (initialSessionGroups && initialSessionGroups.length > 0) {
-      return initialSessionGroups;
+      return [...initialSessionGroups].sort((a, b) => {
+        const timeA =
+          a.lastSeenAt || a.firstSeenAt ? new Date(a.lastSeenAt || a.firstSeenAt).getTime() : 0;
+        const timeB =
+          b.lastSeenAt || b.firstSeenAt ? new Date(b.lastSeenAt || b.firstSeenAt).getTime() : 0;
+        return timeB - timeA;
+      });
     }
     if (promptList.length === 0) return [];
 
@@ -131,6 +149,9 @@ export function PromptAnalyticsTab({
         0
       );
 
+      // Model used should reflect the latest turn in the session
+      const latestModel = sortedPrompts[sortedPrompts.length - 1]?.model || sortedPrompts[0]?.model;
+
       groups.push({
         sessionId: key,
         firstSeenAt: sortedPrompts[0]?.timestamp || "",
@@ -139,41 +160,80 @@ export function PromptAnalyticsTab({
         prompts: sortedPrompts,
         totalTokens: sessionTokens,
         totalCostUsd: sessionCost,
-        modelUsed: sortedPrompts[0]?.model,
+        modelUsed: latestModel,
         toolsCount: sortedPrompts.filter((p) => p.toolsUsed && p.toolsUsed.length > 0).length,
       });
     }
 
-    return groups;
+    // Explicitly sort session groups descending by recency (most recently active session at the top)
+    return groups.sort((a, b) => {
+      const timeA =
+        a.lastSeenAt || a.firstSeenAt ? new Date(a.lastSeenAt || a.firstSeenAt).getTime() : 0;
+      const timeB =
+        b.lastSeenAt || b.firstSeenAt ? new Date(b.lastSeenAt || b.firstSeenAt).getTime() : 0;
+      return timeB - timeA;
+    });
   }, [promptList, initialSessionGroups]);
 
-  // Filtered prompts and sessions based on search (using Turkish-safe search utility)
+  // Filtered prompts and sessions based on search and active filter pill
   const filteredPrompts = useMemo(() => {
-    if (!searchQuery.trim()) return promptList;
+    let list = promptList;
+
+    // Filter pill logic
+    if (activeFilter === "tools") {
+      list = list.filter((p) => p.toolsUsed && p.toolsUsed.length > 0);
+    } else if (activeFilter === "files") {
+      list = list.filter((p) => p.filesModified && p.filesModified.length > 0);
+    } else if (activeFilter === "errors") {
+      list = list.filter((p) => p.status !== undefined && (p.status < 200 || p.status >= 400));
+    } else if (activeFilter === "cached") {
+      list = list.filter((p) => (p.tokensCacheRead ?? 0) > 0);
+    }
+
+    if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase().trim();
-    return promptList.filter(
+    return list.filter(
       (p) =>
         normalizeForSearch(p.prompt || "").includes(q) ||
         (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q)) ||
         (p.model && normalizeForSearch(p.model).includes(q)) ||
+        (p.provider && normalizeForSearch(p.provider).includes(q)) ||
         (p.toolsUsed && p.toolsUsed.some((t) => normalizeForSearch(t).includes(q)))
     );
-  }, [promptList, searchQuery]);
+  }, [promptList, searchQuery, activeFilter]);
 
   const filteredSessionGroups = useMemo(() => {
-    if (!searchQuery.trim()) return sessionGroups;
+    let list = sessionGroups;
+
+    // Filter pill logic on sessions
+    if (activeFilter === "tools") {
+      list = list.filter((s) => s.prompts.some((p) => p.toolsUsed && p.toolsUsed.length > 0));
+    } else if (activeFilter === "files") {
+      list = list.filter((s) =>
+        s.prompts.some((p) => p.filesModified && p.filesModified.length > 0)
+      );
+    } else if (activeFilter === "errors") {
+      list = list.filter((s) =>
+        s.prompts.some((p) => p.status !== undefined && (p.status < 200 || p.status >= 400))
+      );
+    } else if (activeFilter === "cached") {
+      list = list.filter((s) => s.prompts.some((p) => (p.tokensCacheRead ?? 0) > 0));
+    }
+
+    if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase().trim();
-    return sessionGroups.filter(
+    return list.filter(
       (s) =>
         normalizeForSearch(s.sessionId || "").includes(q) ||
         s.prompts.some(
           (p) =>
             normalizeForSearch(p.prompt || "").includes(q) ||
             (p.systemPrompt && normalizeForSearch(p.systemPrompt).includes(q)) ||
-            (p.model && normalizeForSearch(p.model).includes(q))
+            (p.model && normalizeForSearch(p.model).includes(q)) ||
+            (p.provider && normalizeForSearch(p.provider).includes(q))
         )
     );
-  }, [sessionGroups, searchQuery]);
+  }, [sessionGroups, searchQuery, activeFilter]);
 
   const handleCopyAll = async () => {
     const text = promptList
@@ -309,97 +369,126 @@ export function PromptAnalyticsTab({
       </div>
 
       {/* Controls Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/50 p-3.5 rounded-xl border border-slate-800">
-        <div className="flex items-center gap-2 flex-1 min-w-[240px]">
-          <span className="text-slate-500 text-xs">🔍</span>
-          <input
-            type="text"
-            placeholder="Search user prompts, models, or tool invocations..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="flex-1 px-3 py-1.5 text-xs rounded-lg bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-          />
-          {searchQuery && (
+      <div className="space-y-2.5 bg-slate-900/50 p-3.5 rounded-xl border border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 flex-1 min-w-[240px]">
+            <span className="text-slate-500 text-xs">🔍</span>
+            <input
+              type="text"
+              placeholder="Search user prompts, models, providers, or tool invocations..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="flex-1 px-3 py-1.5 text-xs rounded-lg bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="text-slate-500 hover:text-slate-300 text-xs px-1"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* View Mode Switcher */}
+            <div className="flex items-center rounded-lg border border-slate-800 p-0.5 bg-slate-950 text-xs">
+              <button
+                type="button"
+                onClick={() => setViewMode("hierarchical")}
+                className={`px-3 py-1 rounded-md transition-colors ${
+                  viewMode === "hierarchical"
+                    ? "bg-indigo-600 text-white font-medium shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                💬 Conversation Sessions
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("flat")}
+                className={`px-3 py-1 rounded-md transition-colors ${
+                  viewMode === "flat"
+                    ? "bg-indigo-600 text-white font-medium shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                📋 All Prompts List
+              </button>
+            </div>
+
+            {/* Refresh Analytics Button */}
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={calculating}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 transition-colors flex items-center gap-1.5"
+                title="Refresh Analytics data"
+              >
+                <span>{calculating ? "⏳" : "🔄"}</span>
+                <span>{calculating ? "Refreshing..." : "Refresh"}</span>
+              </button>
+            )}
+
+            {/* Copy All Button */}
             <button
-              onClick={() => setSearchQuery("")}
-              className="text-slate-500 hover:text-slate-300 text-xs px-1"
+              type="button"
+              onClick={handleCopyAll}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors flex items-center gap-1.5"
+              title="Copy all visible prompts"
             >
-              ✕
+              <span>{copiedAll ? "✓" : "📋"}</span>
+              <span>{copiedAll ? "Copied All" : "Copy All"}</span>
             </button>
-          )}
+
+            {/* Export Utilities */}
+            <div className="flex items-center rounded-lg border border-slate-700 overflow-hidden text-xs">
+              <button
+                type="button"
+                onClick={() => handleExportAll("json")}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border-r border-slate-700"
+                title="Export all prompts to JSON"
+              >
+                Export JSON
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportAll("csv")}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
+                title="Export all prompts to CSV"
+              >
+                Export CSV
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* View Mode Switcher */}
-          <div className="flex items-center rounded-lg border border-slate-800 p-0.5 bg-slate-950 text-xs">
+        {/* Quick Filter Pills */}
+        <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800/80 flex-wrap">
+          <span className="text-[11px] text-slate-500 mr-1 font-medium">Filter:</span>
+          {(
+            [
+              { id: "all", label: "All Turns" },
+              { id: "tools", label: "🛠️ Tool Invocations" },
+              { id: "files", label: "📄 Files Modified" },
+              { id: "errors", label: "⚠️ Errors Only" },
+              { id: "cached", label: "⚡ Cached" },
+            ] as const
+          ).map((filter) => (
             <button
+              key={filter.id}
               type="button"
-              onClick={() => setViewMode("hierarchical")}
-              className={`px-3 py-1 rounded-md transition-colors ${
-                viewMode === "hierarchical"
-                  ? "bg-indigo-600 text-white font-medium shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
+              onClick={() => setActiveFilter(filter.id)}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors border ${
+                activeFilter === filter.id
+                  ? "bg-indigo-600 text-white border-indigo-500 shadow-sm"
+                  : "bg-slate-950/70 text-slate-400 hover:text-slate-200 border-slate-800"
               }`}
             >
-              💬 Conversation Sessions
+              {filter.label}
             </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("flat")}
-              className={`px-3 py-1 rounded-md transition-colors ${
-                viewMode === "flat"
-                  ? "bg-indigo-600 text-white font-medium shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              📋 All Prompts List
-            </button>
-          </div>
-
-          {/* Refresh Analytics Button */}
-          {onRefresh && (
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={calculating}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 transition-colors flex items-center gap-1.5"
-              title="Refresh Analytics data"
-            >
-              <span>{calculating ? "⏳" : "🔄"}</span>
-              <span>{calculating ? "Refreshing..." : "Refresh"}</span>
-            </button>
-          )}
-
-          {/* Copy All Button */}
-          <button
-            type="button"
-            onClick={handleCopyAll}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors flex items-center gap-1.5"
-            title="Copy all visible prompts"
-          >
-            <span>{copiedAll ? "✓" : "📋"}</span>
-            <span>{copiedAll ? "Copied All" : "Copy All"}</span>
-          </button>
-
-          {/* Export Utilities */}
-          <div className="flex items-center rounded-lg border border-slate-700 overflow-hidden text-xs">
-            <button
-              type="button"
-              onClick={() => handleExportAll("json")}
-              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border-r border-slate-700"
-              title="Export all prompts to JSON"
-            >
-              Export JSON
-            </button>
-            <button
-              type="button"
-              onClick={() => handleExportAll("csv")}
-              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
-              title="Export all prompts to CSV"
-            >
-              Export CSV
-            </button>
-          </div>
+          ))}
         </div>
       </div>
 

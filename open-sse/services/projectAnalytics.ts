@@ -250,13 +250,13 @@ export async function calculateProjectAnalytics(
       LIMIT 250
     `;
     const logRows = (db.prepare(detailedLogsSql).all(...params) ?? []) as DetailedCallLogRow[];
-    const seenPrompts = new Set<string>();
+    const seenCallIds = new Set<string | number>();
 
     const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || "", ".omniroute");
     const callLogsDir = path.join(dataDir, "call_logs");
 
     for (const row of logRows) {
-      if (recentPrompts.length >= 50) break;
+      if (recentPrompts.length >= 100) break;
 
       let promptText = "";
       let systemPromptText: string | undefined = undefined;
@@ -452,8 +452,9 @@ export async function calculateProjectAnalytics(
 
       if (promptText && promptText.trim().length > 0) {
         const cleanPrompt = promptText.trim();
-        if (!seenPrompts.has(cleanPrompt)) {
-          seenPrompts.add(cleanPrompt);
+        const callIdKey = row.id ?? `${row.timestamp}_${cleanPrompt}`;
+        if (!seenCallIds.has(callIdKey)) {
+          seenCallIds.add(callIdKey);
 
           // Calculate real prompt cost from request_cost_ledger or exact recorded rate
           const inTokens = Number(row.tokens_in ?? 0);
