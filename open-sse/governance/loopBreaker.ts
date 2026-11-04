@@ -780,20 +780,27 @@ export class LoopBreaker {
     const state = this.sessions.get(sessionId);
     if (!state) return;
 
-    // Decrement intervention credit — but never below zero.
+    // 1. Decrement intervention credit — but never below zero.
     if (state.interventions > 0) {
       state.interventions -= 1;
     }
 
-    // Prune the oldest half of the window so cross-phase tool calls age out.
+    // 2. Prune window to newest half so cross-phase tool calls age out.
     const keepFrom = Math.floor(state.window.length / 2);
-    if (keepFrom > 0) {
-      state.window = state.window.slice(keepFrom);
-    }
-    // Rejections window: prune to the newest half as well.
+    state.window = state.window.length > 0 ? state.window.slice(keepFrom) : [];
+
+    // 3. Prune rejections window to newest half as well.
     const keepRejectionsFrom = Math.floor(state.rejections.length / 2);
-    if (keepRejectionsFrom > 0) {
-      state.rejections = state.rejections.slice(keepRejectionsFrom);
+    state.rejections =
+      state.rejections.length > 0 ? state.rejections.slice(keepRejectionsFrom) : [];
+
+    // 4. Guard: detect state corruption (window >> rejections size).
+    if (state.window.length > state.rejections.length + 20) {
+      log.warn("Governance state window/rejections size mismatch", {
+        window: state.window.length,
+        rejections: state.rejections.length,
+        sessionId,
+      });
     }
   }
 

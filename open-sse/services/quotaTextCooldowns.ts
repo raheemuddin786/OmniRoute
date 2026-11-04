@@ -49,8 +49,8 @@ export function isSubscriptionQuotaText(lower: string, provider?: string | null)
     // Native Claude returns this 429 once the account's monthly extra-usage spend cap is reached.
     // It clears only when the billing month rolls over or the cap is raised, so it must park the
     // connection like any other long-window quota instead of falling into the ~5s generic backoff.
-    ((provider === "claude" || provider === "claude-web") &&
-      lower.includes("monthly spend limit")) ||
+    // Claude Web has its own rate-limit signaling; do not conflate with native Claude subscription quotas.
+    (provider === "claude" && lower.includes("monthly spend limit")) ||
     // Claude Web rate limit messages
     (provider === "claude-web" &&
       (lower.includes("rate limit exceeded") ||
