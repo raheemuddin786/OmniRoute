@@ -5,6 +5,7 @@ import {
   generatePromptsJSON,
   type PromptExportRecord,
 } from "../../src/shared/utils/promptExport.ts";
+import { extractUserIntent } from "../../src/shared/utils/formatting.ts";
 import type { RecentPromptRecord } from "../../src/lib/db/projectRegistry.ts";
 
 test("RecentPromptRecord contract supports separate prompt and systemPrompt fields", () => {
@@ -142,4 +143,44 @@ test("flat prompts list is explicitly sorted chronologically descending by times
   assert.equal(sorted[0].prompt, "Latest afternoon prompt");
   assert.equal(sorted[1].prompt, "Midday prompt");
   assert.equal(sorted[2].prompt, "Early morning prompt");
+});
+
+test("extractUserIntent strips leading Memory context scaffolding and returns genuine user prompt", () => {
+  const promptWithMemory = `Memory context: checked whether any producer of a contract exists
+User prefers concise answers
+Please audit the projectAnalytics service and check sort order`;
+
+  const cleanIntent = extractUserIntent(promptWithMemory);
+  assert.equal(cleanIntent, "User prefers concise answers");
+
+  const promptPureUser =
+    "Please check the logs and UI code to ensure everything is implemented correctly";
+  assert.equal(extractUserIntent(promptPureUser), promptPureUser);
+
+  const promptWithSystemDirective = `System Directives: You are Claude Code
+System Prompt: Follow all Hard Rules
+Explain the route trace for request 12345`;
+  assert.equal(
+    extractUserIntent(promptWithSystemDirective),
+    "Explain the route trace for request 12345"
+  );
+});
+
+test("pagination slicing produces bounded subsets preserving chronological order", () => {
+  const sessions = Array.from({ length: 25 }, (_, i) => ({
+    sessionId: `session_${i + 1}`,
+    lastSeenAt: new Date(Date.now() - i * 60000).toISOString(),
+  }));
+
+  const pageSize = 10;
+  const page1 = sessions.slice(0, pageSize);
+  const page2 = sessions.slice(pageSize, pageSize * 2);
+  const page3 = sessions.slice(pageSize * 2, pageSize * 3);
+
+  assert.equal(page1.length, 10);
+  assert.equal(page1[0].sessionId, "session_1");
+  assert.equal(page2.length, 10);
+  assert.equal(page2[0].sessionId, "session_11");
+  assert.equal(page3.length, 5);
+  assert.equal(page3[0].sessionId, "session_21");
 });

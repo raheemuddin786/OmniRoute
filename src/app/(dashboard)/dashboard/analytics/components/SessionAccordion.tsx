@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { PromptListItem, type PromptItemData } from "./PromptListItem";
 import { copyToClipboard } from "@/shared/utils/clipboard";
+import { extractUserIntent } from "@/shared/utils/formatting";
 import {
   generatePromptsCSV,
   generatePromptsJSON,
@@ -57,10 +58,12 @@ export function SessionAccordion({
       })()
     : "Recent";
 
-  // First user prompt preview in the session to give an instant conversation topic indication
+  // First user prompt preview in the session to give an instant conversation topic indication.
+  // Strip agent-framework scaffolding (e.g. "Memory context: ...") so the topic reflects
+  // genuine human intent, not injected system context.
   const firstPrompt = session?.prompts?.[0]?.prompt || "";
   const firstLinePreview =
-    firstPrompt
+    extractUserIntent(firstPrompt)
       .split("\n")
       .map((s) => s.trim())
       .find((s) => s.length > 0) || "Conversation session";

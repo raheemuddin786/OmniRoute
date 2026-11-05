@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDbInstance } from "../../src/lib/db/core.ts";
+import { extractUserIntent } from "../../src/shared/utils/formatting.ts";
 import type {
   ProjectAnalytics,
   TokenEconomics,
@@ -66,6 +67,7 @@ interface DetailedCallLogRow {
   session_tag: string | null;
   artifact_relpath: string | null;
   request_summary: string | null;
+  resilience_actions: string | null;
   ledger_cost_usd: number | null;
 }
 
@@ -242,6 +244,7 @@ export async function calculateProjectAnalytics(
         cl.session_tag,
         cl.artifact_relpath,
         cl.request_summary,
+        cl.resilience_actions,
         rcl.amount_usd AS ledger_cost_usd
       FROM call_logs cl
       LEFT JOIN request_cost_ledger rcl ON cl.id = rcl.request_id
@@ -451,7 +454,10 @@ export async function calculateProjectAnalytics(
       }
 
       if (promptText && promptText.trim().length > 0) {
-        const cleanPrompt = promptText.trim();
+        // Strip agent-framework scaffolding (e.g. "Memory context: ...") so the
+        // stored prompt reflects genuine user intent, not injected context.
+        const cleanPrompt = extractUserIntent(promptText.trim());
+        if (!cleanPrompt) continue;
         const callIdKey = row.id ?? `${row.timestamp}_${cleanPrompt}`;
         if (!seenCallIds.has(callIdKey)) {
           seenCallIds.add(callIdKey);
@@ -489,6 +495,7 @@ export async function calculateProjectAnalytics(
             comboName: row.combo_name || undefined,
             errorType: row.error_type,
             errorSummary: row.error_summary,
+            resilienceActions: row.resilience_actions || undefined,
           });
         }
       }

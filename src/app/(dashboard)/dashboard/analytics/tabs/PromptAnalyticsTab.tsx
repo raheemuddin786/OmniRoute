@@ -31,6 +31,9 @@ interface PromptAnalyticsTabProps {
     comboName?: string;
     errorType?: string | null;
     errorSummary?: string | null;
+    resilienceActions?: string | null;
+    tokensCacheCreation?: number;
+    tokensReasoning?: number;
   }>;
   tokensInSuccess?: number;
   tokensOutSuccess?: number;
@@ -66,6 +69,12 @@ export function PromptAnalyticsTab({
   );
   const [copiedAll, setCopiedAll] = useState<boolean>(false);
 
+  // Pagination states
+  const [sessionPage, setSessionPage] = useState<number>(1);
+  const [sessionsPerPage, setSessionsPerPage] = useState<number>(10);
+  const [promptPage, setPromptPage] = useState<number>(1);
+  const [promptsPerPage, setPromptsPerPage] = useState<number>(15);
+
   // Map real telemetry records to PromptItemData (no estimation, no hardcoding)
   const promptList: PromptItemData[] = useMemo(() => {
     const list = recentPrompts.map((rp, idx) => {
@@ -97,6 +106,11 @@ export function PromptAnalyticsTab({
         responseSummary: rp.responseSummary,
         provider: rp.provider,
         comboName: rp.comboName,
+        errorType: rp.errorType,
+        errorSummary: rp.errorSummary,
+        resilienceActions: rp.resilienceActions,
+        tokensCacheCreation: Number(rp.tokensCacheCreation ?? 0),
+        tokensReasoning: Number(rp.tokensReasoning ?? 0),
       };
     });
 
@@ -234,6 +248,33 @@ export function PromptAnalyticsTab({
         )
     );
   }, [sessionGroups, searchQuery, activeFilter]);
+
+  // Paginated Slices
+  const totalSessionPages = Math.max(1, Math.ceil(filteredSessionGroups.length / sessionsPerPage));
+  const safeSessionPage = Math.min(sessionPage, totalSessionPages);
+  const paginatedSessionGroups = useMemo(() => {
+    const start = (safeSessionPage - 1) * sessionsPerPage;
+    return filteredSessionGroups.slice(start, start + sessionsPerPage);
+  }, [filteredSessionGroups, safeSessionPage, sessionsPerPage]);
+
+  const totalPromptPages = Math.max(1, Math.ceil(filteredPrompts.length / promptsPerPage));
+  const safePromptPage = Math.min(promptPage, totalPromptPages);
+  const paginatedPrompts = useMemo(() => {
+    const start = (safePromptPage - 1) * promptsPerPage;
+    return filteredPrompts.slice(start, start + promptsPerPage);
+  }, [filteredPrompts, safePromptPage, promptsPerPage]);
+
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    setSessionPage(1);
+    setPromptPage(1);
+  };
+
+  const handleFilterChange = (filterId: "all" | "tools" | "files" | "errors" | "cached") => {
+    setActiveFilter(filterId);
+    setSessionPage(1);
+    setPromptPage(1);
+  };
 
   const handleCopyAll = async () => {
     const text = promptList
@@ -377,12 +418,12 @@ export function PromptAnalyticsTab({
               type="text"
               placeholder="Search user prompts, models, providers, or tool invocations..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => handleSearchChange(e.target.value)}
               className="flex-1 px-3 py-1.5 text-xs rounded-lg bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
             />
             {searchQuery && (
               <button
-                onClick={() => setSearchQuery("")}
+                onClick={() => handleSearchChange("")}
                 className="text-slate-500 hover:text-slate-300 text-xs px-1"
               >
                 ✕
@@ -479,7 +520,7 @@ export function PromptAnalyticsTab({
             <button
               key={filter.id}
               type="button"
-              onClick={() => setActiveFilter(filter.id)}
+              onClick={() => handleFilterChange(filter.id)}
               className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors border ${
                 activeFilter === filter.id
                   ? "bg-indigo-600 text-white border-indigo-500 shadow-sm"
@@ -519,15 +560,18 @@ export function PromptAnalyticsTab({
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredSessionGroups.map((session, sIdx) => (
-                <SessionAccordion
-                  key={session.sessionId || sIdx}
-                  session={session}
-                  index={sIdx}
-                  projectName={selectedProjectId || "Active Workspace"}
-                  defaultExpanded={sIdx === 0}
-                />
-              ))}
+              {paginatedSessionGroups.map((session, sIdx) => {
+                const globalIndex = (safeSessionPage - 1) * sessionsPerPage + sIdx;
+                return (
+                  <SessionAccordion
+                    key={session.sessionId || globalIndex}
+                    session={session}
+                    index={globalIndex}
+                    projectName={selectedProjectId || "Active Workspace"}
+                    defaultExpanded={globalIndex === 0}
+                  />
+                );
+              })}
             </div>
           )
         ) : filteredPrompts.length === 0 ? (
@@ -540,9 +584,141 @@ export function PromptAnalyticsTab({
           </div>
         ) : (
           <div className="space-y-2.5">
-            {filteredPrompts.map((item, idx) => (
-              <PromptListItem key={item.id || idx} item={item} index={idx} />
-            ))}
+            {paginatedPrompts.map((item, idx) => {
+              const globalIndex = (safePromptPage - 1) * promptsPerPage + idx;
+              return (
+                <PromptListItem key={item.id || globalIndex} item={item} index={globalIndex} />
+              );
+            })}
+          </div>
+        )}
+
+        {/* PAGINATION CONTROLS */}
+        {viewMode === "hierarchical" && filteredSessionGroups.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800 text-xs text-slate-400">
+            <div className="flex items-center gap-2">
+              <span>
+                Showing{" "}
+                <span className="font-semibold text-slate-200">
+                  {Math.min(
+                    (safeSessionPage - 1) * sessionsPerPage + 1,
+                    filteredSessionGroups.length
+                  )}
+                </span>{" "}
+                to{" "}
+                <span className="font-semibold text-slate-200">
+                  {Math.min(safeSessionPage * sessionsPerPage, filteredSessionGroups.length)}
+                </span>{" "}
+                of{" "}
+                <span className="font-semibold text-slate-200">{filteredSessionGroups.length}</span>{" "}
+                sessions
+              </span>
+
+              <div className="flex items-center gap-1 ml-2 text-[11px]">
+                <span className="text-slate-500">Per page:</span>
+                {[5, 10, 25, 50].map((sz) => (
+                  <button
+                    key={sz}
+                    type="button"
+                    onClick={() => {
+                      setSessionsPerPage(sz);
+                      setSessionPage(1);
+                    }}
+                    className={`px-1.5 py-0.5 rounded ${
+                      sessionsPerPage === sz
+                        ? "bg-indigo-600 text-white font-semibold"
+                        : "bg-slate-900 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {sz}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setSessionPage((p) => Math.max(1, p - 1))}
+                disabled={safeSessionPage <= 1}
+                className="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              >
+                ◀ Prev
+              </button>
+              <span className="px-2 font-mono text-[11px] text-slate-400">
+                Page {safeSessionPage} of {totalSessionPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSessionPage((p) => Math.min(totalSessionPages, p + 1))}
+                disabled={safeSessionPage >= totalSessionPages}
+                className="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              >
+                Next ▶
+              </button>
+            </div>
+          </div>
+        )}
+
+        {viewMode === "flat" && filteredPrompts.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800 text-xs text-slate-400">
+            <div className="flex items-center gap-2">
+              <span>
+                Showing{" "}
+                <span className="font-semibold text-slate-200">
+                  {Math.min((safePromptPage - 1) * promptsPerPage + 1, filteredPrompts.length)}
+                </span>{" "}
+                to{" "}
+                <span className="font-semibold text-slate-200">
+                  {Math.min(safePromptPage * promptsPerPage, filteredPrompts.length)}
+                </span>{" "}
+                of <span className="font-semibold text-slate-200">{filteredPrompts.length}</span>{" "}
+                turns
+              </span>
+
+              <div className="flex items-center gap-1 ml-2 text-[11px]">
+                <span className="text-slate-500">Per page:</span>
+                {[10, 15, 30, 50].map((sz) => (
+                  <button
+                    key={sz}
+                    type="button"
+                    onClick={() => {
+                      setPromptsPerPage(sz);
+                      setPromptPage(1);
+                    }}
+                    className={`px-1.5 py-0.5 rounded ${
+                      promptsPerPage === sz
+                        ? "bg-indigo-600 text-white font-semibold"
+                        : "bg-slate-900 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {sz}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPromptPage((p) => Math.max(1, p - 1))}
+                disabled={safePromptPage <= 1}
+                className="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              >
+                ◀ Prev
+              </button>
+              <span className="px-2 font-mono text-[11px] text-slate-400">
+                Page {safePromptPage} of {totalPromptPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPromptPage((p) => Math.min(totalPromptPages, p + 1))}
+                disabled={safePromptPage >= totalPromptPages}
+                className="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              >
+                Next ▶
+              </button>
+            </div>
           </div>
         )}
       </div>

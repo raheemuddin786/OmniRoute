@@ -150,10 +150,13 @@ export function ProjectsAnalyticsTab() {
     }
   };
 
-  const handleCalculateAnalytics = async () => {
+  const handleCalculateAnalytics = useCallback(async () => {
     setCalculatingAnalytics(true);
     const targetId = isGlobalView ? "__global__" : selectedProject?.id;
-    if (!targetId) return;
+    if (!targetId) {
+      setCalculatingAnalytics(false);
+      return;
+    }
 
     try {
       const res = await fetch(`/api/v1/projects/${targetId}/analytics`, {
@@ -185,7 +188,7 @@ export function ProjectsAnalyticsTab() {
     } finally {
       setCalculatingAnalytics(false);
     }
-  };
+  }, [isGlobalView, selectedProject?.id, showNotice]);
 
   const handleGenerateBrief = async () => {
     setGeneratingBrief(true);
@@ -759,7 +762,15 @@ export function ProjectsAnalyticsTab() {
                     Overview
                   </button>
                   <button
-                    onClick={() => setProjectViewMode("prompts")}
+                    onClick={() => {
+                      setProjectViewMode("prompts");
+                      const currentAnalytics = isGlobalView
+                        ? globalAnalytics
+                        : selectedProject?.analyticsCache;
+                      if (!currentAnalytics && !calculatingAnalytics) {
+                        void handleCalculateAnalytics();
+                      }
+                    }}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
                       projectViewMode === "prompts"
                         ? "bg-slate-800 text-slate-200 shadow-sm"

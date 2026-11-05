@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { copyToClipboard } from "@/shared/utils/clipboard";
-import { fmtCompact } from "@/shared/utils/formatting";
+import { fmtCompact, extractUserIntent } from "@/shared/utils/formatting";
 
 export interface PromptItemData {
   id?: string;
@@ -10,9 +10,12 @@ export interface PromptItemData {
   systemPrompt?: string;
   timestamp: string;
   model?: string;
+  requestedModel?: string;
   tokensIn?: number;
   tokensOut?: number;
   tokensCacheRead?: number;
+  tokensCacheCreation?: number;
+  tokensReasoning?: number;
   costUsd?: number;
   durationMs?: number;
   toolsUsed?: string[];
@@ -22,6 +25,9 @@ export interface PromptItemData {
   status?: number;
   provider?: string;
   comboName?: string;
+  errorType?: string | null;
+  errorSummary?: string | null;
+  resilienceActions?: string | null;
 }
 
 interface PromptListItemProps {
@@ -34,9 +40,10 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
   const [expanded, setExpanded] = useState<boolean>(defaultExpanded);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState<boolean>(false);
   const [activeTechnicalTab, setActiveTechnicalTab] = useState<"system" | "summary" | "tools">(
-    "system"
+    "tools"
   );
   const [copiedUser, setCopiedUser] = useState<boolean>(false);
+  const [copiedAgent, setCopiedAgent] = useState<boolean>(false);
   const [copiedSystem, setCopiedSystem] = useState<boolean>(false);
   const [copiedFull, setCopiedFull] = useState<boolean>(false);
 
@@ -49,9 +56,10 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
       : undefined;
   const safeTimestamp = typeof item?.timestamp === "string" && item.timestamp ? item.timestamp : "";
 
-  // Extract clean one-liner preview
+  // Extract clean one-liner preview — strip agent scaffolding first so the
+  // preview reflects genuine user intent, not injected system context.
   const cleanFirstLine =
-    safePrompt
+    extractUserIntent(safePrompt)
       .split("\n")
       .map((s) => s.trim())
       .find((s) => s.length > 0) || "Empty prompt";
@@ -65,6 +73,16 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
     if (success) {
       setCopiedUser(true);
       setTimeout(() => setCopiedUser(false), 2000);
+    }
+  };
+
+  const handleCopyAgentResponse = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!safeResponseSummary) return;
+    const success = await copyToClipboard(safeResponseSummary);
+    if (success) {
+      setCopiedAgent(true);
+      setTimeout(() => setCopiedAgent(false), 2000);
     }
   };
 
@@ -82,9 +100,13 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
     e.stopPropagation();
     const fullText = [
       `=== Turn #${index + 1} (${safeTimestamp || "Recent"}) ===`,
+      item.model ? `[Model]: ${item.model}` : null,
+      item.provider ? `[Provider]: ${item.provider}` : null,
+      item.comboName ? `[Combo Strategy]: ${item.comboName}` : null,
       safeSystemPrompt ? `[System Directives]\n${safeSystemPrompt}\n` : null,
       `[User Prompt]\n${safePrompt}`,
       safeResponseSummary ? `\n[Agent Response]\n${safeResponseSummary}` : null,
+      item.resilienceActions ? `\n[Resilience Telemetry]: ${item.resilienceActions}` : null,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -114,6 +136,14 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
         }
       })()
     : "Recent";
+
+  // Calculate prompt cache efficiency
+  const cacheRead = item.tokensCacheRead ?? 0;
+  const totalIn = item.tokensIn ?? 0;
+  const cacheRatioPct =
+    totalIn > 0 && cacheRead > 0
+      ? Math.min(100, Math.round((cacheRead / (totalIn + cacheRead)) * 100))
+      : 0;
 
   return (
     <div
@@ -156,23 +186,37 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                       : "bg-rose-500/10 text-rose-400 border-rose-500/20"
                   }`}
                 >
-                  {item.status}
+                  HTTP {item.status}
                 </span>
               )}
 
-              {safeSystemPrompt && (
+              {cacheRatioPct > 0 && (
                 <span
-                  className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-purple-500/15 text-purple-300 border-purple-500/30 flex items-center gap-1"
-                  title="System instructions present"
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-amber-500/15 text-amber-300 border-amber-500/30"
+                  title="Prompt tokens served from cache"
                 >
-                  <span>🛡️</span>
-                  System Directives
+                  ⚡ {cacheRatioPct}% cached
+                </span>
+              )}
+
+              {item.provider && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-slate-800 text-slate-300 border-slate-700">
+                  {item.provider}
                 </span>
               )}
 
               {item.toolsUsed && item.toolsUsed.length > 0 && (
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-amber-500/10 text-amber-300 border-amber-500/20">
                   🛠️ {item.toolsUsed.length} tool{item.toolsUsed.length !== 1 ? "s" : ""}
+                </span>
+              )}
+
+              {item.resilienceActions && (
+                <span
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
+                  title={item.resilienceActions}
+                >
+                  🛡️ Resilience
                 </span>
               )}
             </div>
@@ -224,276 +268,370 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
         </div>
       </div>
 
-      {/* Expanded Container: Full Clean User Prompt First */}
+      {/* Expanded Container: Interactive Chat Dialogue View (User vs Assistant) */}
       {expanded && (
-        <div className="p-4 pt-2 border-t border-slate-800/80 space-y-3.5 text-xs bg-slate-950/30">
-          {/* Main User Prompt Section */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs pb-1">
-              <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                <span>💬</span>
-                User Prompt ({safePrompt.length} characters)
-              </span>
+        <div className="p-4 pt-2 border-t border-slate-800/80 space-y-4 text-xs bg-slate-950/40">
+          {/* Quick Actions Bar */}
+          <div className="flex items-center justify-between text-xs pb-1 border-b border-slate-800/60">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+              <span>💬</span>
+              Conversation Dialogue (Turn #{index + 1})
+            </span>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleCopyUserPrompt}
-                className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium"
+                onClick={handleCopyFullRecord}
+                className="px-2 py-0.5 text-[11px] text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+                title="Copy complete session turn with system context and telemetry"
               >
-                {copiedUser ? "✓ Copied Prompt" : "Copy Prompt"}
+                {copiedFull ? "✓ Full Turn Copied" : "📋 Copy Turn"}
               </button>
-            </div>
-            <div className="max-h-72 overflow-y-auto p-3.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed shadow-inner">
-              {safePrompt}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowTechnicalDetails(!showTechnicalDetails);
+                }}
+                className="px-2.5 py-1 text-xs font-medium rounded-md bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 transition-colors flex items-center gap-1"
+              >
+                <span>
+                  ⚙️ {showTechnicalDetails ? "Hide Pipeline Details" : "Show Pipeline Details"}
+                </span>
+                <span
+                  className={`transition-transform duration-200 ${
+                    showTechnicalDetails ? "rotate-180" : ""
+                  }`}
+                >
+                  ▾
+                </span>
+              </button>
             </div>
           </div>
 
-          {/* Simple Default vs Technical Details Toggle */}
-          <div className="border border-slate-800/80 rounded-lg p-2.5 bg-slate-900/60">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-slate-400 text-xs">⚙️</span>
-                <span className="text-xs text-slate-300 font-medium">
-                  Technical Execution & Model Details
-                </span>
-                {safeSystemPrompt && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-800">
-                    Directives
+          {/* TWO-SIDED CHAT BUBBLE VIEW */}
+          <div className="space-y-3.5 pt-1">
+            {/* 1. USER MESSAGE BUBBLE */}
+            <div className="flex items-start gap-3 justify-end">
+              <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
+                <div className="flex items-center justify-between text-[11px] pb-1 border-b border-indigo-800/40">
+                  <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                    <span>👤</span>
+                    User Prompt
                   </span>
-                )}
-                {safeResponseSummary && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                    Response
-                  </span>
-                )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-indigo-400/80 font-mono text-[10px]">
+                      {safePrompt.length} chars
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyUserPrompt}
+                      className="text-[10px] text-indigo-300 hover:text-white transition-colors"
+                      title="Copy user prompt"
+                    >
+                      {copiedUser ? "✓ Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+                <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
+                  {safePrompt}
+                </div>
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCopyFullRecord}
-                  className="px-2 py-0.5 text-[11px] text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
-                  title="Copy complete session turn with system context"
-                >
-                  {copiedFull ? "✓ Full Turn Copied" : "📋 Copy Full Turn"}
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowTechnicalDetails(!showTechnicalDetails);
-                  }}
-                  className="px-2.5 py-1 text-xs font-medium rounded-md bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 transition-colors flex items-center gap-1"
-                >
-                  <span>{showTechnicalDetails ? "Hide Details" : "Show Details"}</span>
-                  <span
-                    className={`transition-transform duration-200 ${
-                      showTechnicalDetails ? "rotate-180" : ""
-                    }`}
-                  >
-                    ▾
-                  </span>
-                </button>
+              <div
+                className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0 mt-0.5 shadow-sm"
+                title="User"
+              >
+                👤
               </div>
             </div>
 
-            {/* Collapsible Technical Details (System Directives, AI Response, Tool Invocations, Token Metrics) */}
-            {showTechnicalDetails && (
-              <div className="mt-3 pt-3 border-t border-slate-800 space-y-3">
-                {/* Navigation Tabs for Technical Subviews */}
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-950 border border-slate-800">
-                    {safeSystemPrompt && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveTechnicalTab("system")}
-                        className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                          activeTechnicalTab === "system"
-                            ? "bg-purple-600 text-white shadow-sm"
-                            : "text-slate-400 hover:text-slate-200"
-                        }`}
-                      >
-                        🛡️ System Directives
-                      </button>
+            {/* 2. ASSISTANT / AGENT RESPONSE BUBBLE */}
+            <div className="flex items-start gap-3 justify-start">
+              <div
+                className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-200 text-xs shrink-0 mt-0.5 shadow-sm"
+                title="AI Assistant"
+              >
+                🤖
+              </div>
+              <div className="flex-1 max-w-2xl bg-slate-900/90 border border-slate-800 rounded-2xl rounded-tl-sm p-3.5 shadow-sm space-y-2">
+                <div className="flex items-center justify-between text-[11px] pb-1 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                      <span>🤖</span>
+                      Assistant Response
+                    </span>
+                    {item.model && (
+                      <span className="font-mono text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-slate-700">
+                        {item.model}
+                      </span>
                     )}
-                    {safeResponseSummary && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveTechnicalTab("summary")}
-                        className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                          activeTechnicalTab === "summary"
-                            ? "bg-indigo-600 text-white shadow-sm"
-                            : "text-slate-400 hover:text-slate-200"
-                        }`}
-                      >
-                        🤖 AI Output Summary
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setActiveTechnicalTab("tools")}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                        activeTechnicalTab === "tools"
-                          ? "bg-slate-700 text-white shadow-sm"
-                          : "text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      🛠️ Tools & Metadata
-                    </button>
                   </div>
-
-                  {activeTechnicalTab === "system" && safeSystemPrompt && (
+                  {safeResponseSummary && (
                     <button
                       type="button"
-                      onClick={handleCopySystemPrompt}
-                      className="px-2 py-0.5 text-[11px] rounded bg-purple-950/60 hover:bg-purple-900/60 text-purple-200 border border-purple-500/30 transition-colors"
+                      onClick={handleCopyAgentResponse}
+                      className="text-[10px] text-slate-400 hover:text-slate-200 transition-colors"
+                      title="Copy agent response"
                     >
-                      {copiedSystem ? "✓ Copied Directives" : "📋 Copy Directives"}
+                      {copiedAgent ? "✓ Copied" : "Copy"}
                     </button>
                   )}
                 </div>
 
-                {/* Subview 1: System Directives */}
-                {activeTechnicalTab === "system" && safeSystemPrompt && (
-                  <div>
-                    <div className="text-[10px] text-purple-400 mb-1 font-mono uppercase tracking-wider flex items-center justify-between">
-                      <span>System / Developer Directives</span>
-                      <span className="text-purple-400/80 font-normal">Context Injected</span>
-                    </div>
-                    <div className="max-h-60 overflow-y-auto p-3 rounded-lg bg-purple-950/20 border border-purple-500/30 font-mono text-xs text-purple-100 whitespace-pre-wrap select-text leading-relaxed">
-                      {safeSystemPrompt}
-                    </div>
+                {safeResponseSummary ? (
+                  <div className="font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
+                    {safeResponseSummary}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400 italic py-1">
+                    Response stream completed ({item.durationMs || 0}ms latency, HTTP{" "}
+                    {item.status ?? 200}).
                   </div>
                 )}
 
-                {/* Subview 2: Agent Response Summary */}
-                {activeTechnicalTab === "summary" && safeResponseSummary && (
-                  <div>
-                    <div className="text-[10px] text-indigo-400 mb-1 font-mono uppercase tracking-wider">
-                      Agent Response Summary
-                    </div>
-                    <div className="max-h-60 overflow-y-auto p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300 whitespace-pre-wrap select-text leading-relaxed">
-                      {safeResponseSummary}
-                    </div>
-                  </div>
-                )}
-
-                {/* Subview 3: Tools & Metrics */}
-                {activeTechnicalTab === "tools" && (
-                  <div className="space-y-3">
-                    {/* Provider & Routing Strategy Attribution */}
-                    {(item.provider || item.comboName) && (
-                      <div className="flex items-center gap-3 text-xs bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/60 flex-wrap">
-                        {item.provider && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-400 font-medium">Provider:</span>
-                            <span className="text-indigo-300 font-mono font-semibold bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-800/40">
-                              {item.provider}
-                            </span>
-                          </div>
-                        )}
-                        {item.comboName && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-400 font-medium">Combo Strategy:</span>
-                            <span className="text-purple-300 font-mono font-semibold bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/40">
-                              🔀 {item.comboName}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Tool Invocations */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-slate-400 font-medium">Tools Invocations:</span>
-                      {item.toolsUsed && item.toolsUsed.length > 0 ? (
-                        item.toolsUsed.map((tool, idx) => (
-                          <span
-                            key={idx}
-                            className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[11px]"
-                          >
-                            🛠️ {tool}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-slate-500 font-mono">None invoked</span>
-                      )}
-                    </div>
-
-                    {/* Files Modified */}
-                    {item.filesModified && item.filesModified.length > 0 && (
-                      <div className="flex items-start gap-2 flex-wrap">
-                        <span className="text-slate-400 font-medium">Files Touched:</span>
-                        <div className="flex flex-wrap gap-1">
-                          {item.filesModified.map((file, idx) => (
-                            <span
-                              key={idx}
-                              className="px-2 py-0.5 rounded bg-indigo-950/50 border border-indigo-800/50 text-indigo-300 font-mono text-[11px]"
-                            >
-                              📄 {file}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Metrics Grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                      <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-                          Estimated Cost
-                        </span>
-                        <span className="text-sm font-bold font-mono text-amber-400 mt-0.5 block">
-                          ${(item.costUsd ?? 0).toFixed(4)}
-                        </span>
-                      </div>
-
-                      <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-                          Tokens Processed
-                        </span>
-                        <span className="text-sm font-bold font-mono text-emerald-400 mt-0.5 block">
-                          {fmtCompact((item.tokensIn ?? 0) + (item.tokensOut ?? 0))}
-                        </span>
-                      </div>
-
-                      <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-                          Latency
-                        </span>
-                        <span className="text-sm font-bold font-mono text-sky-400 mt-0.5 block">
-                          {item.durationMs !== undefined && item.durationMs > 0
-                            ? `${item.durationMs}ms`
-                            : "0ms"}
-                        </span>
-                      </div>
-
-                      <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-                          Cache Efficiency
-                        </span>
-                        <span className="text-sm font-bold font-mono text-indigo-400 mt-0.5 block">
-                          {(() => {
-                            const cacheRead = item.tokensCacheRead ?? 0;
-                            const totalIn = item.tokensIn ?? 0;
-                            if (totalIn > 0 && cacheRead > 0) {
-                              const pct = Math.min(
-                                100,
-                                Math.round((cacheRead / (totalIn + cacheRead)) * 100)
-                              );
-                              return `~${pct}% cache hit`;
-                            }
-                            return cacheRead > 0
-                              ? `${fmtCompact(cacheRead)} cached`
-                              : "0% cache hit";
-                          })()}
-                        </span>
-                      </div>
+                {/* Error Summary Callout if failed */}
+                {item.errorSummary && (
+                  <div className="mt-2 p-2.5 rounded-lg bg-rose-950/40 border border-rose-800/50 text-rose-200 text-xs flex items-start gap-2">
+                    <span className="text-sm shrink-0">⚠️</span>
+                    <div>
+                      <span className="font-semibold text-rose-300 block">
+                        {item.errorType ? `Error (${item.errorType}):` : "Execution Error:"}
+                      </span>
+                      <p className="mt-0.5 font-mono text-[11px]">{item.errorSummary}</p>
                     </div>
                   </div>
                 )}
               </div>
-            )}
+            </div>
           </div>
+
+          {/* 3. PIPELINE & TECHNICAL EXECUTION DRAWER */}
+          {showTechnicalDetails && (
+            <div className="mt-4 pt-3 border-t border-slate-800 space-y-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800/80">
+              {/* Navigation Tabs for Technical Subviews */}
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTechnicalTab("tools")}
+                    className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                      activeTechnicalTab === "tools"
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    ⚡ Pipeline & Telemetry
+                  </button>
+                  {safeSystemPrompt && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTechnicalTab("system")}
+                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                        activeTechnicalTab === "system"
+                          ? "bg-purple-600 text-white shadow-sm"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      🛡️ System Directives
+                    </button>
+                  )}
+                  {safeResponseSummary && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTechnicalTab("summary")}
+                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                        activeTechnicalTab === "summary"
+                          ? "bg-slate-700 text-white shadow-sm"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      📋 Raw Response
+                    </button>
+                  )}
+                </div>
+
+                {activeTechnicalTab === "system" && safeSystemPrompt && (
+                  <button
+                    type="button"
+                    onClick={handleCopySystemPrompt}
+                    className="px-2 py-0.5 text-[11px] rounded bg-purple-950/60 hover:bg-purple-900/60 text-purple-200 border border-purple-500/30 transition-colors"
+                  >
+                    {copiedSystem ? "✓ Copied Directives" : "📋 Copy Directives"}
+                  </button>
+                )}
+              </div>
+
+              {/* Subview 1: Pipeline & Telemetry */}
+              {activeTechnicalTab === "tools" && (
+                <div className="space-y-3 pt-1">
+                  {/* End-to-End Pipeline Techniques Card */}
+                  <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800 space-y-2">
+                    <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider block">
+                      End-to-End Pipeline Techniques
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
+                      {/* Provider & Model Routing */}
+                      <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800">
+                        <span className="text-[10px] text-slate-400 uppercase font-medium block">
+                          Routing & Model
+                        </span>
+                        <div className="mt-1 space-y-0.5">
+                          <div className="text-slate-200 font-mono text-[11px]">
+                            {item.provider || "Default Router"} / {item.model || "Unknown Model"}
+                          </div>
+                          {item.comboName && (
+                            <div className="text-purple-300 font-mono text-[10px]">
+                              Strategy: {item.comboName}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Prompt Cache Optimization */}
+                      <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800">
+                        <span className="text-[10px] text-slate-400 uppercase font-medium block">
+                          Token Optimization
+                        </span>
+                        <div className="mt-1 space-y-0.5">
+                          <div className="text-emerald-300 font-mono text-[11px]">
+                            {cacheRatioPct > 0
+                              ? `⚡ ${cacheRatioPct}% cache hit (${fmtCompact(item.tokensCacheRead)} cached)`
+                              : "No cache read for this turn"}
+                          </div>
+                          {item.tokensCacheCreation ? (
+                            <div className="text-slate-400 font-mono text-[10px]">
+                              Created: {fmtCompact(item.tokensCacheCreation)} tokens
+                            </div>
+                          ) : null}
+                          {item.tokensReasoning ? (
+                            <div className="text-sky-300 font-mono text-[10px]">
+                              Reasoning: {fmtCompact(item.tokensReasoning)} tokens
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {/* Governance & Resilience Actions */}
+                      <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800">
+                        <span className="text-[10px] text-slate-400 uppercase font-medium block">
+                          Resilience & Governance
+                        </span>
+                        <div className="mt-1 space-y-0.5">
+                          <div className="text-cyan-300 font-mono text-[11px]">
+                            {item.resilienceActions
+                              ? `🛡️ ${item.resilienceActions}`
+                              : "Standard pass (no loop / breaker trip)"}
+                          </div>
+                          <div className="text-slate-400 text-[10px]">
+                            Status: HTTP {item.status ?? 200}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tool Invocations */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-slate-400 font-medium">Tools Invocations:</span>
+                    {item.toolsUsed && item.toolsUsed.length > 0 ? (
+                      item.toolsUsed.map((tool, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[11px]"
+                        >
+                          🛠️ {tool}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-slate-500 font-mono">None invoked</span>
+                    )}
+                  </div>
+
+                  {/* Files Modified */}
+                  {item.filesModified && item.filesModified.length > 0 && (
+                    <div className="flex items-start gap-2 flex-wrap">
+                      <span className="text-slate-400 font-medium">Files Touched:</span>
+                      <div className="flex flex-wrap gap-1">
+                        {item.filesModified.map((file, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded bg-indigo-950/50 border border-indigo-800/50 text-indigo-300 font-mono text-[11px]"
+                          >
+                            📄 {file}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Metrics Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
+                        Estimated Cost
+                      </span>
+                      <span className="text-sm font-bold font-mono text-amber-400 mt-0.5 block">
+                        ${(item.costUsd ?? 0).toFixed(4)}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
+                        Tokens Processed
+                      </span>
+                      <span className="text-sm font-bold font-mono text-emerald-400 mt-0.5 block">
+                        {fmtCompact((item.tokensIn ?? 0) + (item.tokensOut ?? 0))}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
+                        Latency
+                      </span>
+                      <span className="text-sm font-bold font-mono text-sky-400 mt-0.5 block">
+                        {item.durationMs !== undefined && item.durationMs > 0
+                          ? `${item.durationMs}ms`
+                          : "0ms"}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
+                        Cache Efficiency
+                      </span>
+                      <span className="text-sm font-bold font-mono text-indigo-400 mt-0.5 block">
+                        {cacheRatioPct > 0 ? `~${cacheRatioPct}% hit` : "0% hit"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Subview 2: System Directives */}
+              {activeTechnicalTab === "system" && safeSystemPrompt && (
+                <div>
+                  <div className="text-[10px] text-purple-400 mb-1 font-mono uppercase tracking-wider flex items-center justify-between">
+                    <span>System / Developer Directives</span>
+                    <span className="text-purple-400/80 font-normal">Context Injected</span>
+                  </div>
+                  <div className="max-h-60 overflow-y-auto p-3 rounded-lg bg-purple-950/20 border border-purple-500/30 font-mono text-xs text-purple-100 whitespace-pre-wrap select-text leading-relaxed">
+                    {safeSystemPrompt}
+                  </div>
+                </div>
+              )}
+
+              {/* Subview 3: Raw Response Summary */}
+              {activeTechnicalTab === "summary" && safeResponseSummary && (
+                <div>
+                  <div className="text-[10px] text-indigo-400 mb-1 font-mono uppercase tracking-wider">
+                    Agent Response Summary
+                  </div>
+                  <div className="max-h-60 overflow-y-auto p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300 whitespace-pre-wrap select-text leading-relaxed">
+                    {safeResponseSummary}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

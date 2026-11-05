@@ -73,6 +73,7 @@ export interface RecentPromptRecord {
   comboName?: string;
   errorType?: string | null;
   errorSummary?: string | null;
+  resilienceActions?: string | null;
 }
 
 export interface SessionSummary {
