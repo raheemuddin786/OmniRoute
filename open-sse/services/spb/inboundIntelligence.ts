@@ -28,6 +28,7 @@ export interface ContextualAnchors {
   diagnosedErrors: string[];
   recentToolActions: string[];
   inferredGoal: string;
+  hasDeferredToolsNotice?: boolean;
 }
 
 export interface PromptEnhancementResult {
@@ -154,11 +155,21 @@ export function extractContextAnchors(
     inferredGoal = `Modify/inspect files: ${Array.from(referencedFilesSet).slice(0, 3).join(", ")}`;
   }
 
+  // Detect if system message contains deferred tools notice
+  const hasDeferredToolsNotice = messages.some(
+    (msg) =>
+      msg.role === "system" &&
+      typeof msg.content === "string" &&
+      msg.content.includes("deferred tools are now available via ToolSearch") &&
+      msg.content.includes("schemas are NOT loaded")
+  );
+
   return {
     referencedFiles: Array.from(referencedFilesSet),
     diagnosedErrors,
     recentToolActions,
     inferredGoal,
+    hasDeferredToolsNotice,
   };
 }
 
@@ -367,6 +378,16 @@ export function enhanceInboundPrompt(
   if (!enhancedText.includes("Completion Standard")) {
     enhancedText += zeroOmissionMandate;
     appliedOptimizations.push("Zero-Omission & Completeness Mandate");
+  }
+
+  // Enforce deferred tools protocol if the session contains deferred tools notice
+  if (anchors.hasDeferredToolsNotice && !enhancedText.includes("Deferred Tools Protocol")) {
+    const deferredToolsDirective =
+      "\n\n[Deferred Tools Protocol: Certain tools (such as WebSearch, WebFetch, Monitor, etc.) have uninitialized schemas in this session. " +
+      "If you plan to execute any deferred tool, you MUST first load its schema using ToolSearch with query 'select:<ToolName>' (e.g. ToolSearch(query: 'select:WebSearch')). " +
+      "Never invoke an uninitialized deferred tool directly without calling ToolSearch first; direct calls without loaded schemas will fail with InputValidationError.]";
+    enhancedText += deferredToolsDirective;
+    appliedOptimizations.push("Deferred Tools Protocol Pre-Flight Directive");
   }
 
   // If a learned enhancement pattern exists with high satisfaction, incorporate it
