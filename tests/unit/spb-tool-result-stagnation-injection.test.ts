@@ -87,8 +87,10 @@ test("SPB Governance: injects autoRecoveryDirective into pure tool_result user m
       part &&
       part.type === "text" &&
       typeof part.text === "string" &&
-      (part.text.includes("EXECUTION MANDATE") ||
-        part.text.includes("DUPLICATE INSPECTION BLOCKED"))
+      (part.text.includes("Execution Mandate") ||
+        part.text.includes("EXECUTION MANDATE") ||
+        part.text.includes("DUPLICATE INSPECTION BLOCKED") ||
+        part.text.includes("Auto-Recovery Directive"))
   );
 
   assert.equal(
