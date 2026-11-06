@@ -1070,6 +1070,43 @@ async function handleChatImplementation(
               }
             : {}),
         };
+
+        // Fast-path enforcement for harness safety classifier: enforce a strict 5-second
+        // execution deadline to prevent client harness timeouts on safety permission queries
+        if (isHarnessSafetyClassifierRequest) {
+          // Attach timeout to the target-specific execution context to guarantee
+          // that the classifier dispatch enforces its 5-second limit as a hard deadline
+          // instead of relying on standard combo fallbacks.
+          if (handleSingleModel && typeof handleSingleModel === "function") {
+            const originalHandle = handleSingleModel;
+            // Use AbortController for proper timeout enforcement
+            handleSingleModel = (b: any, m: string, target?: any) => {
+              const controller = new AbortController();
+              setTimeout(() => controller.abort(), 5000);
+
+              const wrappedExecute = (_request: any, _context?: any) => {
+                return Promise.race([
+                  originalHandle(b, m, {
+                    ...target,
+                    modelAbortSignal: controller.signal,
+                    executionAbortController: controller,
+                  }),
+                  new Promise<never>((_, reject) => {
+                    controller.signal.addEventListener("abort", () => {
+                      reject(
+                        new Error(
+                          "SAFETY_CLASSIFIER_TIMEOUT: 5s limit exceeded for classifier safety check"
+                        )
+                      );
+                    });
+                  }),
+                ]);
+              };
+
+              return wrappedExecute(b, target);
+            };
+          }
+        }
       }
     } catch (spbErr) {
       log.warn("SPB", `SPB-IR processing warning: ${spbErr}`);
