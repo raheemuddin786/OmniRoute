@@ -2623,6 +2623,30 @@ export function applyErrorState<T extends AccountState | null | undefined>(
   return nextState;
 }
 
+let _rateLimitPauseChecker:
+  | ((
+      provider: string,
+      connectionId: string,
+      model: string | null | undefined,
+      now?: number
+    ) => boolean)
+  | null = null;
+
+export function setRateLimitPauseChecker(
+  checker: (
+    provider: string,
+    connectionId: string,
+    model: string | null | undefined,
+    now?: number
+  ) => boolean
+): void {
+  _rateLimitPauseChecker = checker;
+}
+
+export function getRateLimitPauseChecker(): typeof _rateLimitPauseChecker {
+  return _rateLimitPauseChecker;
+}
+
 export { isAccountSemaphoreFull } from "./accountSemaphore.ts";
 
 /**
