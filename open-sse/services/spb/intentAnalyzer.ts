@@ -32,6 +32,8 @@ export interface IntentProfile {
   promptAnchorHash: string;
   isToolResultTurn: boolean;
   isCodeMutationToolResult?: boolean;
+  isDuplicateFileRead?: boolean;
+  duplicateFilePath?: string;
   guidanceContract?: GuidanceContract;
   originalPrompt?: string; // preserved context for recovery and debugging
 }
@@ -285,9 +287,69 @@ export function classifyIntent(
     uniqueReferencedFiles.size > 3 &&
     (hasCodeKeywords || hasRefactorKeywords);
 
+  // Duplicate file read loop guard:
+  // Track files being inspected across rolling assistant/user tool turns.
+  // If an agent calls Read/inspect on the SAME file >= 3 times without an intervening
+  // code mutation, force CODE_GENERATION to break the infinite read loop.
+  let isDuplicateFileRead = false;
+  let duplicateFilePath: string | undefined;
+
+  const fileReadCounts = new Map<string, number>();
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      const content = msg.content;
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (
+            part &&
+            typeof part === "object" &&
+            (part as Record<string, unknown>).type === "tool_use"
+          ) {
+            const toolUse = part as { name?: string; input?: Record<string, unknown> };
+            const toolName = (toolUse.name || "").toLowerCase();
+            if (toolName === "read" || toolName === "file_read" || toolName === "view") {
+              const filePath = (
+                (toolUse.input?.file_path as string) ||
+                (toolUse.input?.path as string) ||
+                ""
+              ).trim();
+              if (filePath) {
+                const count = (fileReadCounts.get(filePath) || 0) + 1;
+                fileReadCounts.set(filePath, count);
+                if (count >= 3) {
+                  isDuplicateFileRead = true;
+                  duplicateFilePath = filePath;
+                }
+              }
+            } else if (
+              toolName === "write" ||
+              toolName === "edit" ||
+              toolName === "file_write" ||
+              toolName === "patch"
+            ) {
+              // Mutation occurred: reset counter for this file
+              const filePath = (
+                (toolUse.input?.file_path as string) ||
+                (toolUse.input?.path as string) ||
+                ""
+              ).trim();
+              if (filePath) {
+                fileReadCounts.delete(filePath);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
     taskPhase = "ARCHITECTURAL_PLANNING";
     complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
+  } else if (isDuplicateFileRead) {
+    // Hard break: repeated reading of the same file forces immediate code generation
+    taskPhase = "CODE_GENERATION";
+    complexityScore = 0.75;
   } else if (isToolResultTurn) {
     if (hasTestKeywords) {
       taskPhase = "TESTING_AND_VERIFICATION";
@@ -321,6 +383,8 @@ export function classifyIntent(
     promptAnchorHash,
     isToolResultTurn,
     isCodeMutationToolResult: !!isCodeMutationToolResult,
+    isDuplicateFileRead,
+    duplicateFilePath,
     originalPrompt: originalPromptText || "",
   };
 }

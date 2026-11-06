@@ -231,11 +231,15 @@ export function detectAndRecoverFromStagnation(
     // further read-only inspection and create secondary loops.
     escalationTier = "tier_2_resilient";
 
-    // Update the checkpoint with the reset counter to prevent immediate re-triggering
+    // CRITICAL FIX: Do NOT reset consecutiveReads to 0 upon detection.
+    // Resetting here causes an alternating-turn amnesia loop (turn 2 detected -> reset to 0 ->
+    // turn 3 has count 1 so undetected -> turn 4 detected -> repeat indefinitely).
+    // The counter must persist until an actual code-mutating turn occurs (Write/Edit/patch).
+    // We update the checkpoint preserving the active count so downstream tracking sees it.
     if (existingCheckpoint) {
       existingCheckpoint = {
         ...existingCheckpoint,
-        consecutiveReads: 0,
+        consecutiveReads,
       };
     }
   }
@@ -273,11 +277,11 @@ export function escalateFromStagnation(
   const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
   const newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
-  // Update the checkpoint with the reset counter to prevent immediate re-triggering
+  // Preserve consecutiveReads in checkpoint — do not reset until genuine code mutation
   if (existingCheckpoint) {
     existingCheckpoint = {
       ...existingCheckpoint,
-      consecutiveReads: 0,
+      consecutiveReads,
     };
   }
 

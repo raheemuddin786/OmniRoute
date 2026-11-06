@@ -930,6 +930,34 @@ async function handleChatImplementation(
     "isolate" | "continuation" | "speculative" | null;
   const pruneLegacyHeader = request.headers.get("x-omniroute-prune-legacy")?.trim() === "true";
 
+  // Fast-Path Safety Classifier Detection:
+  // Claude Code / Agent SDK runs an internal pre-execution tool safety check against auto/spb
+  // with a strict 120-second client timeout. If that safety query goes through multi-model
+  // combo fallback chains with 100k+ tokens, it times out and injects a synthetic failure.
+  // Detect short safety/permission check payloads (<2500 chars, <=3 messages, containing
+  // permission/safety/auto-mode classifier keywords) and assign low max_tokens and tight timeout.
+  const isHarnessSafetyClassifierRequest =
+    isSpbActive &&
+    Array.isArray(body?.messages) &&
+    body.messages.length <= 3 &&
+    (() => {
+      const allText = body.messages
+        .map((m: { content?: unknown }) =>
+          typeof m.content === "string"
+            ? m.content
+            : Array.isArray(m.content)
+              ? JSON.stringify(m.content)
+              : ""
+        )
+        .join(" ");
+      return (
+        allText.length < 2500 &&
+        /\b(safety of|safe to execute|permission|can this tool be safely run|auto mode cannot determine|determine the safety)\b/i.test(
+          allText
+        )
+      );
+    })();
+
   let spbDecision: SpbRoutingDecision | null = null;
   if (isSpbActive && Array.isArray(body?.messages)) {
     try {
@@ -1026,10 +1054,20 @@ async function handleChatImplementation(
           _spbDecision: spbDecision,
           ...(spbDecision.cacheControl ? { cacheControl: spbDecision.cacheControl } : {}),
           ...(body.max_tokens === undefined && spbDecision.tierAssignment?.maxTokens
-            ? { max_tokens: spbDecision.tierAssignment.maxTokens }
-            : {}),
+            ? {
+                max_tokens: isHarnessSafetyClassifierRequest
+                  ? Math.min(spbDecision.tierAssignment.maxTokens, 1024)
+                  : spbDecision.tierAssignment.maxTokens,
+              }
+            : isHarnessSafetyClassifierRequest
+              ? { max_tokens: 1024 }
+              : {}),
           ...(body.reasoning_effort === undefined && spbDecision.tierAssignment?.reasoningEffort
-            ? { reasoning_effort: spbDecision.tierAssignment.reasoningEffort }
+            ? {
+                reasoning_effort: isHarnessSafetyClassifierRequest
+                  ? "low"
+                  : spbDecision.tierAssignment.reasoningEffort,
+              }
             : {}),
         };
       }

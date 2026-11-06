@@ -330,7 +330,7 @@ export function saveCheckpoint(checkpoint: SpbStateCheckpoint): boolean {
       checkpoint.promptAnchorHash,
       checkpoint.taskPhase,
       checkpoint.modelTier,
-      checkpoint.statePayload,
+      checkpoint.statePayload || "{}",
       guidanceContractStr,
       checkpoint.createdAt,
     ];

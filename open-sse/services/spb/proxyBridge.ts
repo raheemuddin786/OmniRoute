@@ -269,6 +269,20 @@ export async function processSmartProxyRouting(
       }
     }
 
+    // Hard Duplicate File Read Blocker:
+    // If the agent read the exact same file >= 3 times, inject an explicit halt directive
+    if (intent.isDuplicateFileRead && intent.duplicateFilePath) {
+      isStagnant = true;
+      stagnationDetected = true;
+      stagnationRecovered = true;
+      const duplicateBlockDirective =
+        `[DUPLICATE INSPECTION BLOCKED: The file '${intent.duplicateFilePath}' has already been read multiple times in this session. ` +
+        `Repeatedly reading the same file is strictly prohibited. You MUST proceed immediately to applying edits (Write/Edit) or executing tests.]`;
+      autoRecoveryDirective = autoRecoveryDirective
+        ? `${autoRecoveryDirective}\n\n${duplicateBlockDirective}`
+        : duplicateBlockDirective;
+    }
+
     // Pass isToolResultTurn AND guidanceContract to enforce supervision
     // Tier 3 will require a guidanceContract for all phases
     const tierConfig = getTierConfig();
@@ -542,31 +556,51 @@ export async function processSmartProxyRouting(
 
     // Inject auto-recovery directive into messages if stagnation was detected
     if (autoRecoveryDirective) {
+      if (!enhancedMessages) {
+        enhancedMessages = [...messages];
+      }
+
       // 1. If enhancement produced an enhanced prompt, prepend the directive
       if (enhancement && enhancement.enhancedPrompt) {
         enhancement.enhancedPrompt = `${autoRecoveryDirective}\n\n${enhancement.enhancedPrompt}`;
       }
 
-      // 2. Ensure enhancedMessages receives the directive if it was already constructed
-      if (enhancedMessages && lastUserIndex >= 0 && enhancedMessages[lastUserIndex]) {
+      // 2. Ensure enhancedMessages receives the directive
+      if (lastUserIndex >= 0 && enhancedMessages[lastUserIndex]) {
         const targetMsg = enhancedMessages[lastUserIndex];
         if (typeof targetMsg.content === "string") {
           targetMsg.content = `${autoRecoveryDirective}\n\n${targetMsg.content}`;
         } else if (Array.isArray(targetMsg.content)) {
-          let replacedText = false;
-          targetMsg.content = targetMsg.content.map((part) => {
-            if (
-              !replacedText &&
+          const hasTextBlock = targetMsg.content.some(
+            (part) =>
               part &&
               typeof part === "object" &&
               (part as Record<string, unknown>).type === "text" &&
               typeof (part as Record<string, unknown>).text === "string"
-            ) {
-              replacedText = true;
-              return { ...part, text: `${autoRecoveryDirective}\n\n${part.text}` };
-            }
-            return part;
-          });
+          );
+
+          if (hasTextBlock) {
+            let replacedText = false;
+            targetMsg.content = targetMsg.content.map((part) => {
+              if (
+                !replacedText &&
+                part &&
+                typeof part === "object" &&
+                (part as Record<string, unknown>).type === "text" &&
+                typeof (part as Record<string, unknown>).text === "string"
+              ) {
+                replacedText = true;
+                return { ...part, text: `${autoRecoveryDirective}\n\n${part.text}` };
+              }
+              return part;
+            });
+          } else {
+            // Pure tool_result turn: prepend synthetic text block
+            targetMsg.content = [
+              { type: "text", text: autoRecoveryDirective },
+              ...targetMsg.content,
+            ];
+          }
         }
       }
 
@@ -579,10 +613,17 @@ export async function processSmartProxyRouting(
             content: `${autoRecoveryDirective}\n\n${targetMsg.content}`,
           };
         } else if (Array.isArray(targetMsg.content)) {
-          let replacedText = false;
-          messages[lastUserIndex] = {
-            ...targetMsg,
-            content: targetMsg.content.map((part) => {
+          const hasTextBlock = targetMsg.content.some(
+            (part) =>
+              part &&
+              typeof part === "object" &&
+              (part as Record<string, unknown>).type === "text" &&
+              typeof (part as Record<string, unknown>).text === "string"
+          );
+
+          if (hasTextBlock) {
+            let replacedText = false;
+            targetMsg.content = targetMsg.content.map((part) => {
               if (
                 !replacedText &&
                 part &&
@@ -594,8 +635,15 @@ export async function processSmartProxyRouting(
                 return { ...part, text: `${autoRecoveryDirective}\n\n${part.text}` };
               }
               return part;
-            }),
-          };
+            });
+          } else {
+            // Pure tool_result turn: prepend a synthetic text block so the
+            // recovery directive is delivered to the model instead of being dropped.
+            targetMsg.content = [
+              { type: "text", text: autoRecoveryDirective },
+              ...targetMsg.content,
+            ];
+          }
         }
       }
     }
