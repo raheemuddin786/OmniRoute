@@ -25,7 +25,19 @@ function julesHeaders(apiKey: string, json = false): Record<string, string> {
 }
 
 function parseGithubOwnerRepo(repoUrl: string, repoName: string): { owner: string; repo: string } {
-  const normalized = repoUrl.includes("://") ? repoUrl : `https://${repoUrl}`;
+  let normalized = repoUrl.trim();
+  if (normalized.startsWith("git@") && normalized.includes(":")) {
+    const parts = normalized.split(":");
+    normalized = `https://github.com/${parts[1]}`;
+  } else if (
+    !normalized.includes("://") &&
+    !normalized.startsWith("git@") &&
+    normalized.includes("/")
+  ) {
+    normalized = `https://github.com/${normalized}`;
+  } else if (!normalized.includes("://")) {
+    normalized = `https://${normalized}`;
+  }
   try {
     const url = new URL(normalized);
     const parts = url.pathname.split("/").filter(Boolean);

@@ -2,9 +2,55 @@
 // Extracted verbatim from claude-web.ts. No host state, no fetch/auth.
 import { extractClaudeWebAttachments } from "./attachments.ts";
 import { randomUUID } from "crypto";
+import { claude_webProvider } from "../../config/providers/registry/claude/web/index.ts";
 
 // Default model when not specified
 export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
+
+// Build SSOT catalog and alias lookup map directly from the provider registry definition
+export const CLAUDE_WEB_MODEL_MAP = new Map<string, string>();
+for (const entry of claude_webProvider.models || []) {
+  if (entry.id) {
+    CLAUDE_WEB_MODEL_MAP.set(entry.id.toLowerCase(), entry.id);
+    for (const effort of entry.supportedThinkingEfforts || []) {
+      CLAUDE_WEB_MODEL_MAP.set(`${entry.id.toLowerCase()}-${effort.toLowerCase()}`, entry.id);
+    }
+  }
+  for (const alias of entry.aliases || []) {
+    CLAUDE_WEB_MODEL_MAP.set(alias.toLowerCase(), entry.id);
+    for (const effort of entry.supportedThinkingEfforts || []) {
+      CLAUDE_WEB_MODEL_MAP.set(`${alias.toLowerCase()}-${effort.toLowerCase()}`, entry.id);
+    }
+  }
+}
+
+/**
+ * Normalizes an API-format, snapshot, or legacy model identifier to a model ID
+ * supported by Claude.ai's web catalog. Backed deterministically by the provider registry SSOT.
+ */
+export function normalizeClaudeWebModel(model: string | null | undefined): string {
+  if (!model || typeof model !== "string") {
+    return DEFAULT_CLAUDE_MODEL;
+  }
+  let trimmed = model.trim().toLowerCase();
+  if (trimmed.includes("/")) {
+    trimmed = trimmed.slice(trimmed.lastIndexOf("/") + 1);
+  }
+  const match = CLAUDE_WEB_MODEL_MAP.get(trimmed);
+  if (match) {
+    return match;
+  }
+  const lastDash = trimmed.lastIndexOf("-");
+  if (lastDash >= 0) {
+    const baseCandidate = trimmed.slice(0, lastDash);
+    const suffix = trimmed.slice(lastDash + 1);
+    if ((CLAUDE_WEB_REASONING_EFFORTS as readonly string[]).includes(suffix)) {
+      const baseMatch = CLAUDE_WEB_MODEL_MAP.get(baseCandidate);
+      if (baseMatch) return baseMatch;
+    }
+  }
+  return DEFAULT_CLAUDE_MODEL;
+}
 
 export type ClaudeWebOperation = "completion" | "retry_completion";
 
@@ -141,16 +187,21 @@ export function transformOpenAiTools(tools: unknown): ClaudeWebRequestPayload["t
 }
 
 /**
- * Get default personalized style
+ * Get default personalized style with optional system prompt injection
+ * System prompts are injected into the personalized style prompt field
+ * to avoid being treated as user content by Claude Web
  */
-export function getDefaultPersonalizedStyle(): ClaudeWebRequestPayload["personalized_styles"] {
+export function getDefaultPersonalizedStyle(
+  systemPrompt?: string
+): ClaudeWebRequestPayload["personalized_styles"] {
+  const basePrompt = systemPrompt ? `${systemPrompt}\n\nNormal` : "Normal\n";
   return [
     {
       type: "default",
       key: "Default",
       name: "Normal",
       nameKey: "normal_style_name",
-      prompt: "Normal\n",
+      prompt: basePrompt,
       summary: "Default responses from Claude",
       summaryKey: "normal_style_summary",
       isDefault: true,
@@ -280,6 +331,19 @@ function resolveClaudeWebThinkingMode(
   return { effort: "low", thinkingMode: "off" };
 }
 
+function extractSystemPrompt(messages: unknown[]): string | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  const systemParts: string[] = [];
+  for (const candidate of messages) {
+    if (!isRecord(candidate)) continue;
+    if (candidate.role === "system") {
+      const text = messageText(candidate.content);
+      if (text) systemParts.push(text);
+    }
+  }
+  return systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
+}
+
 function buildClaudeWebPayload(
   body: Record<string, unknown>,
   model: string,
@@ -287,11 +351,12 @@ function buildClaudeWebPayload(
   turn: ClaudeWebTurnFields
 ): ClaudeWebRequestPayload {
   const thinking = resolveClaudeWebThinkingMode(model, reasoningEffort);
+  const systemPrompt = extractSystemPrompt(Array.isArray(body.messages) ? body.messages : []);
   return {
     prompt: turn.prompt,
     model,
     timezone: turn.timezone,
-    personalized_styles: getDefaultPersonalizedStyle(),
+    personalized_styles: getDefaultPersonalizedStyle(systemPrompt),
     locale: turn.locale,
     tools: transformOpenAiTools(body.tools),
     turn_message_uuids: {
@@ -321,8 +386,18 @@ export function transformToClaude(
   turn?: ClaudeWebTurnFields
 ): ClaudeWebRequestPayload {
   const messages = Array.isArray(body.messages) ? body.messages : [];
-  const reasoningEffort = resolveClaudeWebReasoningEffort(body);
-  const resolvedModel = model || DEFAULT_CLAUDE_MODEL;
+  let reasoningEffort = resolveClaudeWebReasoningEffort(body);
+  if (!reasoningEffort && typeof model === "string") {
+    const trimmed = model.trim().toLowerCase();
+    const lastDash = trimmed.lastIndexOf("-");
+    if (lastDash >= 0) {
+      const suffix = trimmed.slice(lastDash + 1);
+      if ((CLAUDE_WEB_REASONING_EFFORTS as readonly string[]).includes(suffix)) {
+        reasoningEffort = suffix as (typeof CLAUDE_WEB_REASONING_EFFORTS)[number];
+      }
+    }
+  }
+  const resolvedModel = normalizeClaudeWebModel(model);
   const prompt = turn?.prompt ?? (buildPromptFromMessages(messages) || latestUserPrompt(messages));
   const resolvedTurn = turn ?? defaultTurn(prompt);
 

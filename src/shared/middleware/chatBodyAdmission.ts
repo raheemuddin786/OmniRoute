@@ -76,7 +76,7 @@ const CHAT_EXPLICIT_HARD_MAX_BODY_BYTES = parsePositiveInt(
 
 export const CHAT_MAX_HEAVY_IN_FLIGHT = parsePositiveInt(
   process.env.OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT,
-  1
+  4
 );
 
 /**

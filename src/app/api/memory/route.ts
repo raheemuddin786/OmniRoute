@@ -11,7 +11,10 @@ import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 
 const createMemorySchema = z.object({
   content: z.string().min(1),
-  key: z.string().min(1),
+  key: z
+    .string()
+    .min(1)
+    .default(() => `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
   type: z.nativeEnum(MemoryType).default(MemoryType.FACTUAL),
   sessionId: z.string().default(""),
   apiKeyId: z.string().default(""),

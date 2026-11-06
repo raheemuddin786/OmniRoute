@@ -48,6 +48,7 @@ export type CompatibleProviderInfo = {
   color: string;
   textIcon: string;
   apiType?: string;
+  serviceKinds?: string[];
   /** Optional operator-supplied remote icon URL (#2166). */
   iconUrl?: string;
 };
@@ -394,6 +395,15 @@ export function buildStaticProviderEntries(
   );
 }
 
+export function resolveCompatibleServiceKinds(type?: string, apiType?: string): string[] {
+  if (type === "anthropic-compatible") return ["llm"];
+  if (apiType === "embeddings") return ["embedding"];
+  if (apiType === "images-generations") return ["image"];
+  if (apiType === "audio-transcriptions") return ["stt"];
+  if (apiType === "audio-speech") return ["tts"];
+  return ["llm"];
+}
+
 export function buildCompatibleProviderGroups(
   providerNodes: Array<{
     id: string;
@@ -420,6 +430,7 @@ export function buildCompatibleProviderGroups(
         color: "#10A37F",
         textIcon: "OC",
         apiType: node.apiType,
+        serviceKinds: resolveCompatibleServiceKinds(node.type, node.apiType),
         iconUrl: node.iconUrl || undefined,
       });
       continue;
@@ -433,6 +444,7 @@ export function buildCompatibleProviderGroups(
         name: node.name || labels.claudeCodeCompatibleName,
         color: "#B45309",
         textIcon: "CC",
+        serviceKinds: ["llm"],
         iconUrl: node.iconUrl || undefined,
       });
       continue;
@@ -443,6 +455,7 @@ export function buildCompatibleProviderGroups(
       name: node.name || labels.anthropicCompatibleName,
       color: "#D97757",
       textIcon: "AC",
+      serviceKinds: ["llm"],
       iconUrl: node.iconUrl || undefined,
     });
   }

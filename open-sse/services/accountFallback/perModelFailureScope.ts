@@ -129,5 +129,7 @@ export function hasPerModelFailureScope(
   if (hasPerModelQuota(provider, model, connectionPassthroughModels)) return true;
   if (typeof connectionPassthroughModels === "boolean") return connectionPassthroughModels;
   if (!provider) return false;
-  return resolveProviderId(provider) === "claude";
+  const canonical = resolveProviderId(provider);
+  // Claude Web multiplexes multiple models behind one cookie/session; lock the model, not the session
+  return canonical === "claude" || canonical === "claude-web";
 }

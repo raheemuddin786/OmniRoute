@@ -17,9 +17,10 @@ export class CodexCloudAgent extends CloudAgentBase {
   ): Promise<CloudAgentTask> {
     const taskId = this.generateTaskId();
 
+    const normalized = this.normalizeRepository(params.source.repoUrl, params.source.repoName);
     const body: Record<string, unknown> = {
       prompt: params.prompt,
-      repository_context: params.source.repoUrl,
+      repository_context: normalized.httpsUrl,
     };
 
     if (params.source.branch) {
