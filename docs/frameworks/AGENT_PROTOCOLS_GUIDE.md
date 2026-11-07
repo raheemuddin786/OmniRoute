@@ -291,3 +291,16 @@ curl http://localhost:20128/api/v1/agents/tasks/<task-id> \
 - [SKILLS.md](./SKILLS.md) — Skills framework (different from A2A skills — local execution sandbox)
 - [API_REFERENCE.md](../reference/API_REFERENCE.md#agents-protocol) — endpoint reference
 - Source: `src/lib/{a2a,acp,cloudAgent}/`
+
+---
+
+## Client Harness Protocols: Deferred Tools & Schema Loading
+
+When running inside advanced agent harnesses like Claude Code or the Claude Agent SDK with large tool suites (e.g. >100 MCP tools), the client harness defers tool schema transmission to conserve prompt token limits.
+
+### Mechanics:
+
+1. **Deferred Tools Announcement**: The harness lists deferred tools (e.g. `WebSearch`, `WebFetch`, `Monitor`, `CronCreate`, etc.) in the system message, withholding their JSON schemas.
+2. **Schema Pre-Flight**: Models MUST invoke `ToolSearch` with query `select:<ToolName>` (e.g. `ToolSearch(query: 'select:WebSearch')`) prior to invoking the deferred tool.
+3. **Execution Failure Mode**: Direct invocation without loading the schema causes client-side `InputValidationError: <tool> failed due to the following issue: An unexpected parameter was provided... This tool's schema was not sent to the API`.
+4. **SPB Zero-Intention-Loss Guard**: SPB automatically injects a `[Deferred Tools Protocol: ...]` pre-flight directive whenever deferred tool notices are detected in the session context, guiding models to execute `ToolSearch` first.
