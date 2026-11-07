@@ -1,9 +1,9 @@
-import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
 import {
   getTierConfig,
   resolveVirtualTierModels,
   expandComboModelsFromDb,
 } from "@omniroute/open-sse/services/tierResolver";
+// import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts"; // Temporarily unused
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -68,6 +68,7 @@ import {
 } from "@omniroute/open-sse/services/comboConfig.ts";
 import { injectHandoffIntoBody } from "@omniroute/open-sse/services/contextHandoff.ts";
 import { runWithTransientBackendRetry } from "@omniroute/open-sse/services/transientBackendRetry.ts";
+import { isMarkedLocalProcessPressureResponse } from "@omniroute/open-sse/utils/localPressureResponse.ts";
 import {
   HTTP_STATUS,
   ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE,
@@ -90,6 +91,7 @@ import { isRuntimeProviderRetirementError } from "@/shared/constants/providerRet
 import { isCommonChatGptWebRetirementError } from "@/shared/constants/chatgptWebRetirement";
 import { isChatGptWebCodexModel } from "@/shared/constants/chatgptWebCodex";
 import { deleteHandoff, getHandoff } from "@/lib/db/contextHandoffs";
+import { scopeHandoffSessionId } from "@omniroute/open-sse/services/combo/handoffSessionScope.ts";
 import { getComboByName, updateCombo } from "@/lib/db/combos";
 import { isModelAllowedForKey } from "@/lib/db/apiKeys";
 import { promoteSuccessfulComboModel } from "@/lib/combos/autoPromote";
@@ -185,12 +187,12 @@ import { markQuotaHealthy } from "../../domain/quotaCache";
 import { resolveForcedConnectionForCredentialPool } from "../services/sessionAffinityPin.ts";
 import { RequestTelemetry, recordTelemetry } from "../../shared/utils/requestTelemetry";
 import { generateRequestId } from "../../shared/utils/requestId";
-import { logAuditEvent } from "../../lib/compliance/index";
+// import { logAuditEvent } from "../../lib/compliance/index"; // Temporarily unused
 import { enforceApiKeyPolicy } from "../../shared/utils/apiKeyPolicy";
 import { rejectIfMeteredBudgetExceeded } from "@/lib/usage/meteredBudgetPolicy";
 import { hasProviderQuotaBypassScope } from "../../shared/constants/apiKeyPolicyScopes";
 import { isMicrosoftDesignerWebProviderRetiredError } from "../../shared/constants/designerWebRetirement";
-import { cloneBoundedForLog } from "@omniroute/open-sse/utils/requestLogger.ts";
+// import { cloneBoundedForLog } from "@omniroute/open-sse/utils/requestLogger.ts"; // Temporarily unused
 import { handleInternalUsageCommand } from "@/lib/usage/internalUsageCommand";
 import {
   applyTaskAwareRouting,
@@ -1780,6 +1782,7 @@ async function handleChatImplementation(
     const perRequestAutoControls = resolveRequestAutoControls(request.headers);
     const relayOptions = {
       sessionId,
+      apiKeyId: apiKeyInfo?.id ?? null,
       ...(combo.strategy === "context-relay" ? { config: relayConfig } : {}),
       ...(bypassProviderQuotaPolicy ? { bypassProviderQuotaPolicy: true } : {}),
       ...perRequestAutoControls,
@@ -2061,72 +2064,96 @@ async function handleChatImplementation(
           log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
         }
       }
+    } else if (
+      !response.ok &&
+      [502, 503].includes(response.status) &&
+      !isMarkedLocalProcessPressureResponse(response) &&
+      typeof (settings as any)?.globalFallbackModel === "string" &&
+      (settings as any).globalFallbackModel.trim()
+    ) {
+      // Global fallback for non-SPB combos when local process pressure did not exhaust
+      const fallbackModel = (settings as any).globalFallbackModel.trim();
+      log.info(
+        "GLOBAL_FALLBACK",
+        `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
+      );
+      try {
+        const fallbackCombo = await getComboByName(fallbackModel).catch(() => null);
+        const fallbackResponse = fallbackCombo
+          ? await (handleComboChat as any)({
+              body,
+              combo: fallbackCombo,
+              endpointPath: new URL(request.url).pathname,
+              requestHeaders: request.headers,
+              handleSingleModel: (b: any, m: string) =>
+                handleSingleModelChat(
+                  b,
+                  m,
+                  clientRawRequest,
+                  request,
+                  fallbackCombo.name ?? fallbackModel,
+                  apiKeyInfo,
+                  telemetry,
+                  {
+                    sessionId,
+                    sessionAffinityKey,
+                    emergencyFallbackTried: true,
+                    forceLiveComboTest: isComboLiveTest,
+                    conversationId,
+                    managedLease,
+                    videoBridgeLog,
+                  },
+                  fallbackCombo.strategy,
+                  true
+                ),
+              sessionId,
+              sessionAffinityKey,
+              log,
+            })
+          : await runWithTransientBackendRetry(
+              () =>
+                handleSingleModelChat(
+                  body,
+                  fallbackModel,
+                  clientRawRequest,
+                  request,
+                  combo.name,
+                  apiKeyInfo,
+                  telemetry,
+                  {
+                    sessionId,
+                    sessionAffinityKey,
+                    emergencyFallbackTried: true,
+                    forceLiveComboTest: isComboLiveTest,
+                    conversationId,
+                    managedLease,
+                    videoBridgeLog,
+                  },
+                  combo.strategy,
+                  true
+                ),
+              { signal: signal ?? undefined, source: "global-fallback" }
+            );
+        if (fallbackResponse.ok) {
+          log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+          recordTelemetry(telemetry);
+          return withSpbHeaders(
+            withModalityBridgeHeader(
+              withConversationId(withSessionHeader(fallbackResponse, sessionId), conversationId),
+              modalityBridgeHeader
+            ),
+            spbDecision
+          );
+        }
+        log.warn(
+          "GLOBAL_FALLBACK",
+          `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+        );
+      } catch (err: any) {
+        log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
+      }
     }
     // ─────────────────────────────────────────────────────────────────────────
-
-    // Record telemetry
-    recordTelemetry(telemetry);
-    // Log combo failures that bypassed handleChatCore (e.g. all targets skipped by circuit breaker).
-    // Records BOTH a call_logs row (dashboard/logs) AND a usage_history row attributed to the api key
-    // (success:false) so gate/breaker-rejected traffic is counted per key — support-mesh 2026-07-08.
-    if (!response.ok) {
-      try {
-        const { recordRejectedRequestUsage, resolveRejectedComboProvider } =
-          await import("./rejectedRequestUsage");
-        await recordRejectedRequestUsage({
-          status: response.status,
-          model: body?.model || resolvedModelStr,
-          requestedModel: body?.model || resolvedModelStr,
-          provider: resolveRejectedComboProvider(body?.model || resolvedModelStr, combo.name),
-          endpoint: clientRawRequest?.endpoint,
-          error: await getComboFailureLogError(response, combo.name),
-          comboName: combo.name,
-          apiKeyId: apiKeyInfo?.id ?? null,
-          apiKeyName: apiKeyInfo?.name ?? null,
-          correlationId: reqId,
-          sessionTag: conversationId,
-          startTime: telemetry?.startTime,
-          requestBody: clientRawRequest?.body ?? null,
-        });
-      } catch {}
-    }
-    response = await applySpbOutboundZeroLoss(
-      response,
-      spbDecision,
-      body,
-      resolvedModelStr,
-      clientRawRequest,
-      request,
-      combo.name,
-      apiKeyInfo,
-      telemetry,
-      {
-        sessionId,
-        sessionAffinityKey,
-        correlationId: reqId,
-        conversationId,
-        managedLease,
-        videoBridgeLog,
-      }
-    );
-    return withSpbHeaders(
-      withModalityBridgeHeader(
-        withConversationId(
-          withCorrelationId(withSessionHeader(response, sessionId), reqId),
-          conversationId
-        ),
-        modalityBridgeHeader
-      ),
-      spbDecision
-    );
-  }
-  telemetry.endPhase();
-
-  // Single model request
-  // Try to resolve routing combo from model prefix for compression combo lookup
-  let routingComboId: string | null = null;
-  if (!combo) {
-    const providerPrefix = resolvedModelStr.split("/")[0];
     if (providerPrefix) {
       try {
         const { getComboByName } = await import("@/lib/db/combos");
@@ -2760,7 +2787,7 @@ async function handleSingleModelChat(
     const excludedConnectionIds = new Set<string>(agy.on ? agy.attempted : []);
     let lastError = requestRetryLastError;
     let lastStatus = requestRetryLastStatus;
-    let lastCooldownMs = requestRetryLastCooldownMs;
+    // let lastCooldownMs = requestRetryLastCooldownMs; // Temporarily unused
     let preselectedCredentials = initialPreselectedCredentials;
     initialPreselectedCredentials = null;
 
@@ -3043,13 +3070,14 @@ async function handleSingleModelChat(
         return effectivePolicyRejection;
       }
       let injectedHandoff = null;
+      const handoffSessionId = scopeHandoffSessionId(runtimeOptions.sessionId, apiKeyInfo?.id);
       if (
         comboStrategy === "context-relay" &&
         comboName &&
-        runtimeOptions.sessionId &&
+        handoffSessionId &&
         body?._omnirouteSkipContextRelay !== true
       ) {
-        const handoff = getHandoff(runtimeOptions.sessionId, comboName);
+        const handoff = getHandoff(handoffSessionId, comboName);
         if (handoff && handoff.fromAccount !== credentials.connectionId) {
           // Inject only after a real account switch. The combo loop itself cannot
           // reliably detect this because account selection happens inside auth.
@@ -3242,8 +3270,8 @@ async function handleSingleModelChat(
         ) {
           breaker._onSuccess();
         }
-        if (injectedHandoff && runtimeOptions.sessionId && comboName) {
-          deleteHandoff(runtimeOptions.sessionId, comboName);
+        if (injectedHandoff && handoffSessionId && comboName) {
+          deleteHandoff(handoffSessionId, comboName);
         }
         if (telemetry) telemetry.startPhase("finalize");
         if (telemetry) telemetry.endPhase();
@@ -3446,7 +3474,7 @@ async function handleSingleModelChat(
             `Antigravity connection ${accountId}... produced no useful stream content, trying fallback connection`
           );
           if (Number.isFinite(cooldownMs) && cooldownMs > 0) {
-            lastCooldownMs = cooldownMs;
+            // lastCooldownMs = cooldownMs; // Temporarily unused
             requestRetryLastCooldownMs = cooldownMs;
           }
           if (runtimeOptions.sessionAffinityKey) {
@@ -3495,7 +3523,7 @@ async function handleSingleModelChat(
             `Antigravity connection ${accountId}... timed out before response headers, trying fallback connection`
           );
           if (Number.isFinite(cooldownMs) && cooldownMs > 0) {
-            lastCooldownMs = cooldownMs;
+            // lastCooldownMs = cooldownMs; // Temporarily unused
             requestRetryLastCooldownMs = cooldownMs;
           }
           if (runtimeOptions.sessionAffinityKey) {
@@ -3783,7 +3811,7 @@ async function handleSingleModelChat(
       // already apply.
       if (shouldFallback && !hasForcedConnection) {
         if (Number.isFinite(cooldownMs) && cooldownMs > 0) {
-          lastCooldownMs = cooldownMs;
+          // lastCooldownMs = cooldownMs; // Temporarily unused
           requestRetryLastCooldownMs = cooldownMs;
         }
         log.warn("AUTH", `Account ${accountId}... unavailable (${result.status}), trying fallback`);
