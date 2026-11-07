@@ -634,6 +634,27 @@ function isSchemaAlreadyApplied(
         hasColumn(db, "usage_history", "provider_credits") &&
         hasColumn(db, "usage_history", "provider_cost_usd")
       );
+    case "226":
+      return (
+        hasTable(db, "spb_branch_checkpoints") &&
+        hasColumn(db, "agentic_conversations", "parent_conversation_id")
+      );
+    case "227":
+      return hasTable(db, "spb_learned_optimizations") && hasTable(db, "spb_intent_evaluations");
+    case "228":
+      return hasTable(db, "spb_confirmation_gates");
+    case "229":
+      return hasColumn(db, "spb_telemetry_audit", "stagnation_detected");
+    case "230":
+      return hasTable(db, "project_registry");
+    case "231":
+      return hasTable(db, "project_analytics_relevance");
+    case "232":
+      return (
+        hasColumn(db, "call_logs", "workspace_root") && hasColumn(db, "call_logs", "project_id")
+      );
+    case "233":
+      return hasColumn(db, "project_registry", "provenance");
     default:
       return false;
   }
