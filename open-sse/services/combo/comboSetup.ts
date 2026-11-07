@@ -17,13 +17,41 @@ import {
 } from "../contextHandoff.ts";
 import { getLastSessionModel } from "../../../src/lib/db/contextHandoffs.ts";
 import { scopeHandoffSessionId } from "./handoffSessionScope.ts";
-// import { applyComboAgentMiddleware } from "../comboAgentMiddleware.ts"; // Temporarily unused
+import { applyComboAgentMiddleware } from "../comboAgentMiddleware.ts";
 import { resolveComboSetupConfig, resolveComboTargetTimeoutMsForCombo } from "../comboConfig.ts";
 import { resolveResilienceSettings } from "../../../src/lib/resilience/settings";
 import { FETCH_TIMEOUT_MS } from "../../config/constants.ts";
 import { deriveComboSessionKey } from "./autoStrategy.ts";
-import type { ComboContext, ComboSetup } from "./comboTypes.ts";
+import type { ComboContext } from "./context.ts";
+import { getStrategyTraits } from "./strategyRegistry.ts";
 
+export interface ComboSetup {
+  strategy: ReturnType<typeof normalizeRoutingStrategy>;
+  relayConfig: ReturnType<typeof resolveContextRelayConfig> | null;
+  resilienceSettings: ReturnType<typeof resolveResilienceSettings>;
+  universalHandoffConfig: ReturnType<typeof resolveUniversalHandoffConfig>;
+  effectiveSessionId: string | null;
+  pinnedModel: string | null;
+  clientRequestedStream: boolean;
+  config: ReturnType<typeof resolveComboSetupConfig>;
+  comboTargetTimeoutMs: number;
+  comboTimeoutMs: number;
+  reasoningTokenBufferEnabled: boolean;
+}
+
+/**
+ * Server-side context cache pinning (replaces the <omniModel> tag roundtrip): re-pins the
+ * combo to the model used last for this session via session_model_history — no client-side
+ * tag injection, no visible output pollution. Rewrites ctx.body when a model is pinned.
+ *
+ * #3825: when the client sends no session id (most OpenAI-compatible clients), fall back to a
+ * stable conversation fingerprint derived from the body so the combo still re-pins across
+ * turns. ONLY engaged when context_cache_protection is truthy — when off, behaviour is
+ * unchanged (combos rotate as before, no pin read/write, no <omniModel> tag).
+ *
+ * Extracted from phaseComboSetup to keep that function under the complexity ceiling and to
+ * further the combo god-file decomposition.
+ */
 function resolveContextCachePin(ctx: ComboContext): {
   effectiveSessionId: string | null;
   pinnedModel: string | null;
@@ -62,19 +90,32 @@ export function phaseComboSetup(ctx: ComboContext): ComboSetup {
 
   const resilienceSettings = settings
     ? resolveResilienceSettings(settings)
-    : resolveResilienceSettings({});
+    : resolveResilienceSettings(null);
 
-  const universalHandoffConfig = combo.skipUniversalHandoff
-    ? null
-    : resolveUniversalHandoffConfig(combo.universal_handoff_config);
+  const universalHandoffConfig = resolveUniversalHandoffConfig(
+    (combo.universal_handoff || combo.universalHandoff) as
+      Record<string, unknown> | null | undefined,
+    relayOptions?.universalHandoffConfig as Record<string, unknown> | null | undefined
+  );
 
+  // Server-side context cache pinning (rewrites ctx.body when a model is pinned).
   const { effectiveSessionId, pinnedModel } = resolveContextCachePin(ctx);
 
-  const clientRequestedStream =
-    relayOptions?.stream === true || (ctx.body as Record<string, unknown>)?.stream === true;
+  // ── Combo Agent Middleware (#399 + #401) ────────────────────────────────
+  // Apply system_message override, tool_filter_regex.
+  // Context cache pinning is handled above via session_model_history.
+  const { body: agentBody } = applyComboAgentMiddleware(
+    ctx.body,
+    combo,
+    "" // provider/model not yet known — resolved per-model in loop
+  );
+  ctx.body = agentBody;
 
+  const clientRequestedStream = ctx.body?.stream === true;
+
+  // Use config cascade before dispatch so all strategies, pinned context routes,
+  // and round-robin targets share the same timeout policy.
   const config = resolveComboSetupConfig(combo, settings);
-
   const comboTargetTimeoutMs = resolveComboTargetTimeoutMsForCombo(
     config,
     FETCH_TIMEOUT_MS,
