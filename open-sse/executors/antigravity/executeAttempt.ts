@@ -29,6 +29,7 @@ import { sanitizeAntigravityToolPayload } from "../../config/toolCloaking.ts";
 import {
   applyAntigravityClientProfileHeaders,
   removeHeaderCaseInsensitive,
+  markProjectHeaderRejected,
 } from "../../services/antigravityClientProfile.ts";
 import * as prl from "../../utils/providerRequestLogging.ts";
 import { generateAntigravityRequestId } from "../../services/antigravityIdentity.ts";
@@ -429,6 +430,8 @@ export async function sendAntigravityRequest(
     const retryHeaders = { ...finalHeaders };
     removeHeaderCaseInsensitive(retryHeaders, "x-goog-user-project");
     log.debug("RETRY", "403 with x-goog-user-project, retrying once without it");
+    // Mark this account as having rejected the header so future requests skip it
+    markProjectHeaderRejected(credentials);
     await prl.captureCurrentProviderBody(url, retryHeaders, serializedRequest.bodyString, log);
     const retryPhysicalSendOrdinal = ++physicalSendCounter.value;
     log.debug(
