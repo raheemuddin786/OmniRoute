@@ -502,6 +502,16 @@ export async function fetchResetAwareQuotaWithCache({
 
 export type PreScreenResult = { profile: ProviderProfile | null; available: boolean };
 
+import { getModelHealthCache } from "./modelHealthCache.ts";
+
+/**
+ * Check if a model is a "zombie" - continuously failing for > 24 hours
+ */
+async function isModelZombie(modelStr: string, provider: string): Promise<boolean> {
+  const health = await getModelHealthCache(modelStr, provider);
+  return health.continuousFailures >= 24 * 60 * 60; // > 24 hours of continuous failures
+}
+
 export async function preScreenTargets(
   targets: ResolvedComboTarget[],
   isModelAvailable?: IsModelAvailable | null
@@ -529,6 +539,12 @@ export async function preScreenTargets(
           (await Promise.resolve(isModelAvailable(target.modelStr, target)).catch(() => true)) ===
           true;
       }
+
+      // Zombie model detection: skip models that have been continuously failing for > 24 hours
+      if (available && (await isModelZombie(target.modelStr, target.provider))) {
+        available = false;
+      }
+
       return { key: target.executionKey, result: { profile, available } };
     }
   );
