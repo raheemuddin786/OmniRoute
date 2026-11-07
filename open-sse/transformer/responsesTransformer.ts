@@ -29,7 +29,7 @@ const CORRUPTED_REQUEST_ID_THRESHOLD = 200;
 // Dynamic import for Node.js-only modules (fs/path unavailable in Workers)
 let _fs = null;
 let _path = null;
-async function getFs() {
+async function _getFs() {
   if (_fs === null) {
     try {
       _fs = (await import("fs")).default;
@@ -39,7 +39,7 @@ async function getFs() {
   }
   return _fs || null;
 }
-async function getPath() {
+async function _getPath() {
   if (_path === null) {
     try {
       _path = (await import("path")).default;
@@ -521,7 +521,7 @@ export function createResponsesApiTransformStream(
               state.funcArgsBuf[idx] = args;
             }
           }
-        } catch (e) {
+        } catch (_e) {
           // Ignore malformed JSON
         }
       }
