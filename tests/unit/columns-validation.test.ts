@@ -43,3 +43,17 @@ test("sanitizeRateLimitOverrides accepts executionMaxWaitMs (schema/allowlist pa
   assert.deepEqual(r.rejected, []);
   assert.deepEqual(r.sanitized, { maxWaitMs: 30000, executionMaxWaitMs: 300000 });
 });
+
+test("sanitizeRateLimitOverrides accepts timeout overrides (request_timeout_ms, connect_timeout_ms, read_timeout_ms)", () => {
+  const r = sanitizeRateLimitOverrides({
+    request_timeout_ms: 60000,
+    connect_timeout_ms: 10000,
+    read_timeout_ms: 45000,
+  });
+  assert.deepEqual(r.rejected, []);
+  assert.deepEqual(r.sanitized, {
+    request_timeout_ms: 60000,
+    connect_timeout_ms: 10000,
+    read_timeout_ms: 45000,
+  });
+});

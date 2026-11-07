@@ -139,6 +139,10 @@ function toFullModelString(model: string, providerId?: string | null): string {
   const trimmedModel = model.trim();
   if (trimmedModel.includes("/")) return trimmedModel;
   const normalizedProviderId = toTrimmedString(providerId);
+  // Deduplicate provider prefix: if providerId equals model, use just model
+  if (normalizedProviderId && normalizedProviderId === trimmedModel) {
+    return trimmedModel;
+  }
   return normalizedProviderId ? `${normalizedProviderId}/${trimmedModel}` : trimmedModel;
 }
 
@@ -169,9 +173,16 @@ function shouldTreatAsComboRef(
   providerId: string | null,
   options: NormalizeComboStepOptions
 ): boolean {
-  if (providerId) return false;
   const comboNames = collectComboNames(options.allCombos);
-  return comboNames.has(target) || target === toTrimmedString(options.comboName);
+  if (comboNames.has(target)) return true;
+  const isComboProvider = providerId === "combo" || providerId === "auto";
+  if (providerId && !isComboProvider) return false;
+  const cleanTarget = target.replace(/^(combo|auto)\//i, "");
+  return (
+    comboNames.has(cleanTarget) ||
+    target === toTrimmedString(options.comboName) ||
+    cleanTarget === toTrimmedString(options.comboName)
+  );
 }
 
 export function getComboStepWeight(value: unknown): number {
@@ -242,7 +253,9 @@ export function getComboStepTarget(
   if (typeof value === "string") {
     const target = toTrimmedString(value);
     if (!target) return null;
-    return shouldTreatAsComboRef(target, null, options) ? target : target;
+    return shouldTreatAsComboRef(target, null, options)
+      ? target.replace(/^(combo|auto)\//i, "")
+      : target;
   }
 
   if (!isRecord(value)) return null;
@@ -262,7 +275,7 @@ export function getComboStepTarget(
     parseProviderId(rawModel);
 
   if (!isExplicitModel && shouldTreatAsComboRef(rawModel, providerId, options)) {
-    return rawModel;
+    return rawModel.replace(/^(combo|auto)\//i, "");
   }
 
   return toFullModelString(rawModel, providerId);
@@ -280,10 +293,11 @@ export function normalizeComboStep(
     if (!target) return null;
 
     if (shouldTreatAsComboRef(target, null, options)) {
+      const cleanRef = target.replace(/^(combo|auto)\//i, "");
       return {
-        id: buildStepId("combo-ref", comboName, index, target),
+        id: buildStepId("combo-ref", comboName, index, cleanRef),
         kind: "combo-ref",
-        comboName: target,
+        comboName: cleanRef,
         weight: 0,
       };
     }
@@ -410,10 +424,11 @@ export function normalizeComboStep(
   }
 
   if (!isExplicitModel && shouldTreatAsComboRef(rawModel, providerId, options)) {
+    const cleanRef = rawModel.replace(/^(combo|auto)\//i, "");
     return {
-      id: explicitId || buildStepId("combo-ref", comboName, index, rawModel),
+      id: explicitId || buildStepId("combo-ref", comboName, index, cleanRef),
       kind: "combo-ref",
-      comboName: rawModel,
+      comboName: cleanRef,
       weight,
       ...(label ? { label } : {}),
     };

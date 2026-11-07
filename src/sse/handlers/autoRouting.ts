@@ -16,6 +16,8 @@ import {
   type ModelFamily,
 } from "@omniroute/open-sse/services/autoCombo/modelFamily.ts";
 import { getCachedSettings } from "@/lib/db/readCache";
+import { getTierConfig } from "@omniroute/open-sse/services/tierResolver";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { isAutoRequestResolvedCapabilitiesEnabled } from "@/shared/utils/featureFlags";
 import {
   createInvocationId,
@@ -133,6 +135,23 @@ export async function createVirtualAutoCombo(
       HTTP_STATUS.BAD_REQUEST,
       `Model '${state.model}' is not a valid combo or provider. Unknown built-in auto combo.`
     );
+  }
+
+  if (state.model === "auto/spb" || state.model === "auto/smart-proxy-bridge") {
+    // Check if SPB is enabled and if tier models are configured
+    const tierConfig = getTierConfig();
+    const spbEnabled = tierConfig.spbEnabled !== false || isFeatureFlagEnabled("SPB_ENABLED");
+    const hasTierModels =
+      tierConfig.tierModels?.apex?.length > 0 ||
+      tierConfig.tierModels?.resilient?.length > 0 ||
+      tierConfig.tierModels?.local?.length > 0;
+
+    if (!spbEnabled || !hasTierModels) {
+      return errorResponse(
+        HTTP_STATUS.SERVICE_UNAVAILABLE,
+        `No models configured for ${state.model}. Please configure tier models in SPB settings.`
+      );
+    }
   }
 
   try {
