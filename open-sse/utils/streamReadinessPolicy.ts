@@ -64,6 +64,13 @@ function isSyntxProvider(provider?: string | null): boolean {
   return id === "syntx" || id === "stx";
 }
 
+function isClaudeWebProvider(provider?: string | null): boolean {
+  const id = String(provider || "")
+    .trim()
+    .toLowerCase();
+  return id === "claude-web" || id === "cw";
+}
+
 function isClaudeFormatReasoningProvider(provider?: string | null): boolean {
   if (!provider) return false;
   const normalized = provider.toLowerCase();
@@ -235,6 +242,15 @@ export function resolveStreamReadinessTimeout(
     timeoutMs = Math.max(timeoutMs, syntxTimeoutMs);
     maxTimeoutMs = Math.max(maxTimeoutMs, syntxTimeoutMs);
     reasons.push("syntx_long_generate");
+  }
+
+  // Claude Web has high latency / extended reasoning / Cloudflare challenges.
+  // Allow up to 300s (5m) so multi-minute thinking does not trip the stream readiness guard.
+  if (isClaudeWebProvider(input.provider)) {
+    const claudeWebTimeoutMs = 300_000;
+    timeoutMs = Math.max(timeoutMs, claudeWebTimeoutMs);
+    maxTimeoutMs = Math.max(maxTimeoutMs, claudeWebTimeoutMs);
+    reasons.push("claude_web_long_turn");
   }
 
   // Cursor flattens Responses history into one wire message before dispatch;
