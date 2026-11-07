@@ -459,3 +459,41 @@ test("the settings schema accepts the zeroOverlap knobs and rejects bad ones", (
     false
   );
 });
+
+test("session-frozen tool mask keeps identical tool subset across multi-turn requests with same sessionId", () => {
+  const tools = [
+    { type: "function", function: { name: "weather", description: "Get weather" } },
+    { type: "function", function: { name: "database", description: "Query SQL database" } },
+    { type: "function", function: { name: "git_diff", description: "Show git diff output" } },
+    { type: "function", function: { name: "docker_ps", description: "List docker containers" } },
+  ];
+
+  const config = { enabled: true, maxTools: 2, alwaysInclude: [] };
+  const sessionId = "sess-cache-test-99";
+
+  // Turn 1: query mentions "weather"
+  const turn1 = applyToolDisclosure(
+    { messages: [{ role: "user", content: "what is the weather in Tokyo?" }], tools },
+    config,
+    { sessionId }
+  );
+
+  assert.ok(turn1.stats);
+  const turn1KeptNames = (turn1.body.tools as Array<{ function: { name: string } }>).map(
+    (t) => t.function.name
+  );
+  assert.equal(turn1KeptNames.includes("weather"), true);
+
+  // Turn 2: query mentions "database", but under the frozen mask of the same session,
+  // the tool set remains byte-identical to turn 1 to protect provider prefix prompt caching.
+  const turn2 = applyToolDisclosure(
+    { messages: [{ role: "user", content: "query the database table users" }], tools },
+    config,
+    { sessionId }
+  );
+
+  const turn2KeptNames = (turn2.body.tools as Array<{ function: { name: string } }>).map(
+    (t) => t.function.name
+  );
+  assert.deepEqual(turn2KeptNames, turn1KeptNames);
+});

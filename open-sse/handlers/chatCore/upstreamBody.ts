@@ -13,6 +13,7 @@ import { OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME } from "../../services/webSearc
 import { OMNIROUTE_WEB_FETCH_FALLBACK_TOOL_NAME } from "../../services/webFetchInterception.ts";
 import { CLAUDE_OAUTH_TOOL_PREFIX } from "../../translator/request/openai-to-claude.ts";
 import { applyToolDisclosure, type ToolDisclosureConfig } from "../../utils/toolDisclosure.ts";
+import { extractSessionAffinityKey } from "@/sse/services/sessionAffinityPin.ts";
 import {
   providerSupportsCaching,
   resolveConnectionCacheOverride,
@@ -497,11 +498,19 @@ export async function prepareUpstreamBody(opts: PrepareUpstreamBodyOptions): Pro
     }
   }
   bodyToSend = defaultImageDetail(bodyToSend, isOpencodeClient);
+  // Derive stable session affinity key to preserve tool mask across session turns
+  const sessionAffinityId =
+    extractSessionAffinityKey(
+      opts.rawBody ?? bodyToSend,
+      opts.clientRawRequest?.headers as Headers
+    ) ?? null;
+
   // Relevance selection runs before the provider cap so the cap keeps the useful tools.
   const disclosure = applyToolDisclosure(bodyToSend, opts.toolDisclosure, {
     rawBody: opts.rawBody,
     toolNamePrefix: CLAUDE_OAUTH_TOOL_PREFIX,
     isPinnedTool: isFallbackTool,
+    sessionId: sessionAffinityId,
     onError: (error) =>
       log?.warn?.("TOOL_DISCLOSURE", `Selection failed, sending all tools: ${String(error)}`),
   });

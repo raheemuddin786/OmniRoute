@@ -48,6 +48,8 @@ export interface ToolDisclosureOptions {
   toolNamePrefix?: string;
   /** Extra caller-owned pins (e.g. the router's own fallback tools). */
   isPinnedTool?: (tool: unknown) => boolean;
+  /** Session identifier to freeze the tool selection mask across multi-turn requests. */
+  sessionId?: string | null;
   /** Called when selection throws; the body is then returned untouched. */
   onError?: (error: unknown) => void;
 }
@@ -66,6 +68,14 @@ export const DEFAULT_ZERO_OVERLAP_DROP_CAP = 0.4;
 const ZERO_OVERLAP_QUERY_ITEMS = 3;
 const ZERO_OVERLAP_QUERY_MAX_CHARS = 8000;
 const ALWAYS_PINNED = ["ToolSearch"];
+
+// In-memory cache for session-frozen tool masks to preserve prompt caching (15-min TTL)
+const SESSION_TOOL_MASKS = new Map<string, { keptNames: Set<string>; lastUsed: number }>();
+const SESSION_MASK_TTL_MS = 15 * 60 * 1000;
+
+export function clearSessionToolMasks(): void {
+  SESSION_TOOL_MASKS.clear();
+}
 
 function clampRatio(value: unknown, fallback: number): number {
   const numeric = Number(value);
@@ -371,6 +381,37 @@ function selectTools(
   const prefix = options.toolNamePrefix ?? "";
   const normalize = (name: string) =>
     prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
+
+  // Session-level tool mask freezing: preserves prompt-cache prefix across turns
+  const sessionId = options.sessionId;
+  const now = Date.now();
+  if (sessionId) {
+    const cached = SESSION_TOOL_MASKS.get(sessionId);
+    if (cached && now - cached.lastUsed <= SESSION_MASK_TTL_MS) {
+      cached.lastUsed = now;
+      const kept = tools.filter((tool) => {
+        const name = readToolName(tool);
+        return (
+          name === null || cached.keptNames.has(normalize(name)) || options.isPinnedTool?.(tool)
+        );
+      });
+      if (kept.length === tools.length) return { body, stats: null };
+      const dropped = tools
+        .filter((tool) => {
+          const name = readToolName(tool);
+          return (
+            name !== null && !cached.keptNames.has(normalize(name)) && !options.isPinnedTool?.(tool)
+          );
+        })
+        .map((tool) => readToolName(tool))
+        .filter((name): name is string => name !== null);
+      return {
+        body: { ...body, tools: withAnchorMoved(tools, kept) },
+        stats: { before: tools.length, after: kept.length, dropped },
+      };
+    }
+  }
+
   const query = zeroOverlap
     ? recentText(body) || recentText(options.rawBody)
     : lastUserText(body) || lastUserText(options.rawBody);
@@ -407,6 +448,18 @@ function selectTools(
     .filter((_, i) => !keep[i])
     .map((tool) => readToolName(tool))
     .filter((name): name is string => name !== null);
+
+  // If sessionId was provided, freeze this initial tool mask for subsequent session turns
+  if (sessionId) {
+    const keptNames = new Set(
+      kept
+        .map((tool) => readToolName(tool))
+        .filter((n): n is string => n !== null)
+        .map(normalize)
+    );
+    SESSION_TOOL_MASKS.set(sessionId, { keptNames, lastUsed: now });
+  }
+
   return {
     body: { ...body, tools: withAnchorMoved(tools, kept) },
     stats: { before: tools.length, after: kept.length, dropped },
