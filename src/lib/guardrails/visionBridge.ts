@@ -352,6 +352,12 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // guardrail an image-bearing request assigned to a text-only model will
     // fail upstream with "does not support images".
     const isAuto = model === "auto" || model.startsWith("auto/");
+    const isSpb =
+      model === "auto/spb" ||
+      model === "auto/smart-proxy-bridge" ||
+      model === "spb" ||
+      Boolean((payload as Record<string, unknown>)?._spbActive) ||
+      Boolean((payload as Record<string, unknown>)?._spbDecision);
 
     // Declare before the conditional so they're available to the rest of preCall
     let forceVisionBridge = false;
@@ -362,7 +368,7 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // different fact from `false` (proven text-only) and must not be conflated.
     let requestedModelVision: boolean | null = null;
 
-    if (!isAuto) {
+    if (!isAuto && !isSpb) {
       forceVisionBridge = isVisionBridgeForcedModel(model);
 
       // 4. Check if model supports vision
@@ -401,9 +407,47 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
         // Combo mapping found — fall through to process images
       }
     }
-    // For auto models (isAuto=true), force remains false and combo decision
-    // remains undefined, which makes the reroute check on line ~189 treat it
-    // like a non-combo model — exactly what we want: reroute to a vision model.
+
+    if (isAuto || isSpb) {
+      const spbSelected = (payload as Record<string, unknown>)?._spbDecision as
+        { selectedModel?: string } | undefined;
+      if (spbSelected?.selectedModel) {
+        const caps = getResolvedModelCapabilities(spbSelected.selectedModel);
+        if (caps?.supportsVision === true) {
+          comboVisionBridgeDecision = "skip";
+        }
+      }
+
+      if (!comboVisionBridgeDecision) {
+        // Check whether configured tier models (e.g. SPB resilient or apex tier) define vision support
+        try {
+          const { getTierConfig } = await import("@omniroute/open-sse/services/tierResolver.ts");
+          const tierConfig = getTierConfig();
+          const tierCandidates = [
+            ...(tierConfig?.tierModels?.resilient || []),
+            ...(tierConfig?.tierModels?.apex || []),
+            ...(tierConfig?.tierModels?.local || []),
+          ];
+          for (const candidate of tierCandidates) {
+            const decision = await getComboVisionBridgeDecision(candidate);
+            if (decision === "skip" || decision === "process") {
+              comboVisionBridgeDecision = decision;
+              break;
+            }
+            const caps = getResolvedModelCapabilities(candidate);
+            if (caps?.supportsVision === true) {
+              comboVisionBridgeDecision = "skip";
+              break;
+            }
+          }
+        } catch {}
+      }
+
+      if (comboVisionBridgeDecision === "skip") {
+        context.log?.debug?.("VISION_BRIDGE", "Skipping: auto tier models support vision natively");
+        return { block: false };
+      }
+    }
 
     // 5. Get body and normalize Chat Completions `messages` vs Responses `input`.
     // Both containers carry role/content items and are supported by the shared
@@ -530,13 +574,14 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
       );
     }
     const rerouteEligible =
-      runtime.mode === "reroute" ||
-      rerouteTextOnly ||
-      (!bareIdUnknownVision &&
-        (comboVisionBridgeDecision === "not-combo" ||
-          comboVisionBridgeDecision === "no-vision" ||
-          isAuto) &&
-        !forceVisionBridge);
+      !isSpb &&
+      (runtime.mode === "reroute" ||
+        rerouteTextOnly ||
+        (!bareIdUnknownVision &&
+          (comboVisionBridgeDecision === "not-combo" ||
+            comboVisionBridgeDecision === "no-vision" ||
+            (isAuto && !comboVisionBridgeDecision)) &&
+          !forceVisionBridge));
     // Forced modes short-circuit BEFORE the auto heuristic (#6640/#7204 untouched):
     // - "describe" skips the whole reroute block → straight to the describe path.
     // - "reroute" skips only the keep-credentialed-model guard; the reroute-target
