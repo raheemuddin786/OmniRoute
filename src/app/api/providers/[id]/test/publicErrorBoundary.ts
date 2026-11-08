@@ -59,6 +59,14 @@ export function classifyFailure({
     return makeDiagnosis("upstream_rate_limited", "upstream", message, "429");
   }
 
+  if (
+    numericStatus === 402 ||
+    normalized.includes("payment required") ||
+    normalized.includes("insufficient credits")
+  ) {
+    return makeDiagnosis("credits_exhausted", "upstream", message, "402");
+  }
+
   if (numericStatus && numericStatus >= 500) {
     return makeDiagnosis("upstream_unavailable", "upstream", message, String(numericStatus));
   }

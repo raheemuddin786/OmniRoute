@@ -9,6 +9,8 @@ import { APP_CONFIG } from "@/shared/constants/config";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import { getSpbTelemetrySummary } from "@/lib/db/spbState";
 
 /**
  * GET /api/monitoring/health — System health overview
@@ -94,6 +96,22 @@ function startHealthPayloadRefresh(): Promise<unknown> {
 // an additive `deepHealth` key on the full view only, served from its own
 // 30s cache and refreshed off the request path (same SWR motif as above).
 function withDeepHealth(payload: unknown, wantDeep: boolean): unknown {
+  // Inject live SPB telemetry data when SPB is enabled
+  if (payload && typeof payload === "object") {
+    const isSpbActive = isFeatureFlagEnabled("SPB_ENABLED") || process.env.SPB_ENABLED === "true";
+    if (isSpbActive) {
+      const summary = getSpbTelemetrySummary();
+      (payload as Record<string, unknown>).spbTelemetry = {
+        totalRoutes: summary.totalRoutes,
+        checkpointsRestored: summary.checkpointsRestored,
+        fallbacksTriggered: summary.fallbacksTriggered,
+        phaseDistribution: summary.phaseDistribution,
+        tierDistribution: summary.tierDistribution,
+        lastRoutedAt: summary.lastRoutedAt,
+      };
+    }
+  }
+
   if (!wantDeep || !deepHealthVerdictCache) return payload;
   return { ...(payload as Record<string, unknown>), deepHealth: deepHealthVerdictCache.verdict };
 }
