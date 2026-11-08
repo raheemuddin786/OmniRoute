@@ -453,6 +453,48 @@ export async function dispatchWithCooldownRetry(opts: {
         markLoopExpiredIfSafetyFired();
       }
 
+      // Degraded mode: when all targets are skipped due to cooldown/circuit-open,
+      // wait for the earliest cooldown to clear instead of failing immediately.
+      // This prevents exhausting all 81 combo targets when a transient cooldown
+      // would clear within a short wait.
+      if (!anySuccess && !state.comboExpired && !comboRequestMalformed) {
+        const allSkippedDueToCooldown =
+          state.skippedForCircuitOpen ||
+          state.exhaustedProviders.size > 0 ||
+          state.exhaustedConnections.size > 0;
+
+        if (allSkippedDueToCooldown) {
+          const earliestWaitMs =
+            state.earliestCircuitOpenRetryMs > 0
+              ? state.earliestCircuitOpenRetryMs
+              : state.skippedConnectionCooldownUntil
+                ? Math.max(0, state.skippedConnectionCooldownUntil - Date.now())
+                : 0;
+
+          if (earliestWaitMs > 0 && earliestWaitMs <= 30000) {
+            deps.log.info(
+              "COMBO",
+              `All targets cooling down — degraded mode: waiting ${earliestWaitMs}ms for earliest cooldown to clear`
+            );
+            await new Promise((resolve) => {
+              const timer = setTimeout(resolve, earliestWaitMs);
+              deps.signal?.addEventListener(
+                "abort",
+                () => {
+                  clearTimeout(timer);
+                  resolve(undefined);
+                },
+                { once: true }
+              );
+            });
+            if (deps.signal?.aborted) {
+              deps.log.info("COMBO", "Client disconnected during degraded mode wait — aborting");
+              return errorResponse(499, "Client disconnected");
+            }
+          }
+        }
+      }
+
       // G1: if the safety timer won the race (request would otherwise hang), give
       // in-flight tasks a short drain window to land their per-model errors into
       // state.comboErrors so the 504 carries the same "tried: a (500)" summary the

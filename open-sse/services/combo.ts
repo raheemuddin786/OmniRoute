@@ -44,6 +44,7 @@ import { lookupPositiveCap } from "./combo/concurrencyCaps.ts";
 import { acquireQuotaShareConcurrencySlot } from "./combo/quotaShareConcurrency.ts";
 
 import { resolveConnectionTimeoutMs } from "../handlers/chatCore/upstreamTimeouts.ts";
+import { REGISTRY } from "../config/providers/index.ts";
 import { getCachedProviderConnectionById } from "../../src/lib/db/readCache.ts";
 
 import { expandPromptCacheAffinityTargetsFromConnections } from "./combo/promptCacheAffinity.ts";
@@ -176,6 +177,12 @@ export {
 };
 export { resolveShadowTargets, scheduleShadowRouting };
 export { preScreenTargets };
+export {
+  getModelHealthCache,
+  recordModelHealthResult,
+  recordModelHealthSuccess,
+  recordModelHealthFailure,
+} from "./combo/modelHealthCache.ts";
 export { resolveComboRuntimeUnits, resolveComboTargets, filterTargetsByRequestCompatibility };
 export {
   getComboFromData,
@@ -644,11 +651,34 @@ export async function resolveTargetTimeoutMsForTarget(
   log?: Pick<ComboLogger, "debug"> | null
 ): Promise<number | undefined> {
   const connectionId = target && "connectionId" in target ? target.connectionId : null;
-  if (!connectionId) return undefined;
+  const targetProvider =
+    target && "provider" in target && typeof target.provider === "string" ? target.provider : null;
   try {
-    const connection = await getCachedProviderConnectionById(connectionId);
-    if (!connection) return undefined;
-    const timeoutMs = resolveConnectionTimeoutMs(connection.providerSpecificData);
+    let timeoutMs: number | undefined;
+    if (connectionId) {
+      const connection = await getCachedProviderConnectionById(connectionId);
+      if (connection) {
+        timeoutMs = resolveConnectionTimeoutMs(connection.providerSpecificData);
+        if (
+          timeoutMs === undefined &&
+          typeof connection.provider === "string" &&
+          connection.provider
+        ) {
+          const canonicalProvider = resolveProviderId(connection.provider);
+          const registryEntry = REGISTRY[canonicalProvider];
+          if (typeof registryEntry?.timeoutMs === "number" && registryEntry.timeoutMs > 0) {
+            timeoutMs = registryEntry.timeoutMs;
+          }
+        }
+      }
+    }
+    if (timeoutMs === undefined && targetProvider) {
+      const canonicalProvider = resolveProviderId(targetProvider);
+      const registryEntry = REGISTRY[canonicalProvider];
+      if (typeof registryEntry?.timeoutMs === "number" && registryEntry.timeoutMs > 0) {
+        timeoutMs = registryEntry.timeoutMs;
+      }
+    }
     if (timeoutMs === undefined) return undefined;
     return resolveComboTargetTimeoutMsForCombo(config, timeoutMs, strategy, comboCooldownWait);
   } catch (err) {
@@ -766,6 +796,7 @@ async function handleComboChatInner({
       handleSingleModelWithTimeout,
       log,
       hiddenModelsByProvider,
+      sessionId: effectiveSessionId,
     });
     if (pinnedDispatch) return pinnedDispatch;
   }

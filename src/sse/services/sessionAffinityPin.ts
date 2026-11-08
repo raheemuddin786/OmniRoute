@@ -44,6 +44,7 @@ import {
 import { isComboPerModelTimeoutAbort } from "@omniroute/open-sse/services/combo/comboAbortReasons.ts";
 import * as log from "../utils/logger";
 import { readHeaderValue } from "./headerReader.ts";
+import { getConnectionInFlight } from "./connectionConcurrencyTracker.ts";
 
 export { readHeaderValue } from "./headerReader.ts";
 
@@ -201,7 +202,15 @@ export function extractSessionAffinityKey(
   const headerKey = normalizeSessionKey(
     readHeaderValue(headers, "x-codex-session-id") ??
       readHeaderValue(headers, "x-session-id") ??
-      readHeaderValue(headers, "x-omniroute-session"),
+      readHeaderValue(headers, "x_session_id") ??
+      readHeaderValue(headers, "x-omniroute-session") ??
+      readHeaderValue(headers, "session-id") ??
+      readHeaderValue(headers, "x-conversation-id") ??
+      readHeaderValue(headers, "x-cline-task-id") ??
+      readHeaderValue(headers, "x-cursor-session-id") ??
+      readHeaderValue(headers, "x-agent-session-id") ??
+      readHeaderValue(headers, "x-agent-id") ??
+      readHeaderValue(headers, "x-task-id"),
     "header"
   );
   if (headerKey) return headerKey;
@@ -211,9 +220,14 @@ export function extractSessionAffinityKey(
   const explicitKey =
     normalizeSessionKey(metadata.session_id, "metadata") ??
     normalizeSessionKey(metadata.sessionId, "metadata") ??
+    normalizeSessionKey(metadata.task_id, "metadata") ??
+    normalizeSessionKey(metadata.agent_id, "metadata") ??
+    normalizeSessionKey(metadata.conversation_id, "metadata") ??
     normalizeSessionKey(record.conversation_id, "conversation") ??
     normalizeSessionKey(record.session_id, "session") ??
-    normalizeSessionKey(record.prompt_cache_key, "prompt-cache");
+    normalizeSessionKey(record.task_id, "task") ??
+    normalizeSessionKey(record.prompt_cache_key, "prompt-cache") ??
+    normalizeSessionKey(record.user, "user");
   if (explicitKey) return explicitKey;
 
   const inputText = getFirstInputText(body);
@@ -281,6 +295,28 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
   if (existing) {
     const connection = connections.find((candidate) => candidate.id === existing.connectionId);
     if (connection) {
+      // If the pinned connection is currently in-flight and an idle alternative exists,
+      // balance this parallel request to an idle connection instead of causing 429
+      if (getConnectionInFlight(connection.id) > 0) {
+        const idleSibling = connections.find(
+          (candidate) => candidate.id !== connection.id && getConnectionInFlight(candidate.id) === 0
+        );
+        if (idleSibling) {
+          log.info(
+            "AUTH",
+            `session_key=${formatSessionKeyForLog(sessionKey)} pinned connection ${connection.id.slice(
+              0,
+              8
+            )} has ${getConnectionInFlight(connection.id)} in-flight -> balancing parallel request to idle connection ${idleSibling.id.slice(0, 8)}`
+          );
+          const nextCount = (idleSibling.consecutiveUseCount || 0) + 1;
+          await touchConnectionLastUsed(idleSibling.id, nextCount);
+          idleSibling.lastUsedAt = new Date().toISOString();
+          idleSibling.consecutiveUseCount = nextCount;
+          return idleSibling;
+        }
+      }
+
       touchSessionAccountAffinity(sessionKey, provider, Date.now(), ttlMs);
       const nextCount = (connection.consecutiveUseCount || 0) + 1;
       await touchConnectionLastUsed(connection.id, nextCount);
@@ -333,6 +369,26 @@ export function planSessionAffinityConnection<T extends SessionAffinityConnectio
   const existing = getSessionAccountAffinity(sessionKey, provider, ttlMs);
   const existingConnection =
     existing && connections.find((candidate) => candidate.id === existing.connectionId);
+
+  // If pinned connection is in-flight and an idle sibling exists, balance the parallel request
+  if (existingConnection && getConnectionInFlight(existingConnection.id) > 0) {
+    const idleSibling = connections.find(
+      (candidate) =>
+        candidate.id !== existingConnection.id && getConnectionInFlight(candidate.id) === 0
+    );
+    if (idleSibling) {
+      return {
+        connection: idleSibling,
+        commit: async () => {
+          const nextCount = (idleSibling.consecutiveUseCount || 0) + 1;
+          await touchConnectionLastUsed(idleSibling.id, nextCount);
+          idleSibling.lastUsedAt = new Date().toISOString();
+          idleSibling.consecutiveUseCount = nextCount;
+        },
+      };
+    }
+  }
+
   const connection = existingConnection ?? [...connections].sort(compareLruConnections)[0] ?? null;
   if (!connection) return null;
 

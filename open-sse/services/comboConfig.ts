@@ -25,7 +25,12 @@ export const PRE_SCREEN_CONCURRENCY = 5;
  * can still raise it per-combo via `targetTimeoutMs`, or set
  * a longer value for slow non-streaming reasoning combos.
  */
-export const DEFAULT_COMBO_TARGET_TIMEOUT_MS = 120_000;
+export const DEFAULT_COMBO_TARGET_TIMEOUT_MS =
+  typeof process !== "undefined" &&
+  process.env?.COMBO_TARGET_TIMEOUT_MS &&
+  Number(process.env.COMBO_TARGET_TIMEOUT_MS) > 0
+    ? Number(process.env.COMBO_TARGET_TIMEOUT_MS)
+    : 120_000;
 
 /**
  * Small buffer added on top of the combo-cooldown-wait budget (see below) when deriving

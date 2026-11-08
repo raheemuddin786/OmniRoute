@@ -26,6 +26,18 @@ import * as rot from "./rotationConfig.ts";
 import { isContentPolicyRefusal } from "../utils/contentPolicyError.ts";
 import { isRegistryPassthroughProvider } from "./passthroughRegistry.ts";
 import { getProviderCategory, isLocalProvider } from "../config/providerRegistry.ts";
+
+type RateLimitPauseChecker = (
+  provider: string,
+  connectionId: string,
+  model: string | null | undefined,
+  now?: number
+) => boolean;
+let rateLimitPauseChecker: RateLimitPauseChecker | null = null;
+
+export function setRateLimitPauseChecker(checker: RateLimitPauseChecker): void {
+  rateLimitPauseChecker = checker;
+}
 import {
   DEFAULT_RESILIENCE_SETTINGS,
   resolveResilienceSettings,
@@ -45,7 +57,10 @@ import {
   looksLikeQuotaExhausted,
   type FailureKind,
 } from "../../src/shared/utils/classify429";
-import { recordProviderSuccess as resetCooldownFailureCount } from "./providerCooldownTracker.ts";
+import {
+  recordProviderSuccess as resetCooldownFailureCount,
+  recordProviderConnectionFailure,
+} from "./providerCooldownTracker.ts";
 import {
   resolveProviderId,
   isLocalProvider as isLocalProviderId,
@@ -953,6 +968,8 @@ export function hasPerModelQuota(
   if (isRegistryPassthroughProvider(canonicalId)) return true;
   if (isCompatibleProvider(canonicalId)) return true;
   if (isLocalProviderId(canonicalId) || isSelfHostedChatProvider(canonicalId)) return true;
+  // Claude Web multiplexes multiple models behind one cookie/session; lock the model, not the session
+  if (canonicalId === "claude-web") return true;
   return false;
 }
 
@@ -1002,7 +1019,7 @@ export function shouldMarkAccountExhaustedFrom429(
 
 export function classifyLockoutReason(status: number): string {
   if (status === 429) return "rate_limit";
-  if (status === 403) return "quota_exhausted";
+  if (status === 402 || status === 403) return "quota_exhausted";
   return "unknown";
 }
 
@@ -1040,11 +1057,16 @@ export function isModelLocked(
   model: string | null | undefined
 ): boolean {
   if (!model) return false;
-  return exactModelLock.isAnyKeyLocked(
+  const locked = exactModelLock.isAnyKeyLocked(
     modelLockouts,
     cleanupModelLockKey,
     getModelLockKeys(provider, connectionId, model)
   );
+  if (locked) return true;
+  if (rateLimitPauseChecker && rateLimitPauseChecker(provider, connectionId, model)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1277,6 +1299,15 @@ export function recordProviderFailure(
 
   breaker._onFailure();
 
+  // Also record connection failure to provider-level window for circuit breaker aggregation
+  // This ensures provider-level breaker sees failures across all connections
+  if (connectionId) {
+    recordProviderConnectionFailure(provider, connectionId, undefined, {
+      isNetworkError: opts?.isNetworkError,
+      isRetryableError: opts?.isNetworkError || !opts?.isQueueTimeout, // Network errors and non-queue-timeout failures are retryable
+    });
+  }
+
   if (!breaker.canExecute()) {
     log?.warn?.(`[ProviderFailure] ${provider}: circuit breaker opened after repeated failures`);
   }
@@ -1437,6 +1468,10 @@ export function parseRetryAfterFromBody(responseBody: unknown): {
 
   // Classify by error message keywords
   const reason = classifyErrorText(msg || errorType);
+  const isQuota = looksLikeQuotaExhausted(msg || errorType);
+  if (isQuota) {
+    return { retryAfterMs: 3_600_000, reason: RateLimitReason.QUOTA_EXHAUSTED };
+  }
   return { retryAfterMs: null, reason };
 }
 
@@ -2375,10 +2410,18 @@ export function cooldownUntilMs(value: string | number | Date | null | undefined
 /**
  * Check if account is currently unavailable (cooldown not expired)
  */
-export function isAccountUnavailable(unavailableUntil: string | Date | null | undefined): boolean {
-  if (!unavailableUntil) return false;
-  const ms = cooldownUntilMs(unavailableUntil);
-  return Number.isFinite(ms) && ms > Date.now();
+export function isAccountUnavailable(
+  unavailableUntil: string | Date | null | undefined,
+  provider?: string,
+  connectionId?: string
+): boolean {
+  if (unavailableUntil && cooldownUntilMs(unavailableUntil) > Date.now()) return true;
+  if (provider && connectionId && rateLimitPauseChecker) {
+    if (rateLimitPauseChecker(provider, connectionId, null)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

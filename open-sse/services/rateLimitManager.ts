@@ -11,7 +11,7 @@
 import { AsyncResource } from "node:async_hooks";
 import Bottleneck from "bottleneck";
 import { applyBottleneckDoExpirePatch, applyBottleneckHeartbeatPatch } from "./bottleneckPatch.ts";
-import { parseRetryAfterFromBody } from "./accountFallback.ts";
+import { parseRetryAfterFromBody, setRateLimitPauseChecker } from "./accountFallback.ts";
 import {
   isValidRequestCap,
   parseRequestCapFromBody,
@@ -92,6 +92,36 @@ const enabledConnections = new Set<string>();
 // Store per-connection rate limit overrides (RPM, TPM, TPD, minTime, maxConcurrent)
 // Populated from provider_connections.rateLimitOverrides on startup and refresh.
 const connectionRateLimitOverrides = new Map<string, ConnectionRateLimitOverrides>();
+
+// Store latest upstream retry-after hint per connection for dynamic queue budget
+// Key: "provider:connectionId" — updated on 429 responses with retry-after header
+const upstreamRetryAfterHints = new Map<string, number>();
+
+function getRetryAfterKey(provider: string, connectionId: string): string {
+  return `${provider}:${connectionId}`;
+}
+
+/**
+ * Record an upstream retry-after hint for dynamic queue budget calculation.
+ * Called when a 429 response contains a retry-after header or body.
+ */
+export function recordUpstreamRetryAfterHint(
+  provider: string,
+  connectionId: string,
+  retryAfterMs: number
+): void {
+  if (retryAfterMs && retryAfterMs > 0) {
+    upstreamRetryAfterHints.set(getRetryAfterKey(provider, connectionId), retryAfterMs);
+  }
+}
+
+/**
+ * Retrieve the latest upstream retry-after hint for a connection.
+ * Returns null if no hint is available.
+ */
+export function getUpstreamRetryAfterHint(provider: string, connectionId: string): number | null {
+  return upstreamRetryAfterHints.get(getRetryAfterKey(provider, connectionId)) ?? null;
+}
 
 // Store learned limits for persistence (debounced)
 // One learned entry per limiter key (provider:connection[:model]). The previous
@@ -227,6 +257,25 @@ export function resolveRequestQueueMaxWaitMs(
     ? connectionRateLimitOverrides.get(connectionId)?.maxWaitMs
     : undefined;
   return resolveOverride(override, legacyDefault);
+}
+
+/**
+ * Resolve dynamic queue budget based on upstream retry-after hint.
+ * When upstream signals a longer wait via retry-after, honor it (capped at maxBudgetMs).
+ * This prevents 503 "queue budget exceeded" errors when upstream retry-after > static budget.
+ */
+export function resolveDynamicQueueBudgetMs(
+  _provider: string,
+  _connectionId: string,
+  retryAfterMs: number | null,
+  baseBudgetMs: number,
+  maxBudgetMs: number = 3_600_000 // 60 min absolute ceiling (handles long upstream retry-after like Cohere ~51 min)
+): number {
+  if (!retryAfterMs || retryAfterMs <= 0) return baseBudgetMs;
+
+  // Use upstream retry-after + small buffer, capped at maxBudgetMs
+  const dynamicBudget = Math.min(retryAfterMs + 5000, maxBudgetMs);
+  return Math.max(dynamicBudget, baseBudgetMs);
 }
 
 /**
@@ -926,8 +975,21 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
   if (status === 429) {
     const counts = limiter.counts();
     const limiterKey = getLimiterKey(provider, connectionId, model);
+    const parsedWaitMs = retryAfterStr ? parseResetTime(retryAfterStr) : null;
+    const effectiveCooldownMs =
+      parsedWaitMs && parsedWaitMs > 0
+        ? parsedWaitMs
+        : provider === "claude-web" || provider === "claude"
+          ? 60_000
+          : 30_000;
+
+    // Record retry-after hint for dynamic queue budget
+    if (parsedWaitMs && parsedWaitMs > 0) {
+      recordUpstreamRetryAfterHint(provider, connectionId, parsedWaitMs);
+    }
+
     logRateLimit(
-      `🚫 [RATE-LIMIT] ${provider}:${connectionId.slice(0, 8)} — 429 received (${describeRetryAfter(retryAfterStr)}), resetting the limiter (headers set no local pause), dropping ${counts.QUEUED} queued request(s)`
+      `🚫 [RATE-LIMIT] ${provider}:${connectionId.slice(0, 8)} — 429 received (${describeRetryAfter(retryAfterStr)}), pausing limiter for ${Math.ceil(effectiveCooldownMs / 1000)}s, dropping ${counts.QUEUED} queued request(s)`
     );
 
     // Evict from the cache so follow-up learning from the same error body
@@ -941,6 +1003,12 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
     // Without disconnect() here, every 429 leaks a heartbeat timer until GC reclaims
     // the abandoned Bottleneck; under sustained quota pressure that is a real leak.
     evictLimiter(limiterKey, limiter);
+    preservedReplacementSettings.set(limiterKey, {
+      ...buildLimiterDefaults(),
+      reservoir: 0,
+      reservoirRefreshAmount: 60,
+      reservoirRefreshInterval: effectiveCooldownMs,
+    });
     return;
   }
 
@@ -1262,7 +1330,6 @@ export function updateFromResponseBody(
     const budgetMs = resolveRequestQueueMaxWaitMs(provider, undefined, connectionId);
     const retry = { provider, connectionId, scopedModel, requestedModel, status, reason };
     if (!bodyRetryPause.lockModelForLongBodyRetry(retry, budgetMs, responseBody)) {
-      const fresh = !limiters.has(key);
       const pausedAt = Date.now(); // Bottleneck's refresh clock starts when the limiter is built
       const limiter = getLimiter(provider, connectionId, model);
       logRateLimit(
@@ -1273,8 +1340,10 @@ export function updateFromResponseBody(
         reservoirRefreshAmount: 60,
         reservoirRefreshInterval: retryAfterMs,
       });
-      if (fresh) bodyRetryPause.rememberLimiterPause(limiter, pausedAt + retryAfterMs);
+      bodyRetryPause.rememberLimiterPause(limiter, pausedAt + retryAfterMs);
     }
+    // Record retry-after hint for dynamic queue budget
+    recordUpstreamRetryAfterHint(provider, connectionId, retryAfterMs);
   }
 
   if (status !== 429) return;
@@ -1318,3 +1387,22 @@ export function updateFromResponseBody(
   );
   updateLimiterSettings(limiter, { reservoir: 0, ...settings });
 }
+
+/**
+ * Check if a provider/connection/model limiter has an active local rate-limit pause.
+ */
+export function isProviderModelRateLimitPaused(
+  provider: string,
+  connectionId: string,
+  model: string | null | undefined,
+  now: number = Date.now()
+): boolean {
+  try {
+    const limiter = getLimiter(provider, connectionId, model);
+    return bodyRetryPause.isLimiterPaused(limiter, now);
+  } catch {
+    return false;
+  }
+}
+
+setRateLimitPauseChecker(isProviderModelRateLimitPaused);

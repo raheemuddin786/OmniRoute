@@ -154,6 +154,33 @@ export function recordProviderCooldown(
 }
 
 /**
+ * Record a connection-level failure that also contributes to provider-level failure window.
+ * This ensures provider circuit breaker aggregates failures across all connections.
+ *
+ * @param provider - Provider ID
+ * @param connectionId - Connection ID
+ * @param settings - Resilience settings
+ * @param opts - Options: isNetworkError, isRetryableError
+ */
+export function recordProviderConnectionFailure(
+  provider: string,
+  connectionId: string,
+  settings?: ResilienceSettings,
+  opts?: { isNetworkError?: boolean; isRetryableError?: boolean }
+): void {
+  if (!provider || provider === "unknown" || !connectionId) return;
+
+  // Record the connection-level failure (existing behavior)
+  recordProviderCooldown(provider, connectionId, settings);
+
+  // Also record to provider-level window for circuit breaker aggregation
+  // Only for network errors and retryable errors that indicate provider health issues
+  if (opts?.isNetworkError || opts?.isRetryableError) {
+    recordProviderCooldown(provider, undefined, settings);
+  }
+}
+
+/**
  * Check if a provider/connection is currently in cooldown and should be skipped.
  *
  * @param provider - Provider ID

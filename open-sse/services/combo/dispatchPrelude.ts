@@ -22,7 +22,13 @@ import { errorResponseWithComboDiagnostics } from "../../utils/error.ts";
 import { parseModel } from "../model.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
-import { clampComboDepth, clampGlobalAttempts, resolveDelayMs } from "./comboPredicates.ts";
+import {
+  clampComboDepth,
+  clampGlobalAttempts,
+  isContextOverflow400,
+  isModelScoped400,
+  resolveDelayMs,
+} from "./comboPredicates.ts";
 import {
   deriveRequestCompatibilityRequirements,
   isVisionIncompatibleTarget,
@@ -52,6 +58,7 @@ import {
   validateResponseQuality,
 } from "./validateQuality.ts";
 import { isTrustedEmptyTurn } from "./emptyTurnTrust.ts";
+import { deleteSessionModelHistory } from "../../../src/lib/db/contextHandoffs";
 import { getStrategyTraits } from "./strategyRegistry.ts";
 import type {
   ComboCollectionLike,
@@ -252,6 +259,21 @@ async function evaluatePinnedResponse(args: {
     return null;
   }
   const pinnedStatus = pinnedResult.status || 500;
+  if (pinnedStatus === 400) {
+    try {
+      const errorText = await pinnedResult.clone().text();
+      if (isContextOverflow400(errorText) || isModelScoped400(errorText)) {
+        log.warn(
+          "COMBO",
+          `Pinned model ${pinnedModel} failed (400 context/model error), falling through to combo retry/fallback`
+        );
+        return null;
+      }
+    } catch {
+      // Fall through to returning pinnedResult
+    }
+    return pinnedResult;
+  }
   if (![401, 408, 429, 500, 502, 503, 504].includes(pinnedStatus)) {
     return pinnedResult;
   }
@@ -260,6 +282,7 @@ async function evaluatePinnedResponse(args: {
     `Pinned model ${pinnedModel} failed (${pinnedStatus}), falling through to combo retry/fallback`
   );
   return null;
+  return pinnedResult;
 }
 
 /**
@@ -277,6 +300,7 @@ export async function tryPinnedModelDispatch(args: {
   handleSingleModelWithTimeout: HandleSingleModel;
   log: ComboLogger;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  sessionId?: string | null;
 }): Promise<Response | null> {
   const {
     body,
@@ -288,6 +312,7 @@ export async function tryPinnedModelDispatch(args: {
     handleSingleModelWithTimeout,
     log,
     hiddenModelsByProvider,
+    sessionId,
   } = args;
   // The pin is read from session_model_history (a PRIOR turn) and may name a
   // model that has since been removed from this combo, or a provider whose
@@ -351,6 +376,13 @@ export async function tryPinnedModelDispatch(args: {
         "COMBO",
         `Pinned model ${pinnedModel} threw error: ${pinErr instanceof Error ? pinErr.message : String(pinErr)}, falling through to combo retry/fallback`
       );
+      if (sessionId) {
+        try {
+          deleteSessionModelHistory(sessionId, combo.name);
+        } catch {
+          // fail-open
+        }
+      }
     }
     if (pinnedResult) {
       const accepted = await evaluatePinnedResponse({
@@ -361,9 +393,23 @@ export async function tryPinnedModelDispatch(args: {
         log,
       });
       if (accepted) return accepted;
+      if (sessionId) {
+        try {
+          deleteSessionModelHistory(sessionId, combo.name);
+        } catch {
+          // fail-open
+        }
+      }
     }
     // Fall through to the target iteration loop below — retries and sibling
     // models will be tried via the normal combo machinery.
+  }
+  if (sessionId) {
+    try {
+      deleteSessionModelHistory(sessionId, combo.name);
+    } catch {
+      // fail-open
+    }
   }
   log.warn(
     "COMBO",
