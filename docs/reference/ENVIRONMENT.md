@@ -1006,6 +1006,22 @@ Provider-level circuit breaker tuning. Defaults reflect the scaled values used s
 | `PIN_DROP_BACKOFF_LEVEL`                                      | `2`       | `open-sse/services/combo.ts`         | Backoff depth at which a context-cache pin's provider is deemed durably unhealthy and the pin is dropped for failover.                                                           |
 | `PIN_DROP_GRACE_MS`                                           | `20000`   | `open-sse/services/combo.ts`         | Anti-flap window (ms) tolerating brief transient cooldowns before dropping a context-cache pin.                                                                                  |
 
+### Proxy Governance Layer
+
+The proxy governance layer bounds what a model may do on the proxy's behalf: it validates tool calls against the request's own tool catalog, breaks tool-call loops, and caps the reasoning budget of a single response.
+
+| Variable | Default | Source File | Description |
+| --- | --- | --- | --- |
+| `OMNIROUTE_GOVERNANCE_REASONING_TOKEN_CEILING` | `16000` | `open-sse/governance/tokenSentinel.ts` | Cumulative reasoning-token ceiling for one streaming response. When exceeded, the stream is terminated with a clean terminal frame instead of running unbounded. Only positive integers are honoured — a non-numeric, zero or negative value falls back to the default rather than disabling the guard. |
+| `OMNIROUTE_GOVERNANCE_LOOP_ENABLED` | `true` | `open-sse/governance/loopBreaker.ts` | Whether loop breaking is enabled. Setting to `false` or `0` disables loop detection across all sessions. |
+| `OMNIROUTE_GOVERNANCE_LOOP_REPEAT_THRESHOLD` | `3` | `open-sse/governance/loopBreaker.ts` | Number of identical tool-call fingerprints inside the sliding window that triggers a repeat intervention. Only positive integers are honoured. |
+| `OMNIROUTE_GOVERNANCE_LOOP_WINDOW_SIZE` | `10` | `open-sse/governance/loopBreaker.ts` | Sliding window size (last N tool calls) tracked per session. Only positive integers are honoured. |
+| `OMNIROUTE_GOVERNANCE_LOOP_PINGPONG_THRESHOLD` | `3` | `open-sse/governance/loopBreaker.ts` | Number of alternating cycles between two distinct fingerprints that triggers a ping-pong loop intervention. Only positive integers are honoured. |
+| `OMNIROUTE_GOVERNANCE_LOOP_MAX_INTERVENTIONS` | `2` | `open-sse/governance/loopBreaker.ts` | Maximum interventions tolerated per session before escalating to a hard abort. Only non-negative integers are honoured. |
+| `OMNIROUTE_GOVERNANCE_LOOP_STEERING` | `true` | `open-sse/governance/loopBreaker.ts` | Whether active in-stream loop steering is enabled. When enabled, upon loop escalation the governance tap actively steers the agent with an assistant completion directive instead of throwing fatal API error frames. Setting to `false` or `0` falls back to legacy fatal error frames. |
+
+See [`docs/frameworks/PROXY_GOVERNANCE.md`](../frameworks/PROXY_GOVERNANCE.md) for the layer's architecture and its coverage boundaries.
+
 ### Scenarios
 
 | Scenario                         | Configuration                                          |

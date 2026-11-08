@@ -50,7 +50,10 @@ test("checkLimiterPause compares the recorded pause with the remaining budget", 
   assert.equal(bodyRetryPause.checkLimiterPause(limiter, 20_000, "p/m", NOW), null);
   const err = bodyRetryPause.checkLimiterPause(limiter, 5_000, "p/m", NOW);
   assert.ok(isQueueTimeout(err), "a pause past the budget is a queue timeout");
-  assert.match(String(err?.message), /lasts 20000ms more, past the 5000ms left/);
+  assert.match(
+    String(err?.message),
+    /lasts 20000ms \(0d:00h:00m:20s:000ms\) more, past the 5000ms left/
+  );
   assert.equal(
     bodyRetryPause.checkLimiterPause(limiter, 5_000, "p/m", NOW + 15_000),
     null,
