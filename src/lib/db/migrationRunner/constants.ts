@@ -262,6 +262,55 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toVersion: "101",
     toName: "api_key_usage_limits",
   },
+  // SPB migrations renumbered 213..220 -> 226..233 to resolve collision with upstream
+  {
+    fromVersion: "213",
+    fromName: "spb_session_branching",
+    toVersion: "226",
+    toName: "spb_session_branching",
+  },
+  {
+    fromVersion: "214",
+    fromName: "spb_intelligence_layer",
+    toVersion: "227",
+    toName: "spb_intelligence_layer",
+  },
+  {
+    fromVersion: "215",
+    fromName: "spb_checkpoints_guidance_contract",
+    toVersion: "228",
+    toName: "spb_checkpoints_guidance_contract",
+  },
+  {
+    fromVersion: "216",
+    fromName: "spb_stagnation_telemetry",
+    toVersion: "229",
+    toName: "spb_stagnation_telemetry",
+  },
+  {
+    fromVersion: "217",
+    fromName: "project_registry_and_analytics",
+    toVersion: "230",
+    toName: "project_registry_and_analytics",
+  },
+  {
+    fromVersion: "218",
+    fromName: "project_registry_analytics_in_memory_relevance",
+    toVersion: "231",
+    toName: "project_registry_analytics_in_memory_relevance",
+  },
+  {
+    fromVersion: "219",
+    fromName: "call_logs_workspace_project_link",
+    toVersion: "232",
+    toName: "call_logs_workspace_project_link",
+  },
+  {
+    fromVersion: "220",
+    fromName: "project_registry_provenance_status",
+    toVersion: "233",
+    toName: "project_registry_provenance_status",
+  },
 ] as const;
 
 export const LEGACY_VERSION_SLOT_MIGRATIONS = [
