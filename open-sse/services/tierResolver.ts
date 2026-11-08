@@ -430,10 +430,26 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
   if (!tierKey) return [];
 
   const tierModels = currentConfig.tierModels?.[tierKey] || [];
+  const onlyFree = currentConfig.onlyFreeTierModels === true;
+  const tierMode = currentConfig.tierModes?.[tierKey] || (onlyFree ? "free" : "both");
+
+  // Incorporate free-tier auto-candidates if mode permits or free toggle active
+  let effectiveTierModels = [...tierModels];
+  if (onlyFree || tierMode === "free" || tierMode === "both") {
+    try {
+      const { resolveTierCandidateModels } = lazyRequire("./spbFreeTierAutoConfig.ts");
+      effectiveTierModels = resolveTierCandidateModels(tierKey, tierModels, {
+        onlyFreeTierModels: onlyFree,
+        tierMode,
+      });
+    } catch {
+      // Fail-open: keep tierModels
+    }
+  }
 
   const concreteModels: string[] = [];
 
-  for (const model of tierModels) {
+  for (const model of effectiveTierModels) {
     if (!model || typeof model !== "string") continue;
     const trimmed = model.trim();
     if (!trimmed) continue;

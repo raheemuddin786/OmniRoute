@@ -638,6 +638,26 @@ async function applyContinuityFilters(
       }),
     };
   }
+
+  // Free-only combo filter: when combo.config.freeOnly is enabled or free_only is set in settings
+  const freeOnlyRequested =
+    (config as Record<string, unknown>)?.freeOnly === true ||
+    (settings as Record<string, unknown> | null | undefined)?.freeOnly === true;
+
+  if (freeOnlyRequested) {
+    try {
+      const { isFreeModel } = await import("../../../src/shared/utils/freeModels.ts");
+      const freeTargets = orderedTargets.filter((t) => {
+        const rawModel = parseModel(t.modelStr).model || t.modelStr;
+        return isFreeModel(t.provider, { id: rawModel });
+      });
+      if (freeTargets.length > 0) {
+        orderedTargets = freeTargets;
+      }
+    } catch {
+      // Fail-open: retain orderedTargets
+    }
+  }
   return { orderedTargets, sticky, compatRejectedTargets };
 }
 

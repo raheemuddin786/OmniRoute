@@ -24,6 +24,14 @@ const tierSettingsPutSchema = z
     provider: z.string().min(1).optional(),
     tier: z.enum(["free", "cheap", "premium"]).nullable().optional(),
     spbEnabled: z.boolean().optional(),
+    onlyFreeTierModels: z.boolean().optional(),
+    tierModes: z
+      .object({
+        apex: z.enum(["free", "user", "both"]).optional(),
+        resilient: z.enum(["free", "user", "both"]).optional(),
+        local: z.enum(["free", "user", "both"]).optional(),
+      })
+      .optional(),
     tierWeights: z
       .object({
         apex: z.number().min(0).max(1),
@@ -53,6 +61,8 @@ const tierSettingsPutSchema = z
     (data) =>
       data.provider !== undefined ||
       data.spbEnabled !== undefined ||
+      data.onlyFreeTierModels !== undefined ||
+      data.tierModes !== undefined ||
       data.tierWeights !== undefined ||
       data.tierModels !== undefined ||
       data.cacheThreshold !== undefined ||
@@ -69,6 +79,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ...config,
     tierModels: config.tierModels ?? { apex: [], resilient: [], local: [] },
+    tierModes: config.tierModes ?? { apex: "both", resilient: "both", local: "both" },
+    onlyFreeTierModels: config.onlyFreeTierModels ?? false,
     spbEnabled: config.spbEnabled || spbFlagActive,
   });
 }
@@ -89,6 +101,8 @@ export async function PUT(request: Request) {
     provider,
     tier,
     spbEnabled,
+    onlyFreeTierModels,
+    tierModes,
     tierWeights,
     tierModels,
     cacheThreshold,
@@ -121,6 +135,11 @@ export async function PUT(request: Request) {
     ...config,
     providerOverrides: nextOverrides,
     spbEnabled: spbEnabled ?? config.spbEnabled,
+    onlyFreeTierModels: onlyFreeTierModels ?? config.onlyFreeTierModels ?? false,
+    tierModes: {
+      ...(config.tierModes ?? { apex: "both", resilient: "both", local: "both" }),
+      ...(tierModes ?? {}),
+    },
     tierWeights: tierWeights ?? config.tierWeights,
     tierModels: tierModels ?? config.tierModels,
     cacheThreshold: cacheThreshold ?? config.cacheThreshold,

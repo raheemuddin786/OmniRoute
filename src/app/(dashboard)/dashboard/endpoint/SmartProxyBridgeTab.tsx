@@ -29,6 +29,26 @@ interface TierModels {
   local: string[];
 }
 
+type TierSelectionMode = "free" | "user" | "both";
+
+interface TierModes {
+  apex: TierSelectionMode;
+  resilient: TierSelectionMode;
+  local: TierSelectionMode;
+}
+
+interface FreeModelTile {
+  provider: string;
+  model: string;
+  displayName: string;
+  tier: "apex" | "resilient" | "local";
+  capabilities?: {
+    reasoning?: boolean;
+    toolCall?: boolean;
+    coding?: boolean;
+  };
+}
+
 const EMPTY_STATS: BridgeStats = {
   totalRouted: 0,
   activeTiers: { apex: 0, resilient: 0, local: 0 },
@@ -58,6 +78,14 @@ export function SmartProxyBridgeTab() {
   });
   const [knownComboNames, setKnownComboNames] = useState<Set<string>>(() => new Set());
 
+  const [onlyFreeTierModels, setOnlyFreeTierModels] = useState<boolean>(false);
+  const [tierModes, setTierModes] = useState<TierModes>({
+    apex: "both",
+    resilient: "both",
+    local: "both",
+  });
+  const [freeModelTiles, setFreeModelTiles] = useState<FreeModelTile[]>([]);
+  const [loadingFreeModels, setLoadingFreeModels] = useState<boolean>(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -111,6 +139,14 @@ export function SmartProxyBridgeTab() {
       if (tierRes.ok) {
         const tierData = await tierRes.json();
         setSpbEnabled(Boolean(tierData.spbEnabled));
+        setOnlyFreeTierModels(Boolean(tierData.onlyFreeTierModels));
+        if (tierData.tierModes) {
+          setTierModes({
+            apex: tierData.tierModes.apex ?? "both",
+            resilient: tierData.tierModes.resilient ?? "both",
+            local: tierData.tierModes.local ?? "both",
+          });
+        }
         if (typeof tierData.cacheThreshold === "number") {
           setCacheThreshold(tierData.cacheThreshold);
         }
@@ -175,6 +211,14 @@ export function SmartProxyBridgeTab() {
         if (!ignore && tierRes.ok) {
           const tierData = await tierRes.json();
           setSpbEnabled(Boolean(tierData.spbEnabled));
+          setOnlyFreeTierModels(Boolean(tierData.onlyFreeTierModels));
+          if (tierData.tierModes) {
+            setTierModes({
+              apex: tierData.tierModes.apex ?? "both",
+              resilient: tierData.tierModes.resilient ?? "both",
+              local: tierData.tierModes.local ?? "both",
+            });
+          }
           if (typeof tierData.cacheThreshold === "number") {
             setCacheThreshold(tierData.cacheThreshold);
           }
@@ -292,6 +336,45 @@ export function SmartProxyBridgeTab() {
     return lower.startsWith("combo/") || lower.startsWith("auto/") || knownComboNames.has(lower);
   };
 
+  const fetchFreeModelTiles = useCallback(async () => {
+    setLoadingFreeModels(true);
+    try {
+      const res = await fetch("/api/settings/tier-config/free-models");
+      if (res.ok) {
+        const data = await res.json();
+        setFreeModelTiles(data.models || []);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch free model tiles:", err);
+    } finally {
+      setLoadingFreeModels(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (
+      onlyFreeTierModels ||
+      tierModes.apex !== "user" ||
+      tierModes.resilient !== "user" ||
+      tierModes.local !== "user"
+    ) {
+      fetch("/api/settings/tier-config/free-models")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (active && data?.models) {
+            setFreeModelTiles(data.models);
+          }
+        })
+        .catch((err) => {
+          console.warn("Failed to fetch free model tiles:", err);
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [onlyFreeTierModels, tierModes]);
+
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     setStatusMessage(null);
@@ -301,6 +384,8 @@ export function SmartProxyBridgeTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           spbEnabled,
+          onlyFreeTierModels,
+          tierModes,
           cacheThreshold,
           fallbackTimeout,
           tierWeights,
@@ -534,21 +619,168 @@ export function SmartProxyBridgeTab() {
           </div>
 
           <div className="border-t pt-4">
-            <h4 className="text-md font-semibold text-foreground mb-1">
-              Configured Target Models by Tier
-            </h4>
-            <p className="text-xs text-muted-foreground mb-4">
-              Configure target models for each execution tier. The intent classifier routes tasks
-              dynamically to these models based on task phase and complexity.
-            </p>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+              <div>
+                <h4 className="text-md font-semibold text-foreground mb-1">
+                  Configured Target Models & Autonomous Free Tier
+                </h4>
+                <p className="text-xs text-muted-foreground">
+                  Configure target models for each execution tier. The intent classifier routes
+                  tasks dynamically to these models based on task phase, capability scoring, and
+                  free tier selection.
+                </p>
+              </div>
+
+              {/* Free-model global toggle */}
+              <div className="flex items-center gap-3 bg-muted/40 border rounded-lg px-3 py-2">
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-foreground">
+                    Only Use Free Tier Models
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Auto-filter proxy requests to zero-cost models
+                  </span>
+                </div>
+                <Toggle
+                  checked={onlyFreeTierModels}
+                  onChange={(checked) => setOnlyFreeTierModels(checked)}
+                  label="Only Use Free Tier Models"
+                />
+              </div>
+            </div>
+
+            {/* Free model tiles section */}
+            <div className="mb-6 rounded-lg border bg-card p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-emerald-500 text-lg">
+                    verified
+                  </span>
+                  <span className="text-xs font-semibold text-foreground">
+                    Discovered Free Tier Models ({freeModelTiles.length})
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchFreeModelTiles}
+                  disabled={loadingFreeModels}
+                  className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-[14px]">refresh</span>
+                  {loadingFreeModels ? "Scanning..." : "Scan Available"}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Apex free tiles */}
+                <div className="rounded-md border p-2.5 bg-indigo-500/5 border-indigo-500/20">
+                  <div className="text-[11px] font-semibold text-indigo-400 mb-1.5 flex items-center justify-between">
+                    <span>Apex Candidates (Reasoning/Code)</span>
+                    <span className="text-[10px] font-normal text-muted-foreground">
+                      {freeModelTiles.filter((t) => t.tier === "apex").length} models
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                    {freeModelTiles.filter((t) => t.tier === "apex").length === 0 ? (
+                      <span className="text-[11px] text-muted-foreground italic">None active</span>
+                    ) : (
+                      freeModelTiles
+                        .filter((t) => t.tier === "apex")
+                        .slice(0, 15)
+                        .map((t) => (
+                          <span
+                            key={`${t.provider}/${t.model}`}
+                            className="rounded bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 text-[10px] text-indigo-300 font-mono"
+                            title={`${t.provider}/${t.model}`}
+                          >
+                            {t.displayName}
+                          </span>
+                        ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Resilient free tiles */}
+                <div className="rounded-md border p-2.5 bg-blue-500/5 border-blue-500/20">
+                  <div className="text-[11px] font-semibold text-blue-400 mb-1.5 flex items-center justify-between">
+                    <span>Resilient Candidates (Tool Calling)</span>
+                    <span className="text-[10px] font-normal text-muted-foreground">
+                      {freeModelTiles.filter((t) => t.tier === "resilient").length} models
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                    {freeModelTiles.filter((t) => t.tier === "resilient").length === 0 ? (
+                      <span className="text-[11px] text-muted-foreground italic">None active</span>
+                    ) : (
+                      freeModelTiles
+                        .filter((t) => t.tier === "resilient")
+                        .slice(0, 15)
+                        .map((t) => (
+                          <span
+                            key={`${t.provider}/${t.model}`}
+                            className="rounded bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 text-[10px] text-blue-300 font-mono"
+                            title={`${t.provider}/${t.model}`}
+                          >
+                            {t.displayName}
+                          </span>
+                        ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Local free tiles */}
+                <div className="rounded-md border p-2.5 bg-emerald-500/5 border-emerald-500/20">
+                  <div className="text-[11px] font-semibold text-emerald-400 mb-1.5 flex items-center justify-between">
+                    <span>Local Candidates (Fast/Edge)</span>
+                    <span className="text-[10px] font-normal text-muted-foreground">
+                      {freeModelTiles.filter((t) => t.tier === "local").length} models
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                    {freeModelTiles.filter((t) => t.tier === "local").length === 0 ? (
+                      <span className="text-[11px] text-muted-foreground italic">None active</span>
+                    ) : (
+                      freeModelTiles
+                        .filter((t) => t.tier === "local")
+                        .slice(0, 15)
+                        .map((t) => (
+                          <span
+                            key={`${t.provider}/${t.model}`}
+                            className="rounded bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-300 font-mono"
+                            title={`${t.provider}/${t.model}`}
+                          >
+                            {t.displayName}
+                          </span>
+                        ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <div className="space-y-4">
               {/* Tier 1 Apex */}
               <div className="rounded-md border p-3 bg-muted/20">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-indigo-400">
-                    Tier 1: Apex Reasoning
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-indigo-400">
+                      Tier 1: Apex Reasoning
+                    </span>
+                    <select
+                      value={tierModes.apex}
+                      onChange={(e) =>
+                        setTierModes((prev) => ({
+                          ...prev,
+                          apex: e.target.value as TierSelectionMode,
+                        }))
+                      }
+                      className="rounded bg-background border px-2 py-0.5 text-[11px] text-foreground font-medium"
+                    >
+                      <option value="both">Mode: User + Free</option>
+                      <option value="free">Mode: Free Only</option>
+                      <option value="user">Mode: User Configured</option>
+                    </select>
+                  </div>
                   <span className="text-[11px] text-muted-foreground">
                     Architectural Planning & Complex Reasoning
                   </span>
@@ -604,9 +836,25 @@ export function SmartProxyBridgeTab() {
               {/* Tier 2 Resilient */}
               <div className="rounded-md border p-3 bg-muted/20">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-blue-400">
-                    Tier 2: Resilient Execution
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-blue-400">
+                      Tier 2: Resilient Execution
+                    </span>
+                    <select
+                      value={tierModes.resilient}
+                      onChange={(e) =>
+                        setTierModes((prev) => ({
+                          ...prev,
+                          resilient: e.target.value as TierSelectionMode,
+                        }))
+                      }
+                      className="rounded bg-background border px-2 py-0.5 text-[11px] text-foreground font-medium"
+                    >
+                      <option value="both">Mode: User + Free</option>
+                      <option value="free">Mode: Free Only</option>
+                      <option value="user">Mode: User Configured</option>
+                    </select>
+                  </div>
                   <span className="text-[11px] text-muted-foreground">
                     Code Generation, Tests & Iteration
                   </span>
@@ -662,9 +910,25 @@ export function SmartProxyBridgeTab() {
               {/* Tier 3 Local */}
               <div className="rounded-md border p-3 bg-muted/20">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-emerald-400">
-                    Tier 3: Local Edge Inference
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-emerald-400">
+                      Tier 3: Local Edge Inference
+                    </span>
+                    <select
+                      value={tierModes.local}
+                      onChange={(e) =>
+                        setTierModes((prev) => ({
+                          ...prev,
+                          local: e.target.value as TierSelectionMode,
+                        }))
+                      }
+                      className="rounded bg-background border px-2 py-0.5 text-[11px] text-foreground font-medium"
+                    >
+                      <option value="both">Mode: User + Free</option>
+                      <option value="free">Mode: Free Only</option>
+                      <option value="user">Mode: User Configured</option>
+                    </select>
+                  </div>
                   <span className="text-[11px] text-muted-foreground">
                     Fast Refactor, Formatting & Deterministic
                   </span>

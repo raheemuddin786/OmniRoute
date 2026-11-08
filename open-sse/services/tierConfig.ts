@@ -38,6 +38,14 @@ export const tierConfigSchema = z.object({
   modelOverrides: z.array(modelTierOverrideSchema).default([]),
   freeProviders: z.array(z.string()).default([]),
   spbEnabled: z.boolean().default(false),
+  onlyFreeTierModels: z.boolean().default(false),
+  tierModes: z
+    .object({
+      apex: z.enum(["free", "user", "both"]).default("both"),
+      resilient: z.enum(["free", "user", "both"]).default("both"),
+      local: z.enum(["free", "user", "both"]).default("both"),
+    })
+    .default({ apex: "both", resilient: "both", local: "both" }),
   tierWeights: z
     .object({
       apex: z.number().min(0).max(1).default(0.3),

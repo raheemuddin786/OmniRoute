@@ -23,10 +23,24 @@ export interface TierModelsConfig {
   local: string[];
 }
 
+export type TierSelectionMode = "free" | "user" | "both";
+
+export interface TierModesConfig {
+  apex: TierSelectionMode;
+  resilient: TierSelectionMode;
+  local: TierSelectionMode;
+}
+
 export const DEFAULT_SPB_TIER_MODELS: TierModelsConfig = {
   apex: [],
   resilient: [],
   local: [],
+};
+
+export const DEFAULT_SPB_TIER_MODES: TierModesConfig = {
+  apex: "both",
+  resilient: "both",
+  local: "both",
 };
 
 export interface TierConfig {
@@ -39,6 +53,8 @@ export interface TierConfig {
   modelOverrides: ModelTierOverride[];
   freeProviders: string[];
   spbEnabled: boolean;
+  onlyFreeTierModels?: boolean;
+  tierModes?: TierModesConfig;
   tierWeights?: {
     apex: number;
     resilient: number;
