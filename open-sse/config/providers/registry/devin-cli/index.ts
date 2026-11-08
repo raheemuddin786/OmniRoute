@@ -11,6 +11,7 @@ export const devin_cliProvider: RegistryEntry = {
   authHeader: "Authorization",
   authPrefix: "Bearer ",
   defaultContextLength: 200000,
+  unsupportedParams: ["tools", "tool_choice"],
   // This ACP transport runs Devin's summarizer agent and flattens the request
   // to plain text; it cannot return client-owned tool calls. Keep it out of
   // tool-required combo routes. Use devin-cli-agentic (alias: dva) for tools.

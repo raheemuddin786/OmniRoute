@@ -51,6 +51,7 @@ import {
   type ProviderConnectionView,
 } from "@/lib/db/providers/lazyConnectionView";
 import { buildConnectionConcurrencyFields } from "./connectionConcurrencyFields.ts"; // #13700
+import { getConnectionInFlight, acquireConnectionFlight } from "./connectionConcurrencyTracker.ts";
 import {
   DEFAULT_QUOTA_THRESHOLD_PERCENT,
   getCachedClaudeQuotaScopeDecision as readClaudeScope,
@@ -968,6 +969,18 @@ async function materializeConnection(
     options.reserveOAuthSession === true && connection.authType === "oauth" && options.sessionKey
       ? reserveOAuthSession(connection.id, options.sessionKey)
       : undefined;
+  const releaseConnectionFlight =
+    options.reserveOAuthSession === true ? acquireConnectionFlight(connection.id) : undefined;
+  const combinedRelease =
+    releaseOAuthSession || releaseConnectionFlight
+      ? () => {
+          try {
+            releaseOAuthSession?.();
+          } finally {
+            releaseConnectionFlight?.();
+          }
+        }
+      : undefined;
   return {
     apiKey: connection.apiKey,
     accessToken: connection.accessToken,
@@ -993,7 +1006,7 @@ async function materializeConnection(
     rateLimitedUntil: connection.rateLimitedUntil,
     ...buildConnectionConcurrencyFields(connection),
     quotaWindowThresholds: connection.quotaWindowThresholds ?? null,
-    ...(releaseOAuthSession ? { releaseOAuthSession } : {}),
+    ...(combinedRelease ? { releaseOAuthSession: combinedRelease, releaseConnectionFlight } : {}),
     ...buildAntigravityRoutingFields(extra.routingLease, connection.id, extra.requestedModel),
     ...extra,
   };
@@ -1295,6 +1308,34 @@ export async function getProviderCredentials(
             "AUTH",
             `${provider} | all ${allConnections.length} accounts rate limited (${formatRetryAfter(earliest)})`
           );
+
+          // Proactive sibling account rotation for claude-web
+          // When one account is rate limited, find and use a healthy sibling account
+          if (provider === "claude-web") {
+            const healthyAccount = allConnections.find(
+              (conn) =>
+                conn.isActive &&
+                (!conn.rateLimitedUntil || cooldownUntilMs(conn.rateLimitedUntil) <= Date.now())
+            );
+            if (
+              healthyAccount &&
+              healthyAccount.id !== (options.forcedConnectionId as string | undefined)
+            ) {
+              log.info(
+                "AUTH",
+                `Claude Web proactive rotation: switching from rate-limited account to healthy sibling ${healthyAccount.id?.slice(0, 8)}`
+              );
+              // Retry with the healthy account directly
+              return getProviderCredentials(
+                provider,
+                excludeConnectionId,
+                [healthyAccount.id],
+                requestedModel,
+                { ...options, forcedConnectionId: healthyAccount.id }
+              );
+            }
+          }
+
           invalidateManagedLease(options, "HEALTH_OR_COOLDOWN");
           return {
             allRateLimited: true,
@@ -1756,7 +1797,7 @@ export async function getProviderCredentials(
     }
 
     if (exhaustedQuota.length > 0) {
-      log.info(
+      log.debug(
         "AUTH",
         `${provider} | quota-aware: ${withQuota.length} with quota, skipping ${exhaustedQuota.length} exhausted`
       );
@@ -1814,13 +1855,18 @@ export async function getProviderCredentials(
     }
 
     const orderedConnections = [...leasePolicy.connections].sort((a, b) => {
-      if (a.authType !== "oauth" || b.authType !== "oauth") return 0;
+      const aFlight = getConnectionInFlight(a.id);
+      const bFlight = getConnectionInFlight(b.id);
+      if (aFlight !== bFlight) return aFlight - bFlight;
       const priorityDelta = (a.priority || 999) - (b.priority || 999);
       if (priorityDelta !== 0) return priorityDelta;
-      return (
-        getOAuthSessionAvailability(b.id, options.sessionKey) -
-        getOAuthSessionAvailability(a.id, options.sessionKey)
-      );
+      if (a.authType === "oauth" && b.authType === "oauth") {
+        return (
+          getOAuthSessionAvailability(b.id, options.sessionKey) -
+          getOAuthSessionAvailability(a.id, options.sessionKey)
+        );
+      }
+      return 0;
     });
 
     const providerStrategyOverrides = (settings.providerStrategies || {}) as Record<
@@ -1859,8 +1905,8 @@ export async function getProviderCredentials(
       connection = affinityConnection;
       if (options.lease) commitSelectionSideEffects = affinityPlan?.commit;
       else syncSessionAffinityRuntimeFields(connectionsRaw, connection);
-    } else if (options.sessionKey) {
-      log.info(
+    } else if (options.sessionKey && sessionAffinityTtlMs > 0) {
+      log.debug(
         "AUTH",
         `session_key=${formatSessionKeyForLog(options.sessionKey)} has no available affinity target`
       );
@@ -1891,8 +1937,13 @@ export async function getProviderCredentials(
         const current = byRecency[0];
         const currentCount = current?.consecutiveUseCount || 0;
 
-        if (current && current.lastUsedAt && currentCount < stickyLimit) {
-          // Stay with current account
+        if (
+          current &&
+          current.lastUsedAt &&
+          currentCount < stickyLimit &&
+          getConnectionInFlight(current.id) === 0
+        ) {
+          // Stay with current account ONLY if it is not currently busy with an in-flight request
           connection = current;
           log.debug(
             "AUTH",
@@ -2007,11 +2058,13 @@ export async function getProviderCredentials(
       if (options.lease) commitSelectionSideEffects = commit;
       else await commit();
     } else if (strategy === "cost-optimized") {
-      // Cost Optimized: sort by priority ascending (lower = cheaper/preferred)
-      // Future: can be enhanced with actual cost data per provider
-      const sorted = [...orderedConnections].sort(
-        (a, b) => (a.priority || 999) - (b.priority || 999)
-      );
+      // Cost Optimized: sort by priority ascending, but prefer idle under concurrent load
+      const sorted = [...orderedConnections].sort((a, b) => {
+        const aFlight = getConnectionInFlight(a.id);
+        const bFlight = getConnectionInFlight(b.id);
+        if (aFlight !== bFlight) return aFlight - bFlight;
+        return (a.priority || 999) - (b.priority || 999);
+      });
       connection = sorted[0];
     } else if (strategy === "strict-random") {
       // Strict Random: shuffle deck — uses each account once before reshuffling
@@ -2026,17 +2079,21 @@ export async function getProviderCredentials(
         connection = orderedConnections.find((c) => c.id === selectedId) || orderedConnections[0];
       }
     } else {
-      // Default: fill-first (already sorted by priority in getProviderConnections)
-      connection = orderedConnections[0];
+      // Default: fill-first (already sorted by lowest in-flight + priority in orderedConnections)
+      const idleConn = orderedConnections.find((c) => getConnectionInFlight(c.id) === 0);
+      connection = idleConn ?? orderedConnections[0];
     }
 
     if (options.reserveOAuthSession === true && connection?.authType === "oauth") {
       const selectedPriority = connection.priority || 999;
       const selectedAvailability = getOAuthSessionAvailability(connection.id, options.sessionKey);
+      const selectedFlight = getConnectionInFlight(connection.id);
       const moreAvailablePeer = [...orderedConnections]
         .filter(
           (candidate) =>
-            candidate.authType === "oauth" && (candidate.priority || 999) <= selectedPriority + 1
+            candidate.authType === "oauth" &&
+            (candidate.priority || 999) <= selectedPriority + 1 &&
+            getConnectionInFlight(candidate.id) <= selectedFlight
         )
         .sort(
           (a, b) =>
@@ -2940,11 +2997,13 @@ export async function markAccountUnavailable(
       const reason =
         status === 404 || isNvidiaModelGone || isModelUnsupported401(status, errorText)
           ? "not_found"
-          : isQuotaExhaustedSignal(fallbackResult)
-            ? "quota_exhausted"
-            : status === 429
-              ? "rate_limited"
-              : "server_error";
+          : status === 403
+            ? "forbidden"
+            : isQuotaExhaustedSignal(fallbackResult)
+              ? "quota_exhausted"
+              : status === 429
+                ? "rate_limited"
+                : "server_error";
 
       // #5976: a bare 500 is intermittent and NOT model-specific — skip
       // lockout/cooldown ONLY for the exact 500 (the contract its own tests pin:
@@ -2991,7 +3050,10 @@ export async function markAccountUnavailable(
         model,
         reason,
         status,
-        status === 404 || isNvidiaModelGone || isModelUnsupported401(status, errorText)
+        status === 404 ||
+          isNvidiaModelGone ||
+          isModelUnsupported401(status, errorText) ||
+          status === 403
           ? (effectiveProviderProfile?.baseCooldownMs ?? COOLDOWN_MS.notFoundLocal)
           : (claudeQuotaScope.cooldownMs ??
               antigravityFamilyInferredBaseCooldownMs ??

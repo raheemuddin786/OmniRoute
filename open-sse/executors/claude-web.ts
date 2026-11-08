@@ -12,12 +12,13 @@ import { CLAUDE_WEB_FINGERPRINT } from "../config/claudeWebFingerprint.ts";
 import { FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { tlsFetchClaude } from "../services/claudeTlsClient.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
+import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
 import { currentAppliedProxySink } from "../utils/proxyFetch.ts";
+import { acquire, buildAccountSemaphoreKey } from "../services/accountSemaphore.ts";
 import {
   BaseExecutor,
   mergeAbortSignals,
   type ExecuteInput,
-  type ExecutorLog,
   type ProviderCredentials,
 } from "./base.ts";
 import {
@@ -35,6 +36,7 @@ import {
 } from "./claude-web/session.ts";
 import { createClaudeWebResponse } from "./claude-web/stream.ts";
 import { isClaudeWebChallenge, sendClaudeWebDirect } from "./claude-web/transport.ts";
+import { wrapReadableStreamWithFinalize } from "../handlers/chatCore/streamFinalize.ts";
 
 const CLAUDE_WEB_API_BASE = "https://claude.ai/api";
 const CLAUDE_WEB_ORGS_URL = `${CLAUDE_WEB_API_BASE}/organizations`;
@@ -141,11 +143,29 @@ async function verifyCookieValidity(
   }
 }
 
+interface CachedOrgId {
+  organizationId: string;
+  expiresAt: number;
+}
+const organizationIdCache = new Map<string, CachedOrgId>();
+const ORG_ID_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours for stable authenticated sessions
+const MAX_ORG_ID_CACHE_ENTRIES = 500;
+
+export function __clearClaudeWebOrgCacheForTesting(): void {
+  organizationIdCache.clear();
+}
+
 async function getOrganizationId(
   cookieHeader: string,
   deviceId: string | undefined,
   signal?: AbortSignal | null
 ): Promise<OrganizationResolution> {
+  const cacheKey = cookieHeader.trim();
+  const cached = organizationIdCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { organizationId: cached.organizationId, failure: null };
+  }
+
   try {
     const response = await tlsFetchClaude(CLAUDE_WEB_ORGS_URL, {
       method: "GET",
@@ -156,6 +176,7 @@ async function getOrganizationId(
     const sink = currentAppliedProxySink();
     if (sink && response.status >= 400) sink.upstreamStatus = response.status;
     if (response.status === 401) {
+      organizationIdCache.delete(cacheKey);
       return { organizationId: null, failure: "authentication" };
     }
     if (response.status === 403) {
@@ -170,6 +191,7 @@ async function getOrganizationId(
       ) {
         return { organizationId: null, failure: "challenge" };
       }
+      organizationIdCache.delete(cacheKey);
       return { organizationId: null, failure: "authentication" };
     }
     if (response.status !== 200) {
@@ -185,9 +207,18 @@ async function getOrganizationId(
     }
     const record = organization as Record<string, unknown>;
     const identifier = record.uuid ?? record.id;
-    return typeof identifier === "string" && identifier.trim()
-      ? { organizationId: identifier.trim(), failure: null }
-      : { organizationId: null, failure: "unavailable" };
+    if (typeof identifier === "string" && identifier.trim()) {
+      const orgId = identifier.trim();
+      if (organizationIdCache.size >= MAX_ORG_ID_CACHE_ENTRIES) {
+        organizationIdCache.clear();
+      }
+      organizationIdCache.set(cacheKey, {
+        organizationId: orgId,
+        expiresAt: Date.now() + ORG_ID_CACHE_TTL_MS,
+      });
+      return { organizationId: orgId, failure: null };
+    }
+    return { organizationId: null, failure: "unavailable" };
   } catch {
     return { organizationId: null, failure: "unavailable" };
   }
@@ -341,11 +372,57 @@ async function errorResponseForTransport(
   }
   if (result.status === 429) {
     const extraHeaders: Record<string, string> = {};
-    const upstreamRetryAfter = normalizeForwardedRetryAfter(result.headers.get("retry-after"));
+    let upstreamRetryAfter = normalizeForwardedRetryAfter(result.headers.get("retry-after"));
+    if (!upstreamRetryAfter && bodyText) {
+      const hint = parseDetailedRetryHintFromJsonBody(
+        bodyText,
+        MAX_FORWARDED_RETRY_AFTER_SECONDS * 1000
+      );
+      if (hint && hint.retryAfterMs > 0) {
+        upstreamRetryAfter = String(Math.max(1, Math.ceil(hint.retryAfterMs / 1000)));
+      }
+    }
     if (upstreamRetryAfter) {
       extraHeaders["Retry-After"] = upstreamRetryAfter;
     }
-    return makeErrorResponse(429, "Rate limited by Claude Web API", { extraHeaders });
+    // Determine failure kind for lockout classification
+    let failureKind: "rate_limit" | "quota_exhausted" | "transient" = "rate_limit";
+    if (bodyText) {
+      const lower = String(bodyText).toLowerCase();
+      // Quota exhaustion keywords (daily/monthly limits, billing, credits)
+      const QUOTA_PATTERNS = [
+        /daily.*limit/i,
+        /daily.*quota/i,
+        /per.?day.*limit/i,
+        /monthly.*limit/i,
+        /monthly.*quota/i,
+        /per.?month.*limit/i,
+        /limited\s+to\s+[\d,]+.*(?:calls?|requests?).*per\s+month/i,
+        /quota.*exceed/i,
+        /exceed.*quota/i,
+        /insufficient.*quota/i,
+        /billing.*cap/i,
+        /credit.*exhaust/i,
+        /exhausted.*credits/i,
+        /out of credits/i,
+        /hard.?limit/i,
+        /plan.*limit/i,
+      ];
+      const isQuotaExhausted = QUOTA_PATTERNS.some((p) => p.test(lower));
+      if (isQuotaExhausted) {
+        failureKind = "quota_exhausted";
+      }
+    }
+    const failureKindKey =
+      failureKind === "quota_exhausted"
+        ? "quotaExhausted"
+        : failureKind === "rate_limit"
+          ? "rateLimitExceeded"
+          : "transient";
+    return makeErrorResponse(429, "Rate limited by Claude Web API", {
+      extraHeaders,
+      retryHint: { kind: failureKindKey },
+    });
   }
   if (isClaudeWebChallenge({ ...result, bodyText })) {
     return makeErrorResponse(403, "Claude Web returned a Cloudflare browser challenge", {
@@ -488,7 +565,25 @@ export class ClaudeWebExecutor extends BaseExecutor {
     const auditUrl = makeAuditUrl(turn);
     const auditHeaders = makeAuditHeaders();
 
+    // Per-account serialization: acquire semaphore keyed on accountScope before dispatching.
+    // Use provider-level timeout (300_000ms) + 60_000ms buffer = 360_000ms.
+    const semaphoreKey = buildAccountSemaphoreKey({
+      provider: "claude-web",
+      accountKey: turn.accountScope,
+    });
+    let releaseSemaphore: (() => void) | null = null;
+    const SEMAPHORE_TIMEOUT_MS = 360_000;
+
     try {
+      releaseSemaphore = await acquire(semaphoreKey, {
+        maxConcurrency: 1,
+        timeoutMs: SEMAPHORE_TIMEOUT_MS,
+        signal,
+        // Unbounded queue (maxQueueSize <= 0) per chatCore default; failFast = false to wait.
+        maxQueueSize: 0,
+        failFast: false,
+      });
+
       let transportResult: ClaudeWebTransportResult;
       if (forceBrowserTransport()) {
         transportResult = await this.sendBrowser(transportRequest);
@@ -501,6 +596,8 @@ export class ClaudeWebExecutor extends BaseExecutor {
       }
 
       if (transportResult.status < 200 || transportResult.status >= 300) {
+        releaseSemaphore();
+        releaseSemaphore = null;
         return makeExecutionResult(
           await errorResponseForTransport(transportResult, turn),
           auditBody,
@@ -510,6 +607,8 @@ export class ClaudeWebExecutor extends BaseExecutor {
       }
       if (!transportResult.body) {
         invalidateClaudeWebTurn(turn);
+        releaseSemaphore();
+        releaseSemaphore = null;
         return makeExecutionResult(
           makeErrorResponse(502, "Claude Web returned no response body"),
           auditBody,
@@ -518,6 +617,17 @@ export class ClaudeWebExecutor extends BaseExecutor {
         );
       }
 
+      const minimalResponse =
+        Boolean(
+          credentials?.providerSpecificData &&
+          typeof credentials.providerSpecificData === "object" &&
+          (credentials.providerSpecificData as Record<string, unknown>).minimalResponse === true
+        ) ||
+        process.env.OMNIROUTE_CLAUDE_WEB_MINIMAL_RESPONSE === "1" ||
+        process.env.OMNIROUTE_CLAUDE_WEB_MINIMAL_RESPONSE === "true";
+
+      // Create the response; for streaming, wrap the body so the semaphore releases
+      // only after the stream is fully consumed/cancelled/errored.
       const response = await createClaudeWebResponse(transportResult.body, {
         model,
         stream,
@@ -525,11 +635,43 @@ export class ClaudeWebExecutor extends BaseExecutor {
         onComplete: ({ assistantText }) => commitClaudeWebTurn(turn, assistantText),
         onFailure: () => invalidateClaudeWebTurn(turn),
         log,
+        minimalResponse,
       });
+
+      // If streaming, the response body is a ReadableStream. Wrap it with finalize
+      // to release the semaphore when the downstream consumer finishes or aborts.
+      if (
+        stream &&
+        response.body &&
+        typeof response.body === "object" &&
+        "getReader" in response.body
+      ) {
+        const streamBody = response.body as ReadableStream<Uint8Array>;
+        const wrappedBody = wrapReadableStreamWithFinalize(streamBody, () => {
+          if (releaseSemaphore) {
+            releaseSemaphore();
+            releaseSemaphore = null;
+          }
+        });
+        // Return a new Response with the wrapped body to preserve headers/status
+        const wrappedResponse = new Response(wrappedBody, {
+          status: response.status,
+          headers: response.headers,
+        });
+        return makeExecutionResult(wrappedResponse, auditBody, auditUrl, auditHeaders);
+      }
+
+      // Non-streaming (buffered): release immediately since the full response is ready.
+      releaseSemaphore();
+      releaseSemaphore = null;
       return makeExecutionResult(response, auditBody, auditUrl, auditHeaders);
-    } catch {
+    } catch (error) {
       invalidateClaudeWebTurn(turn);
-      log?.error?.("CLAUDE-WEB", "Transport failed");
+      if (releaseSemaphore) {
+        releaseSemaphore();
+        releaseSemaphore = null;
+      }
+      log?.error?.("CLAUDE-WEB", "Transport failed", { error: String(error) });
       return makeExecutionResult(
         makeErrorResponse(502, "Claude Web connection failed"),
         auditBody,

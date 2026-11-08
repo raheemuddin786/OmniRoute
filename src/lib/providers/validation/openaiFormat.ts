@@ -188,11 +188,21 @@ export async function validateOpenAILikeProvider({
       return {
         valid: true,
         error: null,
+        statusCode: 429,
         warning: "Provider accepted the key but is rate limited (429)",
       };
     }
 
-    return { valid: true, error: null };
+    if (chatRes.status === 402) {
+      return {
+        valid: true,
+        error: null,
+        statusCode: 402,
+        warning: "Provider accepted the key but requires payment/credits (402)",
+      };
+    }
+
+    return { valid: true, error: null, statusCode: chatRes.status };
   } catch (error: any) {
     return toValidationErrorResult(error);
   }
