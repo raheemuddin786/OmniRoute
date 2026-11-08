@@ -17,9 +17,10 @@ export class DevinAgent extends CloudAgentBase {
   ): Promise<CloudAgentTask> {
     const taskId = this.generateTaskId();
 
+    const normalized = this.normalizeRepository(params.source.repoUrl, params.source.repoName);
     const body: Record<string, unknown> = {
       prompt: params.prompt,
-      repo_url: params.source.repoUrl,
+      repo_url: normalized.httpsUrl,
     };
 
     if (params.source.branch) {
