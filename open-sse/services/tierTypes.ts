@@ -17,6 +17,18 @@ export interface TierAssignment {
   freeQuotaLimit?: number;
 }
 
+export interface TierModelsConfig {
+  apex: string[];
+  resilient: string[];
+  local: string[];
+}
+
+export const DEFAULT_SPB_TIER_MODELS: TierModelsConfig = {
+  apex: [],
+  resilient: [],
+  local: [],
+};
+
 export interface TierConfig {
   version: string;
   defaults: {
@@ -26,6 +38,15 @@ export interface TierConfig {
   providerOverrides: ProviderTierOverride[];
   modelOverrides: ModelTierOverride[];
   freeProviders: string[];
+  spbEnabled: boolean;
+  tierWeights?: {
+    apex: number;
+    resilient: number;
+    local: number;
+  };
+  tierModels?: TierModelsConfig;
+  cacheThreshold?: number;
+  fallbackTimeout?: number;
 }
 
 export interface ProviderTierOverride {
