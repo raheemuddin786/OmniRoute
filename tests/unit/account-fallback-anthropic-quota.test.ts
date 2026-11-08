@@ -163,3 +163,16 @@ test("Claude per-minute rate limit text is not mistaken for the monthly spend li
   );
   assert.ok(out.cooldownMs < 5 * 60 * 1000, `expected short cooldown, got ${out.cooldownMs}ms`);
 });
+
+test("Claude Web rate limit text is classified as subscription quota for claude-web", () => {
+  const out = isSubscriptionQuotaText("rate limit exceeded, please try again later", "claude-web");
+  assert.equal(out, true);
+});
+
+test("Claude Web generic transient words do not lock account as subscription quota", () => {
+  assert.equal(isSubscriptionQuotaText("rate limit: 5 requests per minute", "claude-web"), false);
+  assert.equal(isSubscriptionQuotaText("too many parallel connections", "claude-web"), false);
+  assert.equal(isSubscriptionQuotaText("token limit exceeded on request", "claude-web"), false);
+  assert.equal(isSubscriptionQuotaText("retry after 5 seconds", "claude-web"), false);
+  assert.equal(isSubscriptionQuotaText("error, try again later", "claude-web"), false);
+});

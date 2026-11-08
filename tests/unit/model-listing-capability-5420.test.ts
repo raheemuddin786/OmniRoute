@@ -36,6 +36,7 @@ describe("providerLacksModelListing (#5420)", () => {
     assert.equal(providerUsesCuratedModelsOnly("kimi-web"), true);
     assert.equal(providerUsesCuratedModelsOnly("zai-web"), true);
     assert.equal(providerUsesCuratedModelsOnly("chatgpt-web"), true);
+    assert.equal(providerUsesCuratedModelsOnly("claude-web"), true);
     assert.equal(providerUsesCuratedModelsOnly("codebuddy-cn"), true);
     assert.equal(providerUsesCuratedModelsOnly("codebuddy-intl"), true);
     assert.equal(providerUsesCuratedModelsOnly("cgpt-web"), false);

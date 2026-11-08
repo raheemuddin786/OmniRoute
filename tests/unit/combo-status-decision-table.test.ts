@@ -52,6 +52,30 @@ const ROWS: Array<{
     errorText: "This model's maximum context length exceeded",
     decision: "advance",
   },
+  {
+    id: "tools-unsupported",
+    status: 400,
+    errorText: "tools are not supported for this model",
+    decision: "advance",
+  },
+  {
+    id: "malformed-function-call",
+    status: 400,
+    errorText: "MALFORMED_FUNCTION_CALL: missing required argument",
+    decision: "advance",
+  },
+  {
+    id: "reasoning-incompatible",
+    status: 400,
+    errorText: "Reasoning continuation is not compatible with the selected target",
+    decision: "advance",
+  },
+  {
+    id: "prompt-too-long",
+    status: 400,
+    errorText: "prompt is too long for this model",
+    decision: "advance",
+  },
 ];
 
 for (const row of ROWS) {

@@ -295,3 +295,49 @@ test("preCall: mixed combo keeps the describe path (no reroute, model unchanged)
   assert.equal(hasImagePart(asModifiedBody(result).messages), false);
   assert.equal(visionCallCount, 1);
 });
+
+test("preCall: auto/spb with vision-capable selected model skips vision bridge entirely", async () => {
+  resetGuardrailsForTests({ registerDefaults: false });
+  visionCallCount = 0;
+  const guardrail = createGuardrail();
+  const result = await guardrail.preCall(
+    {
+      ...IMAGE_PAYLOAD,
+      model: "auto/spb",
+      _spbActive: true,
+      _spbDecision: {
+        selectedModel: "gemini-3.8-flash-tiered",
+        tierAssignment: { tier: "tier_2_resilient" },
+      },
+    },
+    {}
+  );
+
+  assert.equal(result.block, false);
+  assert.equal(result.modifiedPayload, undefined);
+  assert.equal(visionCallCount, 0);
+});
+
+test("preCall: auto/spb is never whole-request rerouted to external provider", async () => {
+  resetGuardrailsForTests({ registerDefaults: false });
+  visionCallCount = 0;
+  const guardrail = createGuardrail({}, "Describe the spb image.");
+  const result = await guardrail.preCall(
+    {
+      ...IMAGE_PAYLOAD,
+      model: "auto/spb",
+      _spbActive: true,
+      _spbDecision: {
+        selectedModel: TEXT_MODEL_A,
+        tierAssignment: { tier: "tier_2_resilient" },
+      },
+    },
+    {}
+  );
+
+  assert.equal(result.block, false);
+  assert.equal(result.meta?.rerouted, undefined);
+  assert.equal(asModifiedBody(result).model, "auto/spb");
+  assert.equal(hasImagePart(asModifiedBody(result).messages), false);
+  assert.equal(visionCallCount, 1);
+});

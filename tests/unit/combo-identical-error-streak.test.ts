@@ -10,15 +10,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { hasIdenticalModelErrorStreak, IDENTICAL_MODEL_ERROR_STREAK } = await import(
-  "../../open-sse/services/combo/comboPredicates.ts"
-);
+const { hasIdenticalModelErrorStreak, IDENTICAL_MODEL_ERROR_STREAK } =
+  await import("../../open-sse/services/combo/comboPredicates.ts");
 
 function entry(overrides: Partial<{ status: number; error: string; kind: string }> = {}) {
   return {
     model: "gemini/gemini-3.1-flash-lite",
     status: 400,
-    error: "[400]: Please ensure that function call turn comes immediately after a user turn or after a function response turn.",
+    error:
+      "[400]: Please ensure that function call turn comes immediately after a user turn or after a function response turn.",
     kind: "model",
     ...overrides,
   } as never;
@@ -28,7 +28,9 @@ test("false when fewer than the streak threshold have been attempted", () => {
   assert.equal(hasIdenticalModelErrorStreak([]), false);
   assert.equal(hasIdenticalModelErrorStreak([entry()]), false);
   assert.equal(
-    hasIdenticalModelErrorStreak(Array.from({ length: IDENTICAL_MODEL_ERROR_STREAK - 1 }, () => entry())),
+    hasIdenticalModelErrorStreak(
+      Array.from({ length: IDENTICAL_MODEL_ERROR_STREAK - 1 }, () => entry())
+    ),
     false
   );
 });
@@ -63,7 +65,10 @@ test("false when the same status/kind repeats but with a genuinely different err
   const errors = [
     entry({ error: "[400]: missing required field 'model'" }),
     entry({ error: "[400]: unknown tool 'foo'" }),
-    entry({ error: "[400]: Please ensure that function call turn comes immediately after a user turn or after a function response turn." }),
+    entry({
+      error:
+        "[400]: Please ensure that function call turn comes immediately after a user turn or after a function response turn.",
+    }),
   ];
   assert.equal(hasIdenticalModelErrorStreak(errors), false);
 });
@@ -80,4 +85,28 @@ test("a custom streak length is honored", () => {
   const errors = Array.from({ length: 2 }, () => entry());
   assert.equal(hasIdenticalModelErrorStreak(errors, 2), true);
   assert.equal(hasIdenticalModelErrorStreak(errors, 3), false);
+});
+
+test("false when status is 402 (payment/credits required) even if kind is model", () => {
+  const errors = Array.from({ length: IDENTICAL_MODEL_ERROR_STREAK }, () =>
+    entry({
+      kind: "model",
+      status: 402,
+      error: "Add credits to continue, or switch to a free model",
+    })
+  );
+  assert.equal(hasIdenticalModelErrorStreak(errors), false);
+});
+
+test("false when status is 500, 502, 503, 504, 401, or 403", () => {
+  for (const status of [500, 502, 503, 504, 401, 403]) {
+    const errors = Array.from({ length: IDENTICAL_MODEL_ERROR_STREAK }, () =>
+      entry({ kind: "model", status, error: "error message" })
+    );
+    assert.equal(
+      hasIdenticalModelErrorStreak(errors),
+      false,
+      `status ${status} must not be treated as malformed request shape`
+    );
+  }
 });

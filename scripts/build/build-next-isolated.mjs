@@ -102,6 +102,7 @@ function runNextBuild() {
     const nextBin = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
     const buildEnv = resolveNextBuildEnv(process.env);
     ensureWindowsBuildProfileDirs(buildEnv);
+    const heapMb = resolveBuildHeapMb(process.env);
     const nextArgs = process.versions.bun
       ? [
           "--preload",
@@ -110,7 +111,7 @@ function runNextBuild() {
           "build",
           resolveNextBuildBundlerFlag(),
         ]
-      : [nextBin, "build", resolveNextBuildBundlerFlag()];
+      : [`--max-old-space-size=${heapMb}`, nextBin, "build", resolveNextBuildBundlerFlag()];
     const child = spawn(process.execPath, nextArgs, {
       cwd: projectRoot,
       stdio: "inherit",
@@ -157,6 +158,16 @@ export function resolveNextBuildBundlerFlag(baseEnv = process.env) {
  */
 export function getWindowsBuildProfileDir() {
   return path.join(os.tmpdir(), `omniroute-build-winhome-${process.pid}`);
+}
+
+export function resolveBuildHeapMb(baseEnv = process.env, osModule = os) {
+  if (baseEnv.OMNIROUTE_BUILD_MEMORY_MB) {
+    return Number(baseEnv.OMNIROUTE_BUILD_MEMORY_MB);
+  }
+  const totalMb = Math.floor(osModule.totalmem() / (1024 * 1024));
+  if (totalMb >= 20000) return 16384;
+  if (totalMb >= 14000) return 12288;
+  return Math.max(4096, Math.min(8192, Math.floor(totalMb * 0.75)));
 }
 
 export function resolveNextBuildEnv(baseEnv = process.env, platform = process.platform) {
@@ -221,12 +232,7 @@ export function resolveNextBuildEnv(baseEnv = process.env, platform = process.pl
   // #6283. On memory-constrained machines, set OMNIROUTE_USE_TURBOPACK=0 (webpack
   // fallback) instead of raising this heap value; see docs/reference/ENVIRONMENT.md.
   if (!/--max-old-space-size/.test(env.NODE_OPTIONS || "")) {
-    // Default 8 GB (was 4 GB): the clean module graph peaks ~3.9 GB during the webpack
-    // production pass, which brushed the old 4 GB ceiling on a borderline OOM. 8 GB gives
-    // headroom without risk. NOTE: heap size does NOT fix a poisoned scope — if the build
-    // OOMs/livelocks far above this, check for worktrees/cruft leaking into the tsconfig
-    // scope (run `npm run check:build-scope`), not for "more heap". See incident 2026-06-25.
-    const heapMb = Number(baseEnv.OMNIROUTE_BUILD_MEMORY_MB) || 8192;
+    const heapMb = resolveBuildHeapMb(baseEnv);
     env.NODE_OPTIONS = `${env.NODE_OPTIONS || ""} --max-old-space-size=${heapMb}`.trim();
   }
 
