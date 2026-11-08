@@ -413,6 +413,7 @@ is a short form, its complete binding text, rationale and incident history are i
     (e) se `_tasks` aparecer como symlink quebrado, NÃO commitar nada — restaurar do remote e
     avisar o operador. O gate `check:tracked-artifacts` (pre-commit + CI) bloqueia `_tasks`
     rastreado em qualquer forma. Texto completo: `docs/ops/HARD_RULES_DETAIL.md` → Rule 23.
+24. **Canonical Model Resolution & Anti-Workaround Standard.** Never introduce ad-hoc model normalization, substring matching (e.g. `model.includes(...)`), or hardcoded model dictionaries in leaf executors or payload builders. All model routing, aliasing, and deprecation mappings MUST reside in the centralized provider registry (`open-sse/config/providers/registry/`), `src/shared/constants/modelSpecs.ts`, or the database model alias domain (`src/lib/db/models/aliases.ts`). Any endpoint receiving external model requests must route through centralized alias normalization rather than applying superficial local patches.
 
 ---
 

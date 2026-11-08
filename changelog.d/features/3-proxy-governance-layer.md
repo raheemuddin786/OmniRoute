@@ -1,0 +1,1 @@
+- **feat(governance):** add the proxy governance layer — an enforcing layer that validates tool calls against the request's own tool catalog, breaks tool-call loops (repeat and ping-pong), bounds the reasoning budget of a single response, and records every decision in a content-free audit ring buffer ([#3](https://github.com/raheemuddin786/OmniRoute/pull/3))
