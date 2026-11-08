@@ -151,7 +151,7 @@ function applyBifrostHeaders(
  * `preParsedBody` is threaded from withInjectionGuard (#4041) so the body is
  * parsed at most once per request.
  */
-async function postHandler(request: any, context: any, preParsedBody: any = null) {
+async function postHandler(request: any, _context: any, preParsedBody: any = null) {
   // Defense-in-depth: the authz proxy (src/proxy.ts) is the primary gate, but
   // its matcher can miss path variants (e.g. uppercase /V1/ aliases), so the
   // handler enforces authentication independently.

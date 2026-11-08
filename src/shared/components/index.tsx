@@ -19,6 +19,7 @@ export { default as Sidebar } from "./Sidebar";
 export { default as Header } from "./Header";
 export { default as OAuthModal } from "./OAuthModal";
 export { default as ModelSelectModal } from "./ModelSelectModal";
+export { default as TierModelSelectModal } from "./TierModelSelectModal";
 export { default as ModelSelectField } from "./ModelSelectField";
 export { default as ReasoningRoutingRules } from "./ReasoningRoutingRules";
 export { default as ManualConfigModal } from "./ManualConfigModal";
