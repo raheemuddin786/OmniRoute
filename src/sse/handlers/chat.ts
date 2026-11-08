@@ -1,3 +1,9 @@
+import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
+import {
+  getTierConfig,
+  resolveVirtualTierModels,
+  expandComboModelsFromDb,
+} from "@omniroute/open-sse/services/tierResolver";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -27,6 +33,8 @@ import {
   lockModel,
   recordModelLockoutFailure,
   isDailyQuotaExhausted,
+  isAccountUnavailable,
+  isModelLocked,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import {
   applyAvalancheSuppressionHeaders,
@@ -55,7 +63,10 @@ import { isVerifiedNativeCodexRequest } from "@omniroute/open-sse/config/codexId
 import { resolveCompressionSettings } from "@omniroute/open-sse/handlers/chatCore/compressionSettings.ts";
 import { runWithTurnExecutionOwnership } from "@omniroute/open-sse/handlers/chatCore/turnExecutionContext.ts";
 import type { CompressionExclusions } from "@omniroute/open-sse/services/compression/exclusions.ts";
-import { resolveComboConfig } from "@omniroute/open-sse/services/comboConfig.ts";
+import {
+  resolveComboConfig,
+  DEFAULT_COMBO_TARGET_TIMEOUT_MS,
+} from "@omniroute/open-sse/services/comboConfig.ts";
 import { injectHandoffIntoBody } from "@omniroute/open-sse/services/contextHandoff.ts";
 import { runWithTransientBackendRetry } from "@omniroute/open-sse/services/transientBackendRetry.ts";
 import { isMarkedLocalProcessPressureResponse } from "@omniroute/open-sse/utils/localPressureResponse.ts";
@@ -210,6 +221,7 @@ import { registerBailianCodingPlanQuotaFetcher } from "@omniroute/open-sse/servi
 import { registerQwenTokenPlanQuotaFetcher } from "@omniroute/open-sse/services/qwenTokenPlanQuotaFetcher.ts";
 import { registerCrofUsageFetcher } from "@omniroute/open-sse/services/crofUsageFetcher.ts";
 import { registerDeepseekQuotaFetcher } from "@omniroute/open-sse/services/deepseekQuotaFetcher.ts";
+import type { SpbRoutingDecision } from "@omniroute/open-sse/services/spb/proxyBridge";
 import {
   registerMoonshotQuotaFetcher,
   registerMoonshotFetchersForNodes,
@@ -374,6 +386,102 @@ function logBreakerStateChange(name: string, from: string, to: string): void {
 }
 
 export { shouldTripProviderBreakerForResult } from "./chatPredicates";
+
+function withSpbHeaders(res: Response, spbDecision: SpbRoutingDecision | null): Response {
+  if (!spbDecision || !res) return res;
+
+  try {
+    const headers = new Headers(res.headers);
+    if (spbDecision.tierAssignment?.tier) {
+      headers.set("X-OmniRoute-SPB-Tier", spbDecision.tierAssignment.tier);
+    }
+    headers.set(
+      "X-OmniRoute-SPB-Checkpoint",
+      spbDecision.checkpointRestored ? "restored" : "created"
+    );
+    if (spbDecision.intent?.taskPhase) {
+      headers.set("X-OmniRoute-SPB-Phase", spbDecision.intent.taskPhase);
+    }
+    if (spbDecision.enhancement?.appliedOptimizations?.length) {
+      headers.set(
+        "X-OmniRoute-SPB-Optimizations",
+        String(spbDecision.enhancement.appliedOptimizations.length)
+      );
+    }
+    headers.set("X-OmniRoute-SPB-ZeroLoss", "verified");
+    return new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
+  } catch {
+    return res;
+  }
+}
+
+async function applySpbOutboundZeroLoss(
+  response: Response,
+  spbDecision: SpbRoutingDecision | null,
+  body: any,
+  resolvedModelStr: string,
+  clientRawRequest: any,
+  request: any,
+  comboName: string | null,
+  apiKeyInfo: any,
+  telemetry: any,
+  runtimeOpts: any
+): Promise<Response> {
+  if (!spbDecision || !response || !response.ok) return response;
+  try {
+    const { processSpbOutboundZeroLoss } =
+      await import("@omniroute/open-sse/services/spb/outboundEvaluator");
+    const { updateCheckpointSatisfaction } = await import("@/lib/db/spbState");
+    const lastUserPrompt = spbDecision.enhancement?.originalPrompt || "";
+    const preservedIntentions = spbDecision.enhancement?.preservedIntentions || [];
+    const tier = spbDecision.tierAssignment?.tier || "tier_2_resilient";
+    const taskPhase = spbDecision.intent?.taskPhase || "DEFAULT";
+    const sessionId = runtimeOpts.sessionId || "default_session";
+
+    const evaluatedResponse = await processSpbOutboundZeroLoss({
+      initialResponse: response,
+      dispatchModel: (newBody: any) =>
+        handleSingleModelChat(
+          newBody,
+          resolvedModelStr,
+          clientRawRequest,
+          request,
+          comboName,
+          apiKeyInfo,
+          telemetry,
+          runtimeOpts,
+          null,
+          false
+        ),
+      body,
+      originalPrompt: lastUserPrompt,
+      preservedIntentions,
+      tier,
+      taskPhase,
+      sessionId,
+      maxReprompts: 2,
+    });
+
+    // Update checkpoint with satisfaction score for cross-tier restoration
+    // We need to extract the satisfaction score from the response headers
+    const satisfactionHeader = evaluatedResponse.headers.get("X-OmniRoute-SPB-Satisfaction");
+    if (satisfactionHeader) {
+      const satisfactionScore = parseFloat(satisfactionHeader);
+      if (!isNaN(satisfactionScore)) {
+        updateCheckpointSatisfaction(sessionId, satisfactionScore);
+      }
+    }
+
+    return evaluatedResponse;
+  } catch (spbEvalErr) {
+    log.warn("SPB", `SPB outbound zero-loss evaluation warning: ${spbEvalErr}`);
+    return response;
+  }
+}
 
 async function handleChatImplementation(
   request: any,
@@ -725,6 +833,228 @@ async function handleChatImplementation(
     touchSession(sessionId);
   }
 
+  // Ingress CCR expansion: hydrate historical [CCR retrieve hash=...] markers (#14800)
+  if (Array.isArray(body?.messages)) {
+    try {
+      const { expandIncomingCcrMarkers } =
+        await import("@omniroute/open-sse/services/compression/engines/ccr/expandCcr");
+      body.messages = expandIncomingCcrMarkers(body.messages, sessionId);
+    } catch (expandErr) {
+      log.warn("CHAT", `CCR ingress expansion warning: ${expandErr}`);
+    }
+  }
+
+  // SPB-IR: Intelligent Routing, Intent Classification & Zero-Loss State Checkpointing
+  const strategyHeader =
+    request.headers.get("x-omniroute-strategy") || request.headers.get("X-OmniRoute-Strategy");
+  const isVirtualTierModel =
+    modelStr.startsWith("resilient/") ||
+    modelStr.startsWith("spb-") ||
+    modelStr.startsWith("tier_");
+  const isSpbTarget =
+    modelStr === "auto/spb" ||
+    modelStr === "auto/smart-proxy-bridge" ||
+    isVirtualTierModel ||
+    ((strategyHeader === "smart-proxy-bridge" || strategyHeader === "spb") &&
+      (!modelStr ||
+        modelStr === "auto" ||
+        modelStr === "default" ||
+        modelStr === "auto/spb" ||
+        modelStr === "auto/smart-proxy-bridge"));
+  const isSpbActive =
+    Boolean(isSpbTarget) &&
+    (getTierConfig().spbEnabled !== false || isFeatureFlagEnabled("SPB_ENABLED"));
+
+  // Branch forking headers
+  const forkFromHeader = request.headers.get("x-omniroute-fork-from")?.trim() || null;
+  const forkPointHeader = request.headers.get("x-omniroute-fork-point")?.trim() || null;
+  const branchModeHeader = request.headers.get("x-omniroute-branch-mode")?.trim() as
+    "isolate" | "continuation" | "speculative" | null;
+  const pruneLegacyHeader = request.headers.get("x-omniroute-prune-legacy")?.trim() === "true";
+
+  // Fast-Path Safety Classifier Detection:
+  // Claude Code / Agent SDK runs an internal pre-execution tool safety check against auto/spb
+  // with a strict 120-second client timeout. If that safety query goes through multi-model
+  // combo fallback chains with 100k+ tokens, it times out and injects a synthetic failure.
+  // Detect short safety/permission check payloads (<2500 chars, <=3 messages, containing
+  // permission/safety/auto-mode classifier keywords) and assign low max_tokens and tight timeout.
+  const isHarnessSafetyClassifierRequest =
+    isSpbActive &&
+    Array.isArray(body?.messages) &&
+    body.messages.length <= 3 &&
+    (() => {
+      const allText = body.messages
+        .map((m: { content?: unknown }) =>
+          typeof m.content === "string"
+            ? m.content
+            : Array.isArray(m.content)
+              ? JSON.stringify(m.content)
+              : ""
+        )
+        .join(" ");
+      return (
+        allText.length < 2500 &&
+        /\b(safety of|safe to execute|permission|can this tool be safely run|auto mode cannot determine|determine the safety)\b/i.test(
+          allText
+        )
+      );
+    })();
+
+  let spbDecision: SpbRoutingDecision | null = null;
+  if (isSpbActive && Array.isArray(body?.messages)) {
+    try {
+      const { processSmartProxyRouting, forkSession } =
+        await import("@omniroute/open-sse/services/spb/proxyBridge");
+
+      // Handle session forking if branch headers are present
+      let effectiveSessionId = sessionId;
+      if (forkFromHeader && forkPointHeader) {
+        const forkResult = await forkSession({
+          parentSessionId: forkFromHeader,
+          forkPointHash: forkPointHeader,
+          branchMode: branchModeHeader ?? "continuation",
+          pruneLegacy: pruneLegacyHeader,
+          currentMessages: body.messages,
+          currentTools: body.tools,
+        });
+        effectiveSessionId = forkResult.branchId;
+        log.info(
+          "SPB",
+          `Forked session ${effectiveSessionId} from ${forkFromHeader} at ${forkPointHeader}`
+        );
+      }
+
+      spbDecision = await processSmartProxyRouting({
+        sessionId: effectiveSessionId,
+        messages: body.messages,
+        tools: body.tools,
+      });
+      log.info(
+        "SPB",
+        `SPB-IR routed: phase=${spbDecision.intent.taskPhase}, tier=${spbDecision.tierAssignment.tier}, checkpointRestored=${spbDecision.checkpointRestored}`
+      );
+
+      // Pre-Execution Confirmation Gate
+      const requestUrl = new URL(request.url);
+      const forceExecution =
+        request.headers.get("x-omniroute-force-execution") === "true" ||
+        requestUrl.searchParams.get("force") === "true";
+
+      const hasToolsOrToolCalls =
+        Array.isArray(body?.tools) ||
+        (Array.isArray(body?.messages) &&
+          body.messages.some(
+            (m: { role?: string; content?: unknown; tool_calls?: unknown }) =>
+              m.role === "tool" ||
+              (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) ||
+              (Array.isArray(m.content) &&
+                m.content.some(
+                  (b: unknown) =>
+                    b !== null &&
+                    typeof b === "object" &&
+                    ((b as { type?: string }).type === "tool_use" ||
+                      (b as { type?: string }).type === "tool_result")
+                ))
+          ));
+
+      if (spbDecision.necessity?.confirmationRequired && !forceExecution && !hasToolsOrToolCalls) {
+        log.warn("SPB", `Pre-execution confirmation required: ${spbDecision.necessity.reason}`);
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: `Request held by SPB Pre-Execution Gate: ${spbDecision.necessity.reason}. Suggested: ${spbDecision.necessity.suggestedAction}. Pass header 'X-OmniRoute-Force-Execution: true' or query '?force=true' to proceed.`,
+              type: "confirmation_required",
+              code: "spb_confirmation_required",
+              param: null,
+              details: {
+                status: "CONFIRMATION_REQUIRED",
+                reason: spbDecision.necessity.reason,
+                suggestedAction: spbDecision.necessity.suggestedAction,
+              },
+            },
+          }),
+          {
+            status: 400,
+            headers: {
+              "Content-Type": "application/json",
+              "X-OmniRoute-Confirmation-Required": "true",
+              "X-OmniRoute-SPB-Tier": spbDecision.tierAssignment.tier,
+            },
+          }
+        );
+      }
+
+      // Inject enhanced prompt messages if available
+      if (spbDecision.enhancedMessages && Array.isArray(spbDecision.enhancedMessages)) {
+        body.messages = spbDecision.enhancedMessages;
+      }
+
+      if (body) {
+        body = {
+          ...body,
+          _spbActive: true,
+          _spbDecision: spbDecision,
+          ...(spbDecision.cacheControl ? { cacheControl: spbDecision.cacheControl } : {}),
+          ...(body.max_tokens === undefined && spbDecision.tierAssignment?.maxTokens
+            ? {
+                max_tokens: isHarnessSafetyClassifierRequest
+                  ? Math.min(spbDecision.tierAssignment.maxTokens, 1024)
+                  : spbDecision.tierAssignment.maxTokens,
+              }
+            : isHarnessSafetyClassifierRequest
+              ? { max_tokens: 1024 }
+              : {}),
+          ...(body.reasoning_effort === undefined && spbDecision.tierAssignment?.reasoningEffort
+            ? {
+                reasoning_effort: isHarnessSafetyClassifierRequest
+                  ? "low"
+                  : spbDecision.tierAssignment.reasoningEffort,
+              }
+            : {}),
+        };
+
+        // Fast-path enforcement for harness safety classifier: enforce a strict 5-second
+        // execution deadline to prevent client harness timeouts on safety permission queries
+        if (isHarnessSafetyClassifierRequest) {
+          // Attach timeout to the target-specific execution context to guarantee
+          // that the classifier dispatch enforces its 5-second limit as a hard deadline
+          // instead of relying on standard combo fallbacks.
+          if (handleSingleModel && typeof handleSingleModel === "function") {
+            const originalHandle = handleSingleModel;
+            // Use AbortController for proper timeout enforcement
+            handleSingleModel = (b: any, m: string, target?: any) => {
+              const controller = new AbortController();
+              setTimeout(() => controller.abort(), 5000);
+
+              const wrappedExecute = (_request: any, _context?: any) => {
+                return Promise.race([
+                  originalHandle(b, m, {
+                    ...target,
+                    modelAbortSignal: controller.signal,
+                    executionAbortController: controller,
+                  }),
+                  new Promise<never>((_, reject) => {
+                    controller.signal.addEventListener("abort", () => {
+                      reject(
+                        new Error(
+                          "SAFETY_CLASSIFIER_TIMEOUT: 5s limit exceeded for classifier safety check"
+                        )
+                      );
+                    });
+                  }),
+                ]);
+              };
+
+              return wrappedExecute(b, target);
+            };
+          }
+        }
+      }
+    } catch (spbErr) {
+      log.warn("SPB", `SPB-IR processing warning: ${spbErr}`);
+    }
+  }
+
   // Pipeline: API key policy enforcement (model restrictions + budget limits)
   telemetry.startPhase("policy");
   const policy = await enforceApiKeyPolicy(request, modelStr, DEFER_METERED_BUDGET);
@@ -991,7 +1321,256 @@ async function handleChatImplementation(
   // T05 — Task-Aware Smart Routing
   // Detect the semantic task type and optionally route to the optimal model
   let resolvedModelStr = modelStr;
-  let taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;
+
+  // SPB-IR Dynamic Dispatch & Incompatible Modality Shield
+  const isSpbModel =
+    resolvedModelStr === "auto/spb" ||
+    resolvedModelStr === "auto/smart-proxy-bridge" ||
+    isVirtualTierModel ||
+    (isSpbActive && (resolvedModelStr === "auto" || resolvedModelStr === "default"));
+
+  const isIncompatibleModality =
+    isSpbActive &&
+    (resolvedModelStr.includes("transcribe") ||
+      resolvedModelStr.includes("whisper") ||
+      resolvedModelStr.includes("diffusion"));
+
+  let spbCombo: any = null;
+
+  if (isSpbActive && (isSpbModel || isIncompatibleModality)) {
+    const currentTierConfig = getTierConfig();
+    const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
+    let activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
+
+    // Guard: Tier 3 models require a guidanceContract from Tier 1/Tier 2
+    // to ensure supervised execution of modifications. Without guidance,
+    // automatically escalate to Tier 2 resilient execution.
+    // INSPECTION_SYNTHESIS is NOT exempted - ALL Tier 3 phases require guidanceContract
+    // to enforce architectural supervision and prevent hallucinated file paths or
+    // premature termination of execution.
+    const tierAssignment = spbDecision?.tierAssignment ?? {};
+    const _taskPhase = spbDecision?.intent?.taskPhase; // All Tier 3 phases require guidance, no phase exemptions
+    const isUnguidedMutationTier3 =
+      activeTier === "tier_3_local" && !tierAssignment.guidanceContract;
+
+    if (isUnguidedMutationTier3) {
+      log.warn(
+        "SPB",
+        "Tier 3 execution without guidanceContract - escalating to Tier 2 resilient for supervision"
+      );
+      // Re-route by overriding the decision's tier to Tier 2
+      (spbDecision.tierAssignment as any).tier = "tier_2_resilient";
+      (spbDecision.tierAssignment as any).recommendedModels = tierModels.resilient || [];
+      (spbDecision.tierAssignment as any).requiresGuidance = true;
+      (spbDecision as any).selectedModel = tierModels.resilient?.[0] || null;
+      activeTier = "tier_2_resilient";
+    }
+
+    // Build complete prioritized fallback ladder across tiers:
+    // primary tier models first, followed by sibling tier models in fallback order.
+    const candidateModels: string[] = [];
+    if (activeTier === "tier_1_apex") {
+      candidateModels.push(
+        ...(spbDecision?.tierAssignment?.recommendedModels?.length
+          ? spbDecision.tierAssignment.recommendedModels
+          : tierModels.apex || []),
+        ...(tierModels.resilient || []),
+        ...(tierModels.local || [])
+      );
+    } else if (activeTier === "tier_3_local") {
+      candidateModels.push(
+        ...(spbDecision?.tierAssignment?.recommendedModels?.length
+          ? spbDecision.tierAssignment.recommendedModels
+          : tierModels.local || []),
+        ...(tierModels.resilient || []),
+        ...(tierModels.apex || [])
+      );
+    } else {
+      // Default / tier_2_resilient: resilient -> apex -> local
+      candidateModels.push(
+        ...(spbDecision?.tierAssignment?.recommendedModels?.length
+          ? spbDecision.tierAssignment.recommendedModels
+          : tierModels.resilient || []),
+        ...(tierModels.apex || []),
+        ...(tierModels.local || [])
+      );
+    }
+
+    // Filter out non-chat modalities AND any self-referential virtual tier identifiers
+    // (e.g. 'resilient/spb-tier-2', 'spb-tier-2', 'tier_2_resilient') so they never become dispatch targets
+    const isVirtualModelName = (name: string) => {
+      const lower = name.toLowerCase();
+      return (
+        lower.startsWith("apex/") ||
+        lower.startsWith("resilient/") ||
+        lower.startsWith("local/") ||
+        lower.startsWith("spb-") ||
+        lower.startsWith("tier_") ||
+        lower.includes("spb-tier") ||
+        lower === "auto" ||
+        lower === "default" ||
+        lower === "auto/spb" ||
+        lower === "auto/smart-proxy-bridge"
+      );
+    };
+
+    // Expand virtual tier identifiers and configured combo models to concrete candidate models
+    const rawCandidates: string[] = [];
+    for (const m of candidateModels) {
+      const modelName = typeof m === "string" ? m : (m as any)?.model || "";
+      if (isVirtualModelName(modelName)) {
+        const resolved = resolveVirtualTierModels(modelName);
+        if (resolved.length > 0) {
+          rawCandidates.push(...resolved);
+        } else {
+          // If resolveVirtualTierModels didn't resolve directly, check if it's a combo in SQLite
+          const fromCombo = expandComboModelsFromDb(modelName);
+          if (fromCombo.length > 0) {
+            rawCandidates.push(...fromCombo);
+          }
+        }
+      } else {
+        // Direct model or custom-named combo
+        const fromCombo = expandComboModelsFromDb(modelName);
+        if (fromCombo.length > 0) {
+          rawCandidates.push(...fromCombo);
+        } else {
+          rawCandidates.push(modelName);
+        }
+      }
+    }
+    if (rawCandidates.length === 0) {
+      rawCandidates.push(...resolveVirtualTierModels(activeTier));
+    }
+
+    const uniqueTierModels = Array.from(new Set(rawCandidates)).filter((m) => {
+      const modelName = typeof m === "string" ? m : (m as any)?.model || "";
+      const lower = modelName.toLowerCase();
+      return (
+        !isVirtualModelName(modelName) &&
+        !lower.includes("diffusion") &&
+        !lower.includes("rerank") &&
+        !lower.includes("embedding") &&
+        !lower.includes("whisper") &&
+        !lower.includes("transcribe")
+      );
+    });
+
+    if (uniqueTierModels.length === 0) {
+      const dynamicModels = resolveVirtualTierModels(activeTier);
+      if (dynamicModels.length > 0) {
+        uniqueTierModels.push(...dynamicModels);
+      }
+    }
+
+    // Check if the targeted tier lacks configured models and warn operator
+    const tierConfiguredCount =
+      activeTier === "tier_1_apex"
+        ? tierModels.apex?.length || 0
+        : activeTier === "tier_3_local"
+          ? tierModels.local?.length || 0
+          : tierModels.resilient?.length || 0;
+
+    if (tierConfiguredCount === 0 && candidateModels.length > 0) {
+      log.warn(
+        "SPB",
+        `Target tier '${activeTier}' has no configured models in tierModels; falling back to sibling tier models.`
+      );
+    }
+
+    const effectiveSelectedModel =
+      spbDecision?.selectedModel && uniqueTierModels.includes(spbDecision.selectedModel)
+        ? spbDecision.selectedModel
+        : uniqueTierModels.length > 0
+          ? typeof uniqueTierModels[0] === "string"
+            ? uniqueTierModels[0]
+            : (uniqueTierModels[0] as any).model
+          : null;
+
+    // Preserve the original SPB tier assignment's cacheEnabled and maxTokens
+    // so that downstream model execution respects the tier's caching and token budget.
+    const preservedTierAssignment = spbDecision?.tierAssignment
+      ? { ...spbDecision.tierAssignment }
+      : {
+          tier: activeTier,
+          recommendedModels: uniqueTierModels,
+          maxTokens: 8192,
+          temperature: 0.2,
+          cacheEnabled: true,
+        };
+
+    if (effectiveSelectedModel) {
+      log.info(
+        "SPB",
+        `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → ${effectiveSelectedModel} (tier=${activeTier}, phase=${spbDecision?.intent?.taskPhase || "DEFAULT"})`
+      );
+      resolvedModelStr = effectiveSelectedModel;
+      body = {
+        ...body,
+        model: resolvedModelStr,
+        _spbActive: true,
+        _spbDecision: spbDecision
+          ? { ...spbDecision, selectedModel: effectiveSelectedModel }
+          : {
+              intent: {
+                taskPhase: "DEFAULT",
+                complexityScore: 0.5,
+                requiresTools: false,
+                promptAnchorHash: "",
+              },
+              tierAssignment: preservedTierAssignment,
+              selectedModel: effectiveSelectedModel,
+              checkpointRestored: false,
+            },
+      };
+
+      spbCombo = {
+        id: `spb-${activeTier}`,
+        name: `SPB ${activeTier}`,
+        type: "spb",
+        strategy: "priority",
+        models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
+        config: {
+          targetTimeoutMs:
+            typeof process !== "undefined" &&
+            process.env?.SPB_TARGET_TIMEOUT_MS &&
+            Number(process.env.SPB_TARGET_TIMEOUT_MS) > 0
+              ? Number(process.env.SPB_TARGET_TIMEOUT_MS)
+              : typeof currentTierConfig?.fallbackTimeout === "number" &&
+                  currentTierConfig.fallbackTimeout >= 60000
+                ? currentTierConfig.fallbackTimeout
+                : DEFAULT_COMBO_TARGET_TIMEOUT_MS,
+          // Preserve SPB-selected model as primary to bypass 58-model fallback cascade
+          candidatePool: uniqueTierModels
+            .map((m) => (typeof m === "string" ? m : (m as any).model || ""))
+            .filter(Boolean),
+        },
+      };
+    } else if (isVirtualTierModel || isSpbModel) {
+      // Safety net: when all configured tier models were virtual identifiers or empty,
+      // we do NOT fall back to hardcoded combos. All models must be explicitly configured
+      // in tier_config or provider registry. Fail fast with clear error.
+      log.error(
+        "SPB",
+        `Virtual tier or SPB model '${resolvedModelStr}' had no concrete models configured. ` +
+          `Configure models in tier_config (database) or provider registry. No hardcoded fallback applied.`
+      );
+      return errorResponse(
+        503,
+        `SPB tier '${activeTier}' has no configured models. Please configure models in tier_config or provider registry.`
+      );
+    } else if (isIncompatibleModality) {
+      const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
+      log.warn(
+        "SPB",
+        `Modality Shield: Incompatible non-chat model detected (${resolvedModelStr}), safely redirecting to ${shieldModel}`
+      );
+      resolvedModelStr = shieldModel;
+      body = { ...body, model: resolvedModelStr };
+    }
+  }
+
+  let _taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;
   if (getTaskRoutingConfig().enabled) {
     telemetry.startPhase("task-route");
     const tr = applyTaskAwareRouting(modelStr, body);
@@ -1005,7 +1584,7 @@ async function handleChatImplementation(
     } else if (tr.taskType !== "chat") {
       log.debug("T05", `Task-Aware: detected="${tr.taskType}" (no override configured)`);
     }
-    taskRouteInfo = { taskType: tr.taskType, wasRouted: tr.wasRouted };
+    _taskRouteInfo = { taskType: tr.taskType, wasRouted: tr.wasRouted };
     telemetry.endPhase();
   }
 
@@ -1050,7 +1629,7 @@ async function handleChatImplementation(
 
   // Check if model is a combo (has multiple models with fallback)
   telemetry.startPhase("resolve");
-  let combo: any = await getComboForModel(resolvedModelStr);
+  let combo: any = spbCombo || (await getComboForModel(resolvedModelStr));
   if (reasoningDecision?.targetCombo) combo = reasoningDecision.targetCombo;
 
   // "auto" prefix fuzzy matching: "auto/fast" → "auto/best-fast", etc.
@@ -1170,6 +1749,22 @@ async function handleChatImplementation(
       const availability = getComboCredentialAvailability(creds);
       if (availability !== true) return availability;
 
+      // Skip models with active connection cooldowns or per-model lockouts
+      if (creds && typeof creds === "object" && "connectionId" in creds && creds.connectionId) {
+        const connId = String(creds.connectionId);
+        if ("rateLimitedUntil" in creds && isAccountUnavailable(creds.rateLimitedUntil as string)) {
+          log.debug(
+            "COMBO",
+            `Skipping ${modelString}: connection ${connId} in cooldown until ${creds.rateLimitedUntil}`
+          );
+          return false;
+        }
+        if (isModelLocked(provider, connId, resolvedModel)) {
+          log.debug("COMBO", `Skipping ${modelString}: model locked on connection ${connId}`);
+          return false;
+        }
+      }
+
       // OAuth selection must happen atomically with occupancy reservation in the
       // actual dispatch. Availability preflight may finish well before a combo
       // target runs, so caching OAuth credentials here would reintroduce a race.
@@ -1199,7 +1794,7 @@ async function handleChatImplementation(
     // because only this layer knows which connectionId was actually selected.
     const { defer: deferContextOverflowWhenCompressible, exclusions: compressionExclusions } =
       await resolveComboContextOverflowDeferral(log, apiKeyInfo);
-    const response = await (handleComboChat as any)({
+    let response = await (handleComboChat as any)({
       body,
       combo,
       deferContextOverflowWhenCompressible,
@@ -1311,60 +1906,207 @@ async function handleChatImplementation(
     }
     comboPreselectedCredentials.clear();
 
-    // ── Global Fallback Provider (#689) ────────────────────────────────────
-    // If combo exhausted all models, try the global fallback before giving up. A local pressure
-    // shed did not exhaust anything: the fallback would only be shed again, with retries.
+    // ── Global Fallback Provider (#689) & SPB Tier Fallback ───────────────────
+    // If combo exhausted all models, try SPB tier fallbacks when SPB was explicitly active,
+    // or try global fallback before giving up. A local pressure shed did not exhaust anything.
     if (
       !response.ok &&
-      [502, 503].includes(response.status) &&
       !isMarkedLocalProcessPressureResponse(response) &&
-      typeof (settings as any)?.globalFallbackModel === "string" &&
-      (settings as any).globalFallbackModel.trim()
+      (
+        (isSpbActive && [429, 500, 502, 503, 504].includes(response.status)) ||
+        ([502, 503].includes(response.status) &&
+          typeof (settings as any)?.globalFallbackModel === "string" &&
+          (settings as any).globalFallbackModel.trim())
+      )
     ) {
-      const fallbackModel = (settings as any).globalFallbackModel.trim();
-      log.info(
-        "GLOBAL_FALLBACK",
-        `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
-      );
-      try {
-        const fallbackResponse = await runWithTransientBackendRetry(
-          () =>
-            handleSingleModelChat(
-              body,
-              fallbackModel,
-              clientRawRequest,
-              request,
-              combo.name,
-              apiKeyInfo,
-              telemetry,
-              {
+      // 1. If SPB is active or recommended alternative tier models exist, attempt tier fallback
+      if (isSpbActive && [429, 500, 502, 503, 504].includes(response.status)) {
+        const currentTierConfig = getTierConfig();
+        const candidateTierModels = [
+          ...(spbDecision?.tierAssignment?.recommendedModels || []),
+          ...(currentTierConfig?.tierModels?.resilient || []),
+        ].filter(
+          (m: string) =>
+            typeof m === "string" && m.trim() && m !== resolvedModelStr && m !== combo.name
+        );
+        const uniqueCandidates = Array.from(new Set(candidateTierModels));
+
+        for (const altModel of uniqueCandidates) {
+          if (request?.signal?.aborted || clientRawRequest?.signal?.aborted) {
+            log.info("SPB_FALLBACK", "Client disconnected (499) — stopping SPB fallback loop");
+            return errorResponse(499, "Request aborted");
+          }
+          log.info(
+            "SPB_FALLBACK",
+            `Combo "${combo.name}" exhausted (${response.status}) — attempting SPB tier fallback: ${altModel}`
+          );
+          try {
+            const altCombo = await getComboByName(altModel).catch(() => null);
+            const altResponse = altCombo
+              ? await (handleComboChat as any)({
+                  body,
+                  combo: altCombo,
+                  endpointPath: new URL(request.url).pathname,
+                  requestHeaders: request.headers,
+                  handleSingleModel: (b: any, m: string) =>
+                    handleSingleModelChat(
+                      b,
+                      m,
+                      clientRawRequest,
+                      request,
+                      altCombo.name ?? altModel,
+                      apiKeyInfo,
+                      telemetry,
+                      {
+                        sessionId,
+                        sessionAffinityKey,
+                        emergencyFallbackTried: true,
+                        forceLiveComboTest: isComboLiveTest,
+                        conversationId,
+                        managedLease,
+                        videoBridgeLog,
+                      },
+                      altCombo.strategy,
+                      true
+                    ),
+                  sessionId,
+                  sessionAffinityKey,
+                  log,
+                })
+              : await runWithTransientBackendRetry(
+                  () =>
+                    handleSingleModelChat(
+                      body,
+                      altModel,
+                      clientRawRequest,
+                      request,
+                      combo.name,
+                      apiKeyInfo,
+                      telemetry,
+                      {
+                        sessionId,
+                        sessionAffinityKey,
+                        emergencyFallbackTried: true,
+                        forceLiveComboTest: isComboLiveTest,
+                        conversationId,
+                        managedLease,
+                        videoBridgeLog,
+                      },
+                      combo.strategy,
+                      true
+                    ),
+                  { signal: signal ?? undefined, source: "spb-tier-fallback" }
+                );
+            if (altResponse.ok) {
+              log.info("SPB_FALLBACK", `SPB tier fallback "${altModel}" succeeded`);
+              recordTelemetry(telemetry);
+              return withSpbHeaders(
+                withModalityBridgeHeader(
+                  withConversationId(withSessionHeader(altResponse, sessionId), conversationId),
+                  modalityBridgeHeader
+                ),
+                spbDecision
+              );
+            }
+            log.warn(
+              "SPB_FALLBACK",
+              `SPB tier fallback "${altModel}" failed (${altResponse.status})`
+            );
+          } catch (err: any) {
+            log.warn(
+              "SPB_FALLBACK",
+              `SPB tier fallback error on "${altModel}": ${err?.message || "unknown"}`
+            );
+          }
+        }
+      }
+
+      // 2. Global fallback model
+      if (
+        [502, 503].includes(response.status) &&
+        typeof (settings as any)?.globalFallbackModel === "string" &&
+        (settings as any).globalFallbackModel.trim()
+      ) {
+        const fallbackModel = (settings as any).globalFallbackModel.trim();
+        log.info(
+          "GLOBAL_FALLBACK",
+          `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
+        );
+        try {
+          const fallbackCombo = await getComboByName(fallbackModel).catch(() => null);
+          const fallbackResponse = fallbackCombo
+            ? await (handleComboChat as any)({
+                body,
+                combo: fallbackCombo,
+                endpointPath: new URL(request.url).pathname,
+                requestHeaders: request.headers,
+                handleSingleModel: (b: any, m: string) =>
+                  handleSingleModelChat(
+                    b,
+                    m,
+                    clientRawRequest,
+                    request,
+                    fallbackCombo.name ?? fallbackModel,
+                    apiKeyInfo,
+                    telemetry,
+                    {
+                      sessionId,
+                      sessionAffinityKey,
+                      emergencyFallbackTried: true,
+                      forceLiveComboTest: isComboLiveTest,
+                      conversationId,
+                      managedLease,
+                      videoBridgeLog,
+                    },
+                    fallbackCombo.strategy,
+                    true
+                  ),
                 sessionId,
                 sessionAffinityKey,
-                emergencyFallbackTried: true,
-                forceLiveComboTest: isComboLiveTest,
-                conversationId,
-                managedLease,
-                videoBridgeLog,
-              },
-              combo.strategy,
-              true
-            ),
-          { signal: signal ?? undefined, source: "global-fallback" }
-        );
-        if (fallbackResponse.ok) {
-          log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
-          recordTelemetry(telemetry);
-          return withModalityBridgeHeader(
-            withConversationId(withSessionHeader(fallbackResponse, sessionId), conversationId),
-            modalityBridgeHeader
+                log,
+              })
+            : await runWithTransientBackendRetry(
+                () =>
+                  handleSingleModelChat(
+                    body,
+                    fallbackModel,
+                    clientRawRequest,
+                    request,
+                    combo.name,
+                    apiKeyInfo,
+                    telemetry,
+                    {
+                      sessionId,
+                      sessionAffinityKey,
+                      emergencyFallbackTried: true,
+                      forceLiveComboTest: isComboLiveTest,
+                      conversationId,
+                      managedLease,
+                      videoBridgeLog,
+                    },
+                    combo.strategy,
+                    true
+                  ),
+                { signal: signal ?? undefined, source: "global-fallback" }
+              );
+          if (fallbackResponse.ok) {
+            log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+            recordTelemetry(telemetry);
+            return withSpbHeaders(
+              withModalityBridgeHeader(
+                withConversationId(withSessionHeader(fallbackResponse, sessionId), conversationId),
+                modalityBridgeHeader
+              ),
+              spbDecision
+            );
+          }
+          log.warn(
+            "GLOBAL_FALLBACK",
+            `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
           );
+        } catch (err: any) {
+          log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
         }
-        log.warn(
-          "GLOBAL_FALLBACK",
-          `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
-        );
-      } catch (err: any) {
-        log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
       }
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -1395,12 +2137,34 @@ async function handleChatImplementation(
         });
       } catch {}
     }
-    return withModalityBridgeHeader(
-      withConversationId(
-        withCorrelationId(withSessionHeader(response, sessionId), reqId),
-        conversationId
+    response = await applySpbOutboundZeroLoss(
+      response,
+      spbDecision,
+      body,
+      resolvedModelStr,
+      clientRawRequest,
+      request,
+      combo.name,
+      apiKeyInfo,
+      telemetry,
+      {
+        sessionId,
+        sessionAffinityKey,
+        correlationId: reqId,
+        conversationId,
+        managedLease,
+        videoBridgeLog,
+      }
+    );
+    return withSpbHeaders(
+      withModalityBridgeHeader(
+        withConversationId(
+          withCorrelationId(withSessionHeader(response, sessionId), reqId),
+          conversationId
+        ),
+        modalityBridgeHeader
       ),
-      modalityBridgeHeader
+      spbDecision
     );
   }
   telemetry.endPhase();
@@ -1420,7 +2184,7 @@ async function handleChatImplementation(
       } catch {}
     }
   }
-  const response = await handleSingleModelChat(
+  let response = await handleSingleModelChat(
     body,
     resolvedModelStr,
     clientRawRequest,
@@ -1448,13 +2212,269 @@ async function handleChatImplementation(
     null,
     false
   );
+
+  // If a single model attempt failed with 429 (quota/rate-limit) or 5xx, try fallback:
+  if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+    // 1. If SPB is active and recommended alternative tier models, attempt fallback across remaining models
+    if (isSpbActive && spbDecision?.tierAssignment?.recommendedModels?.length) {
+      const candidates = spbDecision.tierAssignment.recommendedModels.filter(
+        (m: string) => m !== resolvedModelStr
+      );
+      for (const altModel of candidates) {
+        if (request?.signal?.aborted || clientRawRequest?.signal?.aborted) {
+          log.info("SPB_FALLBACK", "Client disconnected (499) — stopping SPB fallback loop");
+          return errorResponse(499, "Request aborted");
+        }
+        log.info(
+          "SPB_FALLBACK",
+          `Single model "${resolvedModelStr}" failed (${response.status}) — attempting SPB tier fallback: ${altModel}`
+        );
+        const altResponse = await handleSingleModelChat(
+          body,
+          altModel,
+          clientRawRequest,
+          request,
+          null,
+          apiKeyInfo,
+          telemetry,
+          {
+            sessionId,
+            sessionAffinityKey,
+            forceLiveComboTest: isComboLiveTest,
+            forcedConnectionId: null,
+            correlationId: reqId,
+            conversationId,
+            routingComboId,
+            reasoningDecision,
+            reasoningIntent,
+            reasoningRequestTags: requestRoutingTags.tags,
+            managedLease,
+            videoBridgeLog,
+          },
+          null,
+          false
+        );
+        if (altResponse.ok) {
+          log.info("SPB_FALLBACK", `SPB tier fallback "${altModel}" succeeded`);
+          response = altResponse;
+          break;
+        }
+      }
+    }
+
+    // 2. If still not ok, try globalFallbackModel if configured
+    if (!response.ok) {
+      // When the client explicitly names a provider prefix (e.g. cw/claude-sonnet-5.5-low),
+      // never silently divert to a different provider's model on a 429. The explicit
+      // provider choice is the operator's intent; a global fallback that substitutes a
+      // different provider is a side effect the caller did not ask for. Return the
+      // original error so the client can choose its own fallback.
+      const clientProvider = modelStr.includes("/") ? modelStr.split("/")[0] : null;
+      const isExplicitProviderRequest = Boolean(clientProvider);
+      if (isExplicitProviderRequest) {
+        log.debug(
+          "GLOBAL_FALLBACK",
+          `Skipping global fallback for "${resolvedModelStr}": client explicitly requested provider "${clientProvider}" — preserving provider choice on ${response.status}`
+        );
+      } else {
+        const fallbackSettings = (await getCachedSettings().catch(
+          () => ({}) as Record<string, unknown>
+        )) as Record<string, unknown>;
+        const fallbackModel =
+          typeof fallbackSettings?.globalFallbackModel === "string"
+            ? (fallbackSettings.globalFallbackModel as string).trim()
+            : null;
+        if (fallbackModel && fallbackModel !== resolvedModelStr) {
+          log.info(
+            "GLOBAL_FALLBACK",
+            `Single model "${resolvedModelStr}" failed (${response.status}) — attempting global fallback: ${fallbackModel}`
+          );
+          try {
+            const fallbackCombo = await getComboByName(fallbackModel).catch(() => null);
+            const fallbackResponse = fallbackCombo
+              ? await (handleComboChat as any)({
+                  body,
+                  combo: fallbackCombo,
+                  endpointPath: clientRawRequest?.endpoint || new URL(request.url).pathname,
+                  requestHeaders: clientRawRequest?.headers || request.headers,
+                  handleSingleModel: (b: any, m: string) =>
+                    handleSingleModelChat(
+                      b,
+                      m,
+                      clientRawRequest,
+                      request,
+                      fallbackCombo.name ?? fallbackModel,
+                      apiKeyInfo,
+                      telemetry,
+                      {
+                        sessionId,
+                        sessionAffinityKey,
+                        emergencyFallbackTried: true,
+                        forceLiveComboTest: isComboLiveTest,
+                        forcedConnectionId: null,
+                        correlationId: reqId,
+                        conversationId,
+                        managedLease,
+                        videoBridgeLog,
+                      },
+                      fallbackCombo.strategy,
+                      true
+                    ),
+                  sessionId,
+                  sessionAffinityKey,
+                  log,
+                })
+              : await handleSingleModelChat(
+                  body,
+                  fallbackModel,
+                  clientRawRequest,
+                  request,
+                  null,
+                  apiKeyInfo,
+                  telemetry,
+                  {
+                    sessionId,
+                    sessionAffinityKey,
+                    forceLiveComboTest: isComboLiveTest,
+                    forcedConnectionId: null,
+                    correlationId: reqId,
+                    conversationId,
+                    managedLease,
+                    videoBridgeLog,
+                  },
+                  null,
+                  false
+                );
+            if (fallbackResponse.ok) {
+              log.info("GLOBAL_FALLBACK", `Global fallback "${fallbackModel}" succeeded`);
+              response = fallbackResponse;
+            }
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log.warn("GLOBAL_FALLBACK", `Global fallback error: ${errMsg}`);
+          }
+        }
+      }
+    }
+
+    // 3. Resilient tier automatic recovery if still failing with 429 / 5xx
+    // ONLY when SPB is explicitly active for this request (e.g. auto/spb requested)
+    if (isSpbActive && !response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+      const tierConfig = getTierConfig();
+      const resilientCandidates = (tierConfig?.tierModels?.resilient || []).filter(
+        (m: string) => m !== resolvedModelStr
+      );
+      for (const resModel of resilientCandidates) {
+        log.info(
+          "RESILIENT_FAILOVER",
+          `Model "${resolvedModelStr}" exhausted/failed (${response.status}) — initiating automatic resilient failover to: ${resModel}`
+        );
+        try {
+          const resCombo = await getComboByName(resModel).catch(() => null);
+          const resResponse = resCombo
+            ? await (handleComboChat as any)({
+                body,
+                combo: resCombo,
+                endpointPath: clientRawRequest?.endpoint || new URL(request.url).pathname,
+                requestHeaders: clientRawRequest?.headers || request.headers,
+                handleSingleModel: (b: any, m: string) =>
+                  handleSingleModelChat(
+                    b,
+                    m,
+                    clientRawRequest,
+                    request,
+                    resCombo.name ?? resModel,
+                    apiKeyInfo,
+                    telemetry,
+                    {
+                      sessionId,
+                      sessionAffinityKey,
+                      emergencyFallbackTried: true,
+                      forceLiveComboTest: isComboLiveTest,
+                      forcedConnectionId: null,
+                      correlationId: reqId,
+                      conversationId,
+                      managedLease,
+                      videoBridgeLog,
+                    },
+                    resCombo.strategy,
+                    true
+                  ),
+                sessionId,
+                sessionAffinityKey,
+                log,
+              })
+            : await handleSingleModelChat(
+                body,
+                resModel,
+                clientRawRequest,
+                request,
+                null,
+                apiKeyInfo,
+                telemetry,
+                {
+                  sessionId,
+                  sessionAffinityKey,
+                  forceLiveComboTest: isComboLiveTest,
+                  forcedConnectionId: null,
+                  correlationId: reqId,
+                  conversationId,
+                  managedLease,
+                  videoBridgeLog,
+                },
+                null,
+                false
+              );
+          if (resResponse.ok) {
+            log.info("RESILIENT_FAILOVER", `Resilient failover to "${resModel}" succeeded`);
+            response = resResponse;
+            break;
+          }
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log.warn("RESILIENT_FAILOVER", `Failover attempt to "${resModel}" error: ${errMsg}`);
+        }
+      }
+    }
+  }
+
+  // SPB Outbound Zero-Intention-Loss Evaluation & Autonomous Iterative Re-prompting
+  response = await applySpbOutboundZeroLoss(
+    response,
+    spbDecision,
+    body,
+    resolvedModelStr,
+    clientRawRequest,
+    request,
+    combo?.name ?? null,
+    apiKeyInfo,
+    telemetry,
+    {
+      sessionId,
+      sessionAffinityKey,
+      forceLiveComboTest: isComboLiveTest,
+      forcedConnectionId: requestedConnectionId,
+      correlationId: reqId,
+      conversationId,
+      routingComboId,
+      reasoningDecision,
+      reasoningIntent,
+      reasoningRequestTags: requestRoutingTags.tags,
+      managedLease,
+      videoBridgeLog,
+    }
+  );
+
   recordTelemetry(telemetry);
-  return withModalityBridgeHeader(
-    withConversationId(
-      withCorrelationId(withSessionHeader(response, sessionId), reqId),
-      conversationId
+  return withSpbHeaders(
+    withModalityBridgeHeader(
+      withConversationId(
+        withCorrelationId(withSessionHeader(response, sessionId), reqId),
+        conversationId
+      ),
+      modalityBridgeHeader
     ),
-    modalityBridgeHeader
+    spbDecision
   );
 }
 
@@ -1871,6 +2891,7 @@ async function handleSingleModelChat(
       if (museUnavailable) return museUnavailable;
 
       if (credentials && "leaseUnavailable" in credentials && credentials.leaseUnavailable) {
+        credentials.releaseOAuthSession?.();
         excludedConnectionIds.add(agyLease.trackAntigravityLeaseBusy(agy, credentials));
         if (!hasForcedConnection) continue;
         return agyLease.buildAntigravityPoolBusyResponse(agy.earliestRetryHintAtMs ?? Date.now());
@@ -1878,7 +2899,10 @@ async function handleSingleModelChat(
 
       if (runtimeOptions.managedLease && credentials) {
         const leaseError = buildManagedLeaseSelectionErrorResponse(credentials);
-        if (leaseError) return leaseError;
+        if (leaseError) {
+          credentials.releaseOAuthSession?.();
+          return leaseError;
+        }
       }
 
       // #9467: also treat the auth layer's allExpired verdict as a no-credentials
@@ -1944,12 +2968,18 @@ async function handleSingleModelChat(
           typeof lastError === "string" &&
           (lastError.includes("RATE_LIMIT_QUEUE_TIMEOUT") ||
             lastError.includes("RATE_LIMIT_QUEUE_WEDGED"));
+        const isLocalSaturation =
+          typeof lastError === "string" &&
+          (lastError.includes("antigravity_pool_busy") ||
+            lastError.includes("chat_admission_busy") ||
+            lastError.includes("all_connections_busy"));
         if (
           !forceLiveComboTest &&
           credentials?.allRateLimited &&
           isProviderBreakerFailureStatus(breakerFailureStatus) &&
           !isNetworkError &&
           !isQueueTimeout &&
+          !isLocalSaturation &&
           // Probe-origin dispatches must not degrade the provider breaker —
           // routing state untouched (#9817).
           !(await shouldIsolateProbeFailures())

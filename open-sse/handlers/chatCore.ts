@@ -66,6 +66,10 @@ import {
 } from "./chatCore/providerRequestRegistration.ts";
 import { collectPreConversionClientToolNames } from "./chatCore/clientToolNames.ts";
 export { clearCombosCache, clearUpstreamProxyConfigCache } from "./chatCore/comboContextCache.ts";
+
+// Combo limits cache — 10s TTL matches getCombosCached()
+const _comboLimitsCache = new Map<string, { limit: number; ts: number }>();
+const COMBO_LIMITS_TTL = 10_000;
 import { resolveAccountSemaphoreKey } from "./chatCore/executorHelpers.ts";
 import {
   shouldUseNativeCodexPassthrough,
@@ -1874,61 +1878,71 @@ async function handleChatCoreInner({
       );
     }
     if (isCombo && comboName) {
-      log?.info?.("CONTEXT", `Attempting to resolve combo limits for comboName=${comboName}`);
-      try {
-        const { getComboByName } = await import("@/lib/db/combos");
-        const { resolveComboTargets } = await import("../services/combo.ts");
-        let comboConfig = await getComboByName(comboName);
-        if (!comboConfig && comboName.startsWith("combo/")) {
-          comboConfig = await getComboByName(comboName.substring(6));
-        }
-        let comboTargetLimits: number[] = [];
-        if (comboConfig) {
-          const allCombosData = await getCombosCached();
-          const targets = resolveComboTargets(
-            comboConfig as unknown as { name: string; models: unknown[] },
-            allCombosData as unknown as { name: string; models: unknown[] }[]
-          );
-          // Fall back to ResolvedComboTarget.provider when modelStr lacks a
-          // provider/ prefix — parseModel alone returns provider:null (#8716).
-          comboTargetLimits = targets
-            .map((t: { modelStr?: string; provider?: string }) =>
-              getComboTargetTokenLimit({ modelStr: t.modelStr, provider: t.provider })
-            )
-            .filter(
-              (limit): limit is number =>
-                typeof limit === "number" && Number.isFinite(limit) && limit > 0
+      // Check cache first
+      const now = Date.now();
+      const cached = _comboLimitsCache.get(comboName);
+      if (cached && now - cached.ts < COMBO_LIMITS_TTL) {
+        contextLimit = cached.limit;
+        log?.debug?.("CONTEXT", `Combo context limit (cached): ${contextLimit} for ${comboName}`);
+      } else {
+        log?.info?.("CONTEXT", `Attempting to resolve combo limits for comboName=${comboName}`);
+        try {
+          const { getComboByName } = await import("@/lib/db/combos");
+          const { resolveComboTargets } = await import("../services/combo.ts");
+          let comboConfig = await getComboByName(comboName);
+          if (!comboConfig && comboName.startsWith("combo/")) {
+            comboConfig = await getComboByName(comboName.substring(6));
+          }
+          let comboTargetLimits: number[] = [];
+          if (comboConfig) {
+            const allCombosData = await getCombosCached();
+            const targets = resolveComboTargets(
+              comboConfig as unknown as { name: string; models: unknown[] },
+              allCombosData as unknown as { name: string; models: unknown[] }[]
             );
+            // Fall back to ResolvedComboTarget.provider when modelStr lacks a
+            // provider/ prefix — parseModel alone returns provider:null (#8716).
+            comboTargetLimits = targets
+              .map((t: { modelStr?: string; provider?: string }) =>
+                getComboTargetTokenLimit({ modelStr: t.modelStr, provider: t.provider })
+              )
+              .filter(
+                (limit): limit is number =>
+                  typeof limit === "number" && Number.isFinite(limit) && limit > 0
+              );
+          }
+          // chatCore executes per concrete target (handleSingleModel resolves
+          // provider/effectiveModel before delegating). Compress against THIS
+          // target's window; min(...allTargets) is only a defensive fallback —
+          // the old unconditional min compressed a 1M-target request at the
+          // smallest sibling's window ("agent keeps forgetting things").
+          // An explicit `context_length` on the combo record (Agent Features →
+          // Context length) is an operator declaration and outranks the inferred
+          // per-target window — see resolveComboContextLimit().
+          const rawComboContextLength = (comboConfig as { context_length?: unknown } | null)
+            ?.context_length;
+          const comboContextLength =
+            typeof rawComboContextLength === "number" &&
+            Number.isFinite(rawComboContextLength) &&
+            rawComboContextLength > 0
+              ? rawComboContextLength
+              : null;
+          const resolved = resolveComboContextLimit({
+            provider,
+            model: effectiveModel,
+            comboTargetLimits,
+            comboContextLength,
+          });
+          contextLimit = resolved.limit;
+          // Cache the resolved limit
+          _comboLimitsCache.set(comboName, { limit: contextLimit, ts: now });
+          log?.info?.(
+            "CONTEXT",
+            `Combo context limit: ${resolved.limit} (source=${resolved.source})`
+          );
+        } catch (err) {
+          log?.warn?.("CONTEXT", "Failed to resolve combo limits for compression: " + err);
         }
-        // chatCore executes per concrete target (handleSingleModel resolves
-        // provider/effectiveModel before delegating). Compress against THIS
-        // target's window; min(...allTargets) is only a defensive fallback —
-        // the old unconditional min compressed a 1M-target request at the
-        // smallest sibling's window ("agent keeps forgetting things").
-        // An explicit `context_length` on the combo record (Agent Features →
-        // Context length) is an operator declaration and outranks the inferred
-        // per-target window — see resolveComboContextLimit().
-        const rawComboContextLength = (comboConfig as { context_length?: unknown } | null)
-          ?.context_length;
-        const comboContextLength =
-          typeof rawComboContextLength === "number" &&
-          Number.isFinite(rawComboContextLength) &&
-          rawComboContextLength > 0
-            ? rawComboContextLength
-            : null;
-        const resolved = resolveComboContextLimit({
-          provider,
-          model: effectiveModel,
-          comboTargetLimits,
-          comboContextLength,
-        });
-        contextLimit = resolved.limit;
-        log?.info?.(
-          "CONTEXT",
-          `Combo context limit: ${resolved.limit} (source=${resolved.source})`
-        );
-      } catch (err) {
-        log?.warn?.("CONTEXT", "Failed to resolve combo limits for compression: " + err);
       }
     }
 

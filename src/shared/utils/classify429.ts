@@ -73,6 +73,15 @@ const QUOTA_PATTERNS: ReadonlyArray<RegExp> = [
   // ~60s against a budget that only resets at UTC midnight.
   /daily free allocation/i,
 
+  // OpenRouter free-tier daily cap (Issue observed: openrouter/account exhausted).
+  // Body: "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock
+  //        1000 free model requests per day".
+  // Without this pattern the word order ("Rate limit exceeded:" precedes
+  // "free-models-per-day") means no QUOTA_PATTERNS entry matches, so the 429 is
+  // misclassified as a transient rate-limit with only ~60-120s cooldown and the
+  // same exhausted model is retried every cycle.
+  /free-models-per-day/i,
+
   // OmniRoute auth-layer synthetic 429 (Issue #9269).
   // Body: "All antigravity accounts have exhausted their quota (reset after 5m)"
   // Produced by auth.ts line 1477 when every account for a provider has
