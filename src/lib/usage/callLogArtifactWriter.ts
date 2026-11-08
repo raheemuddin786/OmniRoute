@@ -57,7 +57,15 @@ export function resolveCallLogArtifactWorker(context: WorkerResolutionContext = 
   execArgv: string[];
 } {
   const moduleDir = context.moduleDir ?? path.dirname(fileURLToPath(import.meta.url));
-  const cwd = context.cwd ?? process.cwd();
+  const fallbackCwd = path.resolve(moduleDir, "../../..");
+  let cwd = context.cwd;
+  if (!cwd) {
+    try {
+      cwd = process.cwd();
+    } catch {
+      cwd = fallbackCwd;
+    }
+  }
   const entryFile = context.entryFile === undefined ? process.argv[1] : context.entryFile;
   const exists = context.fileExists ?? fileExistsAtRuntime;
 
@@ -169,6 +177,40 @@ function ensureWorker(): Worker {
   if (worker) return worker;
 
   const { workerFile, execArgv } = workerFileOverride ?? resolveCallLogArtifactWorker();
+  // Ensure the process has a valid, existing cwd before instantiating Worker thread.
+  // When the parent's cwd has been removed, Node's worker_threads initialization throws
+  // ENOENT in uv_cwd within the internal worker bootstrap.
+  // We validate cwd before passing to Worker, not inside Worker thread, to give us
+  // control over the fallback and avoid the “process.cwd failed... uv_cwd” crash.
+  // The Worker constructor will call fs.access on the worker file, which re-runs
+  // the cwd check internally, so we preserve the fallback by ensuring cwd exists.
+  try {
+    process.cwd();
+  } catch (cwdErr) {
+    if (
+      cwdErr &&
+      typeof cwdErr === "object" &&
+      "code" in cwdErr &&
+      (cwdErr as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      // Use the directory containing the worker file as a safe cwd fallback.
+      // This works because the worker file exists as a regular file at this point
+      // (resolveCallLogArtifactWorker ensures it).
+      const safeDir = path.dirname(workerFile);
+      try {
+        process.chdir(safeDir);
+      } catch {
+        // Last resort: try root; if that fails, we're stuck but the Worker constructor
+        // will also fail, and the existing error handling will capture it.
+        try {
+          process.chdir("/");
+        } catch {
+          // Ignore fallback chdir failure, the Worker constructor will surface the error.
+        }
+      }
+    }
+  }
+
   // Reflect.construct keeps Next/Turbopack from interpreting the runtime-selected
   // worker path as a build-time glob and tracing tens of thousands of unrelated files.
   const created = Reflect.construct(Worker, [

@@ -18,6 +18,22 @@ export const MODEL_ACCESS_DENIED_PATTERNS = [
   /\bunknown\s+provider\s+for\s+model\b/i,
   /\b(?:access|permission)[\s\S]{0,60}?\bmodel\b/i,
   /\bmodel[\s\S]{0,60}?\b(?:access|permission)\b/i,
+  // Tool-calling & schema capabilities (model-specific)
+  /\btools?\b[\s\S]{0,60}?\b(?:not\s+supported|unsupported)\b/i,
+  /\b(?:not\s+supported|unsupported)\b[\s\S]{0,60}?\btools?\b/i,
+  /\bfunction[_\s]call[\s\S]{0,60}?\b(?:not\s+supported|unsupported)\b/i,
+  /\bmalformed[_\s]function[_\s]call\b/i,
+  /\bparallel[_\s]tool[_\s]calls?\s+not\s+supported\b/i,
+  // Reasoning & thinking transport capabilities (model-specific)
+  /\breasoning[_\s]content\b/i,
+  /\bthought[_\s]signature\b/i,
+  /\bthinking\s+(?:is\s+)?not\s+supported\b/i,
+  /\breasoning\s+continuation\s+is\s+not\s+compatible\b/i,
+  // Model-specific context/token boundaries
+  /\bcontext[_\s]length[_\s]exceeded\b/i,
+  /\bmaximum\s+context\s+length\b/i,
+  /\bprompt\s+is\s+too\s+long\b/i,
+  /\bexceeds?\s+(?:the\s+)?model(?:'s)?\s+context\s+limit\b/i,
 ];
 
 /** #5249 / #2101: model-scoped 400s must not stop the combo. */

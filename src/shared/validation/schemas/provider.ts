@@ -652,6 +652,9 @@ export const updateProviderConnectionSchema = z
         maxConcurrent: rateLimitOverrideNumber(10_000).optional(),
         maxWaitMs: rateLimitOverrideNumber(120_000).optional(),
         executionMaxWaitMs: rateLimitOverrideNumber(600_000).optional(),
+        request_timeout_ms: rateLimitOverrideNumber(3_600_000).optional(),
+        connect_timeout_ms: rateLimitOverrideNumber(3_600_000).optional(),
+        read_timeout_ms: rateLimitOverrideNumber(3_600_000).optional(),
         modelConcurrency: modelConcurrencyMap(),
       })
       .partial()

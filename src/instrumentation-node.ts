@@ -900,6 +900,24 @@ export async function registerNodejs(): Promise<void> {
           console.warn("[STARTUP] backup schedule job failed to start (non-fatal):", msg);
         }),
 
+      // SPB Recovery Daemon: autonomous monitoring, stale checkpoint pruning,
+      // and circuit breaker / cooldown recovery. Gated by SPB_RECOVERY_DAEMON_ENABLED
+      // or SPB_ENABLED feature flag. Never fatal.
+      import("@/shared/utils/featureFlags")
+        .then(async ({ isFeatureFlagEnabled }) => {
+          if (
+            isFeatureFlagEnabled("SPB_RECOVERY_DAEMON_ENABLED") ||
+            isFeatureFlagEnabled("SPB_ENABLED")
+          ) {
+            const { getSpbRecoveryDaemon } = await import("@/lib/spbRecoveryDaemon");
+            getSpbRecoveryDaemon().start();
+          }
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn("[STARTUP] SPB recovery daemon failed to start (non-fatal):", msg);
+        }),
+
       // Optional subsystems (dashboard, catalog enrichment, embedded
       // services…): skipped entirely in headless mode — see OPTIONAL_BOOT_SUBSYSTEMS.
       startOptionalBootSubsystems(),

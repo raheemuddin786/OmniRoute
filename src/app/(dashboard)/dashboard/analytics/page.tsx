@@ -12,9 +12,11 @@ import ProviderUtilizationTab from "./ProviderUtilizationTab";
 import RouteExplainabilityTab from "./RouteExplainabilityTab";
 import SearchAnalyticsTab from "./SearchAnalyticsTab";
 import DiversityScoreCard from "./components/DiversityScoreCard";
+import { ProjectsAnalyticsTab } from "./ProjectsAnalyticsTab";
 
 type AnalyticsTab =
   | "overview"
+  | "projects"
   | "evals"
   | "search"
   | "utilization"
@@ -29,6 +31,7 @@ const ANALYTICS_TABS: Array<{
   icon: string;
 }> = [
   { id: "overview", labelKey: "overview", label: "Overview", icon: "analytics" },
+  { id: "projects", labelKey: "projects", label: "Projects & Workspaces", icon: "folder_managed" },
   { id: "evals", labelKey: "evals", label: "Evals", icon: "science" },
   { id: "search", labelKey: "search", label: "Search", icon: "travel_explore" },
   { id: "utilization", labelKey: "utilization", label: "Utilization", icon: "monitoring" },
@@ -58,6 +61,7 @@ function analyticsText(t: AnalyticsTranslator, key: string, fallback: string) {
 function normalizeTab(tab: string | null): AnalyticsTab {
   if (tab === "route-trace" || tab === "route-explain") return "route-trace";
   if (
+    tab === "projects" ||
     tab === "evals" ||
     tab === "search" ||
     tab === "utilization" ||
@@ -133,6 +137,7 @@ function AnalyticsPageContent() {
             <DiversityScoreCard />
           </>
         ) : null}
+        {activeTab === "projects" ? <ProjectsAnalyticsTab /> : null}
         {activeTab === "evals" ? <EvalsTab /> : null}
         {activeTab === "search" ? <SearchAnalyticsTab /> : null}
         {activeTab === "utilization" ? <ProviderUtilizationTab /> : null}

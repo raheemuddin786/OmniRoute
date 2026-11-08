@@ -27,6 +27,7 @@ import {
   getProviderValidationGuard,
 } from "@/shared/network/outboundUrlGuardPolicy";
 import { errorResponse, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import { appendClaudeEffortVariants } from "@omniroute/open-sse/utils/claudeEffortVariants";
 import { getStaticQoderModels } from "@omniroute/open-sse/services/qoderCli.ts";
 import { getCodexDiscoveryMode } from "@/shared/services/codexDiscoveryPolicy";
 import { deriveConfigFromRegistryModelsUrl } from "./discoveryConfig";
@@ -301,7 +302,8 @@ export async function GET(
 
     const toLocalCatalogModels = () => {
       const localCatalog = mergeLocalCatalogModels(registryCatalogModels, specialtyCatalogModels);
-      return localCatalog.map((model) =>
+      const withEffortVariants = appendClaudeEffortVariants(localCatalog);
+      return withEffortVariants.map((model) =>
         toDiscoveryCatalogModel(model, registryCatalogModels.length > 0 ? provider : undefined)
       );
     };

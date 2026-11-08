@@ -115,7 +115,11 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
 const DEFAULT_PROVIDER_LIMITS_SYNC_INTERVAL_MINUTES = 70;
 const PROVIDER_LIMITS_AUTO_SYNC_SETTING_KEY = "provider_limits_auto_sync_last_run";
 const DEFAULT_PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS = 5_000;
+// Minimum interval between quota refreshes for the same connection to prevent
+// quota refresh storms during autonomous agent loops and combo fallback cascades.
+const MIN_QUOTA_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const pendingPostUsageRefreshes = new Set<string>();
+const lastPostUsageRefreshAt = new Map<string, number>();
 
 function getProviderLimitsPostUsageRefreshDelayMs(): number {
   const raw = Number(process.env.PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS ?? "");
@@ -127,9 +131,16 @@ function getProviderLimitsPostUsageRefreshDelayMs(): number {
 function scheduleProviderLimitsPostUsageRefresh(connectionId: string): void {
   if (!connectionId || pendingPostUsageRefreshes.has(connectionId)) return;
 
+  // Debounce: skip if a refresh for this connection ran within MIN_QUOTA_REFRESH_INTERVAL_MS.
+  const lastRefreshAt = lastPostUsageRefreshAt.get(connectionId);
+  if (lastRefreshAt !== undefined && Date.now() - lastRefreshAt < MIN_QUOTA_REFRESH_INTERVAL_MS) {
+    return;
+  }
+
   pendingPostUsageRefreshes.add(connectionId);
   const timer = setTimeout(() => {
     pendingPostUsageRefreshes.delete(connectionId);
+    lastPostUsageRefreshAt.set(connectionId, Date.now());
     void fetchAndPersistProviderLimits(connectionId, "scheduled", {
       allowRotatingRefresh: true,
     }).catch((error) => {
@@ -148,6 +159,22 @@ export function notifyProviderUsageRecorded(
 ): void {
   if ((provider !== "antigravity" && provider !== "agy") || !connectionId) return;
   scheduleProviderLimitsPostUsageRefresh(connectionId);
+}
+
+/** Test-only: reset post-usage refresh debounce state */
+export function __resetPostUsageRefreshStateForTests(): void {
+  pendingPostUsageRefreshes.clear();
+  lastPostUsageRefreshAt.clear();
+}
+
+/** Test-only: inspect pending post-usage refresh connection IDs */
+export function __getPendingPostUsageRefreshesForTests(): Set<string> {
+  return pendingPostUsageRefreshes;
+}
+
+/** Test-only: inspect last post-usage refresh timestamps by connection ID */
+export function __getLastPostUsageRefreshAtForTests(): Map<string, number> {
+  return lastPostUsageRefreshAt;
 }
 
 // Subscribe at module load so usageHistory can emit usage events without importing

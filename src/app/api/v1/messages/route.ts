@@ -13,6 +13,7 @@ import {
 import { createStreamDeadlineSignal } from "@omniroute/open-sse/utils/streamDeadlineSignal";
 import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveThreshold";
 import { resolveStreamFlag } from "@omniroute/open-sse/utils/aiSdkCompat";
+import { resolveModelAliasWithSeedFallbackOnBody } from "@/lib/modelAliasResolver";
 
 let initialized = false;
 
@@ -45,13 +46,12 @@ export async function OPTIONS() {
  * `preParsedBody` is threaded from withInjectionGuard (#4041) so the body is
  * parsed at most once per request.
  */
-async function postHandler(request: any, context: any, preParsedBody: any = null) {
+async function postHandler(request: any, _context: any, preParsedBody: any = null) {
   // Defense-in-depth: the authz proxy (src/proxy.ts) is the primary gate, but
   // its matcher can miss path variants (e.g. uppercase /V1/ aliases), so the
   // handler enforces authentication independently.
   const authRejection = await enforceClientApiRouteAuth(request);
   if (authRejection) return authRejection;
-
   // Reject non-JSON Content-Type with 415 before touching the body — mirrors OpenAI's
   // reference API and matches /v1/chat/completions (#6414).
   const ctRejection = requireJsonContentType(request);
@@ -76,6 +76,13 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
     } catch {
       // body unavailable / non-JSON — handleChat will return its normal validation error
     }
+  }
+
+  // Resolve model alias before forwarding to handleChat (matches /v1/chat/completions)
+  if (body && typeof body === "object") {
+    await resolveModelAliasWithSeedFallbackOnBody(body).catch(() => {
+      /* swallow — fall through with original model */
+    });
   }
   const accept = String(request.headers?.get?.("accept") || "");
   const wantsStreaming = resolveStreamFlag(body?.stream, accept, "claude");

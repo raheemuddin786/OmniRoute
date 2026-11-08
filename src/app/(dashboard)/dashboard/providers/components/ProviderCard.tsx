@@ -567,14 +567,17 @@ const ProviderCard = forwardRef<ProviderCardHandle, ProviderCardProps>(function 
                 {kimiOfficialSupporterChip}
                 {cheaperInferenceSupporterChip}
                 {openRouterPopularityChip}
-                {provider.serviceKinds?.map((k) => (
-                  <span
-                    key={k}
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-bg-subtle border border-border text-text-muted leading-none"
-                  >
-                    {kindLabel(k)}
-                  </span>
-                ))}
+                {!isCompatible &&
+                  !isCcCompatible &&
+                  !isAnthropicCompatible &&
+                  provider.serviceKinds?.map((k) => (
+                    <span
+                      key={k}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-bg-subtle border border-border text-text-muted leading-none"
+                    >
+                      {kindLabel(k)}
+                    </span>
+                  ))}
                 {isCompatible && (
                   <Badge variant="default" size="sm">
                     {provider.apiType === "responses"
