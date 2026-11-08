@@ -53,6 +53,9 @@ export const AUTO_TEMPLATE_VARIANTS: Record<string, AutoVariant | undefined> = {
   // Chaos mode — parallel dispatch to top-N stable models
   "auto/best-chaos": "chaos",
   "auto/chaos": "chaos",
+  // SPB (Smart Proxy Bridge) transparent auto-steering models
+  "auto/spb": undefined,
+  "auto/smart-proxy-bridge": undefined,
 };
 
 /**

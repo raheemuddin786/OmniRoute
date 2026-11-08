@@ -944,8 +944,8 @@ export function getResolvedModelCapabilities(
   const supportsTools =
     synced?.tool_call ??
     (typeof registryModel?.toolCalling === "boolean" ? registryModel.toolCalling : null) ??
-    (typeof spec?.supportsTools === "boolean" ? spec.supportsTools : null) ??
-    (providerDeniesTools ? false : null);
+    (providerDeniesTools ? false : null) ??
+    (typeof spec?.supportsTools === "boolean" ? spec.supportsTools : null);
 
   const reasoningEffortsOverride = usePersistedOverrides
     ? getReasoningEffortsCapabilityOverride(resolved, snapshot)
