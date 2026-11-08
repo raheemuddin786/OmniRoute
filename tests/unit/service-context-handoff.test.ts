@@ -31,7 +31,7 @@ describe("contextHandoff helpers", () => {
 
     it("filters out null/invalid messages", () => {
       const messages = [null, { role: "user", content: "valid" }, undefined, 42];
-      const result = mod.selectMessagesForSummary(messages as any, 10);
+      const result = mod.selectMessagesForSummary(messages as unknown as mod.MessageLike[], 10);
       assert.equal(result.length, 1);
     });
 
@@ -83,6 +83,55 @@ describe("contextHandoff helpers", () => {
       const result = mod.parseHandoffJSON(content);
       assert.notEqual(result, null);
       assert.equal(result!.keyDecisions.length, 2);
+    });
+
+    it("parses conversational text containing embedded markdown json block", () => {
+      const content = `We need to produce JSON with summary, keyDecisions, taskProgress, activeEntities.
+
+We need to summarize conversation: It is about a lead generator agent...
+\`\`\`json
+{
+  "summary": "Deployment of the marriage-portfolio worker succeeded.",
+  "keyDecisions": ["Separate forms"],
+  "taskProgress": "Form fix completed",
+  "activeEntities": ["src/views/biodata_view.ts"]
+}
+\`\`\`
+Extra text after code block`;
+      const result = mod.parseHandoffJSON(content);
+      assert.notEqual(result, null);
+      assert.equal(result!.summary, "Deployment of the marriage-portfolio worker succeeded.");
+      assert.deepEqual(result!.keyDecisions, ["Separate forms"]);
+      assert.equal(result!.taskProgress, "Form fix completed");
+    });
+
+    it("extracts and repairs truncated JSON cut off at max_tokens", () => {
+      const truncated =
+        '{\n  "summary": "The marriage-portfolio project was audited for mobile responsiveness, a form';
+      const result = mod.parseHandoffJSON(truncated);
+      assert.notEqual(result, null);
+      assert.equal(
+        result!.summary,
+        "The marriage-portfolio project was audited for mobile responsiveness, a form"
+      );
+    });
+
+    it("strips <think> tags before extracting JSON", () => {
+      const content = `<think>
+Analyzing the conversation history and drafting key decisions...
+</think>
+\`\`\`json
+{
+  "summary": "Clean summary after think tags",
+  "keyDecisions": ["Refactored auth"],
+  "taskProgress": "Testing done",
+  "activeEntities": ["auth.ts"]
+}
+\`\`\``;
+      const result = mod.parseHandoffJSON(content);
+      assert.notEqual(result, null);
+      assert.equal(result!.summary, "Clean summary after think tags");
+      assert.deepEqual(result!.keyDecisions, ["Refactored auth"]);
     });
   });
 
