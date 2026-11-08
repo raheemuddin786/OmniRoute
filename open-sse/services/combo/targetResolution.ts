@@ -639,18 +639,26 @@ async function applyContinuityFilters(
     };
   }
 
-  // Free-only combo filter: when combo.config.freeOnly is enabled or free_only is set in settings
+  // Free-only combo filter: when combo.config.freeOnly is enabled or free_only is set in settings,
+  // OR when global onlyFreeTierModels is enabled in tier_config.
+  let isGlobalOnlyFreeTier = false;
+  try {
+    const { getTierConfig } = await import("../tierResolver.ts");
+    const currentTierConfig = getTierConfig();
+    isGlobalOnlyFreeTier = currentTierConfig?.onlyFreeTierModels === true;
+  } catch {
+    // ignore
+  }
+
   const freeOnlyRequested =
+    isGlobalOnlyFreeTier ||
     (config as Record<string, unknown>)?.freeOnly === true ||
     (settings as Record<string, unknown> | null | undefined)?.freeOnly === true;
 
   if (freeOnlyRequested) {
     try {
-      const { isFreeModel } = await import("../../../src/shared/utils/freeModels.ts");
-      const freeTargets = orderedTargets.filter((t) => {
-        const rawModel = parseModel(t.modelStr).model || t.modelStr;
-        return isFreeModel(t.provider, { id: rawModel });
-      });
+      const { isFreeModelTarget } = await import("../spbFreeTierAutoConfig.ts");
+      const freeTargets = orderedTargets.filter((t) => isFreeModelTarget(t.modelStr));
       if (freeTargets.length > 0) {
         orderedTargets = freeTargets;
       }

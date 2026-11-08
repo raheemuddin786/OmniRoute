@@ -4,6 +4,7 @@ import {
   resolveVirtualTierModels,
   expandComboModelsFromDb,
 } from "@omniroute/open-sse/services/tierResolver";
+import { isFreeModelTarget } from "@omniroute/open-sse/services/spbFreeTierAutoConfig";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -222,6 +223,7 @@ import { registerQwenTokenPlanQuotaFetcher } from "@omniroute/open-sse/services/
 import { registerCrofUsageFetcher } from "@omniroute/open-sse/services/crofUsageFetcher.ts";
 import { registerDeepseekQuotaFetcher } from "@omniroute/open-sse/services/deepseekQuotaFetcher.ts";
 import type { SpbRoutingDecision } from "@omniroute/open-sse/services/spb/proxyBridge";
+import type { TaskPhase } from "@omniroute/open-sse/services/spb/intentAnalyzer";
 import {
   registerMoonshotQuotaFetcher,
   registerMoonshotFetchersForNodes,
@@ -439,7 +441,7 @@ async function applySpbOutboundZeroLoss(
     const lastUserPrompt = spbDecision.enhancement?.originalPrompt || "";
     const preservedIntentions = spbDecision.enhancement?.preservedIntentions || [];
     const tier = spbDecision.tierAssignment?.tier || "tier_2_resilient";
-    const taskPhase = spbDecision.intent?.taskPhase || "DEFAULT";
+    const taskPhase: TaskPhase = spbDecision.intent?.taskPhase || "CODE_GENERATION";
     const sessionId = runtimeOpts.sessionId || "default_session";
 
     const evaluatedResponse = await processSpbOutboundZeroLoss({
@@ -1016,38 +1018,10 @@ async function handleChatImplementation(
         // Fast-path enforcement for harness safety classifier: enforce a strict 5-second
         // execution deadline to prevent client harness timeouts on safety permission queries
         if (isHarnessSafetyClassifierRequest) {
-          // Attach timeout to the target-specific execution context to guarantee
-          // that the classifier dispatch enforces its 5-second limit as a hard deadline
-          // instead of relying on standard combo fallbacks.
-          if (handleSingleModel && typeof handleSingleModel === "function") {
-            const originalHandle = handleSingleModel;
-            // Use AbortController for proper timeout enforcement
-            handleSingleModel = (b: any, m: string, target?: any) => {
-              const controller = new AbortController();
-              setTimeout(() => controller.abort(), 5000);
-
-              const wrappedExecute = (_request: any, _context?: any) => {
-                return Promise.race([
-                  originalHandle(b, m, {
-                    ...target,
-                    modelAbortSignal: controller.signal,
-                    executionAbortController: controller,
-                  }),
-                  new Promise<never>((_, reject) => {
-                    controller.signal.addEventListener("abort", () => {
-                      reject(
-                        new Error(
-                          "SAFETY_CLASSIFIER_TIMEOUT: 5s limit exceeded for classifier safety check"
-                        )
-                      );
-                    });
-                  }),
-                ]);
-              };
-
-              return wrappedExecute(b, target);
-            };
-          }
+          body = {
+            ...body,
+            _targetTimeoutMs: 5000,
+          };
         }
       }
     } catch (spbErr) {
@@ -1348,10 +1322,10 @@ async function handleChatImplementation(
     // INSPECTION_SYNTHESIS is NOT exempted - ALL Tier 3 phases require guidanceContract
     // to enforce architectural supervision and prevent hallucinated file paths or
     // premature termination of execution.
-    const tierAssignment = spbDecision?.tierAssignment ?? {};
+    const tierAssignment = spbDecision?.tierAssignment;
     const _taskPhase = spbDecision?.intent?.taskPhase; // All Tier 3 phases require guidance, no phase exemptions
     const isUnguidedMutationTier3 =
-      activeTier === "tier_3_local" && !tierAssignment.guidanceContract;
+      activeTier === "tier_3_local" && !tierAssignment?.guidanceContract;
 
     if (isUnguidedMutationTier3) {
       log.warn(
@@ -1443,7 +1417,7 @@ async function handleChatImplementation(
       rawCandidates.push(...resolveVirtualTierModels(activeTier));
     }
 
-    const uniqueTierModels = Array.from(new Set(rawCandidates)).filter((m) => {
+    let uniqueTierModels = Array.from(new Set(rawCandidates)).filter((m) => {
       const modelName = typeof m === "string" ? m : (m as any)?.model || "";
       const lower = modelName.toLowerCase();
       return (
@@ -1460,6 +1434,32 @@ async function handleChatImplementation(
       const dynamicModels = resolveVirtualTierModels(activeTier);
       if (dynamicModels.length > 0) {
         uniqueTierModels.push(...dynamicModels);
+      }
+    }
+
+    // Strict Free Tier Enforcement: If onlyFreeTierModels is active or tierMode is "free",
+    // filter candidate models to eliminate any paid models from entering the dispatch ladder.
+    const isFreeOnlyActive =
+      currentTierConfig?.onlyFreeTierModels === true ||
+      (activeTier === "tier_1_apex" && currentTierConfig?.tierModes?.apex === "free") ||
+      (activeTier === "tier_2_resilient" && currentTierConfig?.tierModes?.resilient === "free") ||
+      (activeTier === "tier_3_local" && currentTierConfig?.tierModes?.local === "free");
+
+    if (isFreeOnlyActive) {
+      const strictlyFree = uniqueTierModels.filter((m) => {
+        const modelName = typeof m === "string" ? m : (m as any)?.model || "";
+        return isFreeModelTarget(modelName);
+      });
+      if (strictlyFree.length > 0) {
+        uniqueTierModels = strictlyFree;
+      } else {
+        // If no configured models matched, attempt to pull purely free tier models directly
+        const dynamicFree = resolveVirtualTierModels(activeTier).filter((m) =>
+          isFreeModelTarget(m)
+        );
+        if (dynamicFree.length > 0) {
+          uniqueTierModels = dynamicFree;
+        }
       }
     }
 
@@ -1912,12 +1912,10 @@ async function handleChatImplementation(
     if (
       !response.ok &&
       !isMarkedLocalProcessPressureResponse(response) &&
-      (
-        (isSpbActive && [429, 500, 502, 503, 504].includes(response.status)) ||
+      ((isSpbActive && [429, 500, 502, 503, 504].includes(response.status)) ||
         ([502, 503].includes(response.status) &&
           typeof (settings as any)?.globalFallbackModel === "string" &&
-          (settings as any).globalFallbackModel.trim())
-      )
+          (settings as any).globalFallbackModel.trim()))
     ) {
       // 1. If SPB is active or recommended alternative tier models exist, attempt tier fallback
       if (isSpbActive && [429, 500, 502, 503, 504].includes(response.status)) {

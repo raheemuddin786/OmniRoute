@@ -7,6 +7,8 @@
 import { TaskPhase, type GuidanceContract } from "./intentAnalyzer.ts";
 import { type TierModelsConfig } from "../tierTypes.ts";
 import { checkCooldownStatus } from "../globalRateLimiter.ts";
+import { isFreeModelTarget } from "../spbFreeTierAutoConfig.ts";
+import { getTierConfig } from "../tierResolver.ts";
 
 export type ModelTier = "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 
@@ -55,10 +57,23 @@ export function selectModelTier(
   isToolResultTurn?: boolean,
   guidanceContract?: GuidanceContract
 ): TierAssignment {
+  const currentConfig = getTierConfig();
+  const onlyFree = currentConfig?.onlyFreeTierModels === true;
+
+  const filterIfFreeOnly = (tierList: string[], tierKey: "apex" | "resilient" | "local") => {
+    const isFreeTier = onlyFree || currentConfig?.tierModes?.[tierKey] === "free";
+    if (!isFreeTier) return tierList;
+    return tierList.filter(isFreeModelTarget);
+  };
+
+  const rawApex = filterIfFreeOnly(customModels?.apex ?? [], "apex");
+  const rawResilient = filterIfFreeOnly(customModels?.resilient ?? [], "resilient");
+  const rawLocal = filterIfFreeOnly(customModels?.local ?? [], "local");
+
   const models = {
-    apex: prioritizeHealthyTierModels(customModels?.apex ?? []),
-    resilient: prioritizeHealthyTierModels(customModels?.resilient ?? []),
-    local: prioritizeHealthyTierModels(customModels?.local ?? []),
+    apex: prioritizeHealthyTierModels(rawApex),
+    resilient: prioritizeHealthyTierModels(rawResilient),
+    local: prioritizeHealthyTierModels(rawLocal),
   };
 
   // Dynamically calibrate token bounds based on task complexity (0.0 to 1.0)

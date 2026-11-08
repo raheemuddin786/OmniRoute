@@ -30,10 +30,12 @@ export const modelTierOverrideSchema = z.object({
 
 export const tierConfigSchema = z.object({
   version: z.string().default("1.0.0"),
-  defaults: z.object({
-    freeThreshold: z.number().min(0).default(0),
-    cheapThreshold: z.number().min(0).default(1.0),
-  }),
+  defaults: z
+    .object({
+      freeThreshold: z.number().min(0).default(0),
+      cheapThreshold: z.number().min(0).default(1.0),
+    })
+    .default({ freeThreshold: 0, cheapThreshold: 1.0 }),
   providerOverrides: z.array(providerTierOverrideSchema).default([]),
   modelOverrides: z.array(modelTierOverrideSchema).default([]),
   freeProviders: z.array(z.string()).default([]),
@@ -59,7 +61,7 @@ export const tierConfigSchema = z.object({
       resilient: z.array(z.string().min(1)).default([]),
       local: z.array(z.string().min(1)).default([]),
     })
-    .optional(),
+    .default({ apex: [], resilient: [], local: [] }),
   cacheThreshold: z.number().min(0).default(5000),
   fallbackTimeout: z.number().min(0).default(5000),
 });

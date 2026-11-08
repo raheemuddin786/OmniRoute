@@ -4,9 +4,21 @@ import {
   classifyFreeModelTier,
   discoverAvailableFreeTierModels,
   resolveTierCandidateModels,
+  isFreeModelTarget,
 } from "../../open-sse/services/spbFreeTierAutoConfig.ts";
 
 describe("SPB Free Tier Auto-Config", () => {
+  it("verifies paid models are rejected and free models are recognized by isFreeModelTarget", () => {
+    // Explicit paid models must always return false
+    assert.equal(isFreeModelTarget("openai/gpt-4o"), false);
+    assert.equal(isFreeModelTarget("anthropic/claude-3-5-sonnet"), false);
+    assert.equal(isFreeModelTarget("cohere/command-r"), false);
+
+    // Free models from catalog / zero pricing must return true
+    assert.equal(isFreeModelTarget("duckduckgo-web/gpt-5.4-mini"), true);
+    assert.equal(isFreeModelTarget("agentrouter/claude-opus-4-8"), true);
+  });
+
   it("classifies free models into apex, resilient, and local based on capabilities and suffixes", () => {
     assert.equal(classifyFreeModelTier("deepseek-r1", "openrouter"), "apex");
     assert.equal(classifyFreeModelTier("qwen-2.5-coder-32b", "openrouter"), "apex");
@@ -44,12 +56,20 @@ describe("SPB Free Tier Auto-Config", () => {
     assert.ok(!freeOnly.includes("custom-provider/user-model-1"));
     assert.ok(freeOnly.length > 0);
 
-    // Global onlyFreeTierModels toggle
-    const globalFree = resolveTierCandidateModels("apex", configured, {
-      tierMode: "both",
-      onlyFreeTierModels: true,
-    });
-    assert.ok(!globalFree.includes("custom-provider/user-model-1"));
+    // Global onlyFreeTierModels toggle filters out paid configured models
+    const globalFree = resolveTierCandidateModels(
+      "apex",
+      ["openai/gpt-4o", "anthropic/claude-3-5-sonnet"],
+      {
+        tierMode: "both",
+        onlyFreeTierModels: true,
+      }
+    );
+    assert.ok(!globalFree.includes("openai/gpt-4o"));
+    assert.ok(!globalFree.includes("anthropic/claude-3-5-sonnet"));
+    for (const m of globalFree) {
+      assert.equal(isFreeModelTarget(m), true);
+    }
 
     // Both mode (union)
     const both = resolveTierCandidateModels("apex", configured, {

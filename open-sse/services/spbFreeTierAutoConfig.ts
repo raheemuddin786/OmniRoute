@@ -11,8 +11,71 @@
 import { FREE_MODEL_BUDGETS, grantsFreeAccess } from "../config/freeModelCatalog";
 import { createRequire } from "node:module";
 import type { TierSelectionMode } from "./tierTypes";
+import { parseModel } from "./model";
 
 const lazyRequire = createRequire(import.meta.url);
+
+const freeCatalogSlugs = new Set<string>();
+for (const b of FREE_MODEL_BUDGETS) {
+  if (grantsFreeAccess(b.freeType)) {
+    freeCatalogSlugs.add(`${b.provider.toLowerCase()}/${b.modelId.toLowerCase()}`);
+  }
+}
+
+/**
+ * Checks whether a given model candidate string is a verified free-tier model.
+ * Inspects:
+ * 1. FREE_MODEL_BUDGETS catalog
+ * 2. isFreeForProvider & isFreeModel from shared utils
+ * 3. classifyTier (free pricing tier)
+ */
+export function isFreeModelTarget(targetStr: string): boolean {
+  if (!targetStr || typeof targetStr !== "string") return false;
+  const trimmed = targetStr.trim();
+  if (!trimmed) return false;
+
+  const parsed = parseModel(trimmed);
+  const provider = (parsed.provider || "").toLowerCase();
+  const providerAlias = (parsed.providerAlias || "").toLowerCase();
+  const model = parsed.model || trimmed;
+  if (!provider && !providerAlias) return false;
+
+  const modelLower = model.toLowerCase();
+  const rawProvider = trimmed.includes("/") ? trimmed.split("/")[0].toLowerCase() : "";
+
+  // Check freeCatalogSlugs against parsed canonical provider, alias, and raw prefix
+  if (provider && freeCatalogSlugs.has(`${provider}/${modelLower}`)) return true;
+  if (providerAlias && freeCatalogSlugs.has(`${providerAlias}/${modelLower}`)) return true;
+  if (rawProvider && freeCatalogSlugs.has(`${rawProvider}/${modelLower}`)) return true;
+
+  try {
+    const { isFreeForProvider, isFreeModel } = lazyRequire("@/shared/utils/freeModels");
+    if (provider && isFreeForProvider(provider, { id: model })) return true;
+    if (providerAlias && isFreeForProvider(providerAlias, { id: model })) return true;
+    if (rawProvider && isFreeForProvider(rawProvider, { id: model })) return true;
+    if (provider && isFreeModel(provider, { id: model })) return true;
+    if (providerAlias && isFreeModel(providerAlias, { id: model })) return true;
+    if (rawProvider && isFreeModel(rawProvider, { id: model })) return true;
+  } catch {
+    // ignore
+  }
+
+  try {
+    const { classifyTier } = lazyRequire("./tierResolver");
+    if (provider) {
+      const classification = classifyTier(provider, model);
+      if (classification && classification.tier === "free") return true;
+    }
+    if (rawProvider && rawProvider !== provider) {
+      const classification = classifyTier(rawProvider, model);
+      if (classification && classification.tier === "free") return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  return false;
+}
 
 export interface FreeTierDiscoveredModel {
   provider: string;
@@ -147,8 +210,28 @@ export function resolveTierCandidateModels(
     .filter((m) => m.tier === tierKey)
     .map((m) => `${m.provider}/${m.model}`);
 
+  // When onlyFreeTierModels is enabled, user-configured models MUST be strictly filtered
+  // so paid models are NEVER included.
+  const safeConfiguredModels = onlyFreeTierModels
+    ? configuredModels.filter(isFreeModelTarget)
+    : configuredModels;
+
   if (onlyFreeTierModels || tierMode === "free") {
-    return freeModels.length > 0 ? freeModels : configuredModels;
+    if (tierMode === "free") {
+      return freeModels.length > 0 ? freeModels : safeConfiguredModels;
+    }
+    // onlyFreeTierModels active with tierMode "user" or "both"
+    if (tierMode === "user") {
+      return safeConfiguredModels.length > 0 ? safeConfiguredModels : freeModels;
+    }
+    // tierMode === "both" with onlyFreeTierModels
+    const combinedFree = [...safeConfiguredModels];
+    for (const fm of freeModels) {
+      if (!combinedFree.includes(fm)) {
+        combinedFree.push(fm);
+      }
+    }
+    return combinedFree;
   }
 
   if (tierMode === "user") {

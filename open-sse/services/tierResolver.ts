@@ -478,7 +478,17 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
   }
 
   // Deduplicate while preserving resolution priority
-  const uniqueConcrete = Array.from(new Set(concreteModels));
+  let uniqueConcrete = Array.from(new Set(concreteModels));
+
+  // If onlyFreeTierModels is active or tier mode is "free", strictly filter out any paid models
+  if (onlyFree || tierMode === "free") {
+    try {
+      const { isFreeModelTarget } = lazyRequire("./spbFreeTierAutoConfig.ts");
+      uniqueConcrete = uniqueConcrete.filter((m: string) => isFreeModelTarget(m));
+    } catch {
+      // ignore
+    }
+  }
 
   if (uniqueConcrete.length > 0) {
     return uniqueConcrete;
@@ -509,8 +519,18 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
       }
     }
 
-    if (discovered.length > 0) {
-      return discovered.slice(0, 10);
+    let finalDiscovered = discovered;
+    if (onlyFree || tierMode === "free") {
+      try {
+        const { isFreeModelTarget } = lazyRequire("./spbFreeTierAutoConfig.ts");
+        finalDiscovered = finalDiscovered.filter((m: string) => isFreeModelTarget(m));
+      } catch {
+        // ignore
+      }
+    }
+
+    if (finalDiscovered.length > 0) {
+      return finalDiscovered.slice(0, 10);
     }
   } catch {
     // ignore dynamic discovery errors
