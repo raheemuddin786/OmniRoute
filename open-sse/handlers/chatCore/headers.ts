@@ -33,6 +33,29 @@ export function isNoMemoryRequested(
 }
 
 /**
+ * Per-request opt-out of reactive and last-resort context compaction via the
+ * `x-omniroute-no-compaction` (or `x-no-compression` / `x-context-fail-loud`) header.
+ * Clients that manage their own context (agentic coding harnesses such as Claude Code,
+ * Antigravity, Cursor) send this to avoid the proxy silently rewriting or pruning
+ * conversation history. When requested and context limit is exceeded, the request
+ * fails loud with context_length_exceeded rather than silently mutating transcript.
+ * Truthy values: `true` / `1` / `yes` (case-insensitive).
+ */
+export function isNoCompactionRequested(
+  headers: Record<string, unknown> | Headers | null | undefined
+): boolean {
+  const value = (
+    getHeaderValueCaseInsensitive(headers, "x-omniroute-no-compaction") ||
+    getHeaderValueCaseInsensitive(headers, "x-no-compression") ||
+    getHeaderValueCaseInsensitive(headers, "x-context-fail-loud") ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  return value === "true" || value === "1" || value === "yes";
+}
+
+/**
  * Per-request compression override via the `x-omniroute-compression` header. Mirrors the
  * `x-omniroute-no-memory` convention (#4290). Returns the raw trimmed value, or null when
  * absent/blank. The resolver (planFromHeader) owns interpretation and casing rules; this

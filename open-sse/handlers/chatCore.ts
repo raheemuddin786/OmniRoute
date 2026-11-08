@@ -46,6 +46,7 @@ import { isReasoningContinuationIncompatible } from "./chatCore/reasoningInputGa
 import {
   getHeaderValueCaseInsensitive,
   isNoMemoryRequested,
+  isNoCompactionRequested,
   resolveCompressionHeader,
 } from "./chatCore/headers.ts";
 
@@ -128,6 +129,12 @@ import { checkToolCallingRequiredButUnsupported } from "./chatCore/toolCallingRe
 import { buildExecutorClientHeaders } from "./chatCore/executorClientHeaders.ts";
 import { executeProviderRequest as executeProviderRequestLeaf } from "./chatCore/executeProviderRequest.ts";
 import { runNonStreamingResponse } from "./chatCore/nonStreamingResponse.ts";
+import {
+  applyGovernanceIngress,
+  hashPromptMessages,
+  nextGovernanceTurnIndex,
+  resolveGovernanceRequestIdentity,
+} from "./chatCore/governanceIngress.ts";
 import {
   supportsMaxTokens,
   getResolvedModelCapabilities,
@@ -463,6 +470,15 @@ async function handleChatCoreInner({
   const { assertManagedLeaseFence, getManagedLeaseFenceErrorCode, managedLeaseFenceErrorResult } =
     createManagedLeaseFence(managedLease);
   let tokensCompressed: number | null = null;
+  let compactionMeta: {
+    compressed: boolean;
+    type?: "proactive" | "last-resort" | "both";
+    tokensOriginal?: number;
+    tokensFinal?: number;
+    layers?: string[];
+    toolsTruncated?: number;
+  } | null = null;
+  let toolsTruncated = 0;
   // ── Per-endpoint custom system prompt (port of upstream #2063) ──
   // Extracted to chatCore/customSystemPrompt.ts (chatCore slice 2); reads cachedSettings when the
   // combo/chat layer passed it in, so the hot path does no extra DB read.
@@ -1132,6 +1148,43 @@ async function handleChatCoreInner({
   }
 
   body = sanitizeChatRequestBody(body, sourceFormat, targetFormat);
+  // ── Proxy governance layer (request side) ──
+  // Two artifacts are injected into the CLIENT-FORMAT body here, before the
+  // request is translated:
+  //  1. a parked loop intervention (a synthetic system directive telling the
+  //     model to halt a repeated tool call) — consumed once, on the turn
+  //     after the loop was detected on the egress;
+  //  2. the synthetic error results of the tool calls the proxy rejected on
+  //     the egress — so the model reads the rejection, not the client's own
+  //     output for a call the proxy refused.
+  //
+  // The session key is resolved from the body BEFORE the injection, so the
+  // key the NEXT turn resolves is unchanged (otherwise the loop breaker's
+  // window would reset every turn). Every step fails OPEN — a governance
+  // failure returns the body unmodified.
+  const governanceIdentity = resolveGovernanceRequestIdentity(
+    {
+      body,
+      headers: clientRawRequest?.headers,
+      provider,
+      connectionId: getCurrentConnectionId(),
+      fallback: skillRequestId,
+    },
+    apiKeyInfo
+  );
+  const governanceTurnIndex = nextGovernanceTurnIndex(governanceIdentity.sessionId);
+  const governancePromptHash = hashPromptMessages(body);
+  body = applyGovernanceIngress({
+    body,
+    sessionId: governanceIdentity.sessionId,
+    sourceFormat,
+    principalId: governanceIdentity.principalId,
+    requestId: traceId,
+    model,
+    provider,
+    turnIndex: governanceTurnIndex,
+    promptHash: governancePromptHash,
+  });
   // Per-request opt-out: clients that manage their own context send
   // `x-omniroute-no-memory: true` to skip memory+skills injection (a null owner
   // disables both branches in injectMemoryAndSkills). See PRD-2026-06-19-no-memory-header.
@@ -1233,6 +1286,13 @@ async function handleChatCoreInner({
     let promptCompressionEnabled =
       compressionSettingsResult.enabled && !compressionExcluded && apiKeyCompressionEnabled;
     reactiveContextCompactionEnabled = compressionSettingsResult.enabled && !compressionExcluded;
+    if (isNoCompactionRequested(clientRawRequest?.headers ?? null)) {
+      log?.info?.(
+        "CONTEXT",
+        "Reactive and last-resort context compaction disabled by request header (fail-loud policy active)"
+      );
+      reactiveContextCompactionEnabled = false;
+    }
     contextEditingEnabled = compressionSettingsResult.contextEditingEnabled;
     if (!apiKeyCompressionEnabled) {
       log?.debug?.("COMPRESSION", "Prompt compression disabled for this API key");
@@ -1849,6 +1909,17 @@ async function handleChatCoreInner({
           : compressionResult.body;
         const stats = compressionResult.stats;
         tokensCompressed = Math.max(0, (stats?.original ?? 0) - (stats?.final ?? 0));
+        const layersList =
+          stats && "layers" in stats && Array.isArray(stats.layers)
+            ? stats.layers.map((l: { name: string }) => l.name)
+            : undefined;
+        compactionMeta = {
+          compressed: true,
+          type: "proactive",
+          tokensOriginal: stats?.original,
+          tokensFinal: stats?.final,
+          layers: layersList,
+        };
         const layersInfo =
           stats && "layers" in stats && Array.isArray(stats.layers)
             ? ` (layers: ${stats.layers.map((l: { name: string }) => l.name).join(", ")})`
@@ -1946,6 +2017,36 @@ async function handleChatCoreInner({
           `tools=${finalInputBreakdown.tools}, system=${finalInputBreakdown.system}, ` +
           `instructions=${finalInputBreakdown.instructions}; limit ${finalContextLimit})`
       );
+
+      const lastResortLayers =
+        lastResortResult.stats &&
+        "layers" in lastResortResult.stats &&
+        Array.isArray(lastResortResult.stats.layers)
+          ? lastResortResult.stats.layers.map((l: { name: string }) => l.name)
+          : undefined;
+      compactionMeta = {
+        compressed: true,
+        type: compactionMeta?.compressed ? "both" : "last-resort",
+        tokensOriginal: compactionMeta?.tokensOriginal ?? lastResortResult.stats?.original,
+        tokensFinal: lastResortResult.stats?.final,
+        layers: Array.from(
+          new Set([...(compactionMeta?.layers ?? []), ...(lastResortLayers ?? [])])
+        ),
+      };
+
+      logAuditEvent({
+        action: "context.last_resort_compression",
+        actor: apiKeyInfo?.name || "system",
+        target: connectionId || provider || "chat",
+        details: {
+          provider,
+          model: effectiveModel,
+          original_tokens: lastResortResult.stats?.original,
+          final_tokens: lastResortResult.stats?.final,
+          layers:
+            "layers" in lastResortResult.stats ? lastResortResult.stats.layers : undefined,
+        },
+      });
     }
   }
 
@@ -2476,6 +2577,9 @@ async function handleChatCoreInner({
     traceId,
     translatedBody,
     trustedEffortContext,
+    onToolsTruncated: (count: number) => {
+      toolsTruncated += count;
+    },
     upstreamStream,
     userAgent,
   };
@@ -2679,6 +2783,25 @@ async function handleChatCoreInner({
     }
   };
 
+  const QUOTA_EXHAUSTED_PATTERNS: ReadonlyArray<RegExp> = [
+    /daily.*limit/i,
+    /daily.*quota/i,
+    /per.?day.*limit/i,
+    /monthly.*limit/i,
+    /monthly.*quota/i,
+    /per.?month.*limit/i,
+    /limited\s+to\s+[\d,]+.*(?:calls?|requests?).*per\s+month/i,
+    /quota.*exceed/i,
+    /exceed.*quota/i,
+    /insufficient.*quota/i,
+    /billing.*cap/i,
+    /credit.*exhaust/i,
+    /exhausted.*credits/i,
+    /out of credits/i,
+    /hard.?limit/i,
+    /plan.*limit/i,
+  ];
+
   const applyProviderFailureClassification = async ({
     statusCode,
     message,
@@ -2695,8 +2818,30 @@ async function handleChatCoreInner({
     targetModel: string;
   }) => {
     let errorType = classifyProviderError(statusCode, message, provider);
+
+    // Classify 429 errors based on upstream error body patterns (rate_limit vs quota_exhausted)
+    // This mirrors the classification in the Claude Web executor and ensures consistent
+    // model lockout behavior across all provider types
+    if (statusCode === 429 && upstreamErrorBody !== undefined && upstreamErrorBody !== null) {
+      const errorText = typeof upstreamErrorBody === "string"
+        ? upstreamErrorBody.toLowerCase()
+        : JSON.stringify(upstreamErrorBody).toLowerCase();
+      const isQuotaExhausted = QUOTA_EXHAUSTED_PATTERNS.some((p) => p.test(errorText));
+      if (isQuotaExhausted) {
+        errorType = PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED;
+      } else if (!errorType || errorType === PROVIDER_ERROR_TYPES.RATE_LIMITED) {
+        // Keep existing RATE_LIMITED if not quota exhaustion, or set if unknown
+        errorType = PROVIDER_ERROR_TYPES.RATE_LIMITED;
+      }
+      log?.warn?.(
+        "CLAUDE_WEB_429_CLASSIFICATION",
+        `429 classified as ${errorType}; body patterns matched: ${isQuotaExhausted}`
+      );
+    }
+
     if (statusCode === 429 && isModelScope()) {
       const decision = classifyModelScope429(message, normalizeHeaders(headers));
+      // Model scope decision takes precedence for model-scoped 429s
       errorType =
         decision.kind === "quota_exhausted"
           ? PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED
@@ -3051,6 +3196,8 @@ async function handleChatCoreInner({
       body,
       clientRawRequest,
       comboStrategy,
+      compactionMeta,
+      toolsTruncated,
       connectionId,
       contextEditingEnabled,
       credentials,
@@ -3133,6 +3280,8 @@ async function handleChatCoreInner({
       clientRequestedResponsesStream,
       clientResponseFormat,
       comboStrategy,
+      compactionMeta,
+      toolsTruncated,
       compressionResponseMeta,
       connectionId,
       contextEditingEnabled,
@@ -3265,6 +3414,8 @@ async function handleChatCoreInner({
     clientRawRequest,
     clientResponseFormat,
     comboStrategy,
+    compactionMeta,
+    toolsTruncated,
     compressionResponseMeta,
     connectionId,
     contextEditingEnabled,
@@ -3283,6 +3434,9 @@ async function handleChatCoreInner({
     fallbackAttempts,
     finalBody,
     getCurrentConnectionId,
+    governanceIdentity,
+    governanceTurnIndex,
+    governanceCatalogBody: body,
     isCombo,
     isDroidCLI,
     isResponsesEndpoint,

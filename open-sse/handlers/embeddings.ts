@@ -290,6 +290,13 @@ function buildUpstreamBody(runtime: EmbeddingRuntime): Record<string, unknown> {
       upstreamBody.outputDimensionality = outputDimensionality;
     }
   }
+  if (
+    (runtime.provider === "jina-ai" ||
+      runtime.providerConfig?.structuredInputProtocol === "jina-v1") &&
+    upstreamBody.truncate === undefined
+  ) {
+    upstreamBody.truncate = true;
+  }
   const defaultParams = getEmbeddingModelDefaultParams(runtime.providerConfig, runtime.model);
   for (const [key, value] of Object.entries(defaultParams ?? {})) {
     if (upstreamBody[key] === undefined) upstreamBody[key] = value;
@@ -530,19 +537,90 @@ async function fetchClovaEmbeddingBatch(
   });
 }
 
+// Simple circuit breaker for local embedding providers to fail fast and prevent hangs
+const embeddingCircuitBreakers = new Map<
+  string,
+  { failures: number; lastFailure: number; open: boolean }
+>();
+
+function isLocalEmbeddingProviderByUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function checkEmbeddingCircuitBreakerByUrl(url: string): { allowed: boolean; reason?: string } {
+  if (!isLocalEmbeddingProviderByUrl(url)) return { allowed: true };
+  const cb = embeddingCircuitBreakers.get(url);
+  if (!cb) return { allowed: true };
+  if (!cb.open) return { allowed: true };
+  // Half-open: allow one request through after 30 seconds
+  if (Date.now() - cb.lastFailure > 30_000) {
+    cb.open = false;
+    cb.failures = 0;
+    return { allowed: true };
+  }
+  return { allowed: false, reason: "Circuit breaker open for local embedding provider" };
+}
+
+function recordEmbeddingFailureByUrl(url: string): void {
+  if (!isLocalEmbeddingProviderByUrl(url)) return;
+  const cb = embeddingCircuitBreakers.get(url) || { failures: 0, lastFailure: 0, open: false };
+  cb.failures++;
+  cb.lastFailure = Date.now();
+  if (cb.failures >= 3) {
+    cb.open = true;
+    console.warn(
+      `[Embedding Circuit Breaker] Opened for ${url} after ${cb.failures} consecutive failures`
+    );
+  }
+  embeddingCircuitBreakers.set(url, cb);
+}
+
+function recordEmbeddingSuccessByUrl(url: string): void {
+  if (!isLocalEmbeddingProviderByUrl(url)) return;
+  const cb = embeddingCircuitBreakers.get(url);
+  if (cb) {
+    cb.failures = 0;
+    cb.open = false;
+    embeddingCircuitBreakers.set(url, cb);
+  }
+}
+
 async function dispatchEmbeddingRequest(
   prepared: PreparedEmbeddingRequest,
   singleTexts: string[] | null,
   reqLogger: RequestLogger
 ): Promise<Response> {
   if (singleTexts) return fetchClovaEmbeddingBatch(prepared, singleTexts, reqLogger);
+
+  // Check circuit breaker for local providers
+  const cbCheck = checkEmbeddingCircuitBreakerByUrl(prepared.upstreamUrl);
+  if (!cbCheck.allowed) {
+    const error = new Error(cbCheck.reason || "Circuit breaker open") as Error & {
+      circuitBreaker?: boolean;
+    };
+    error.circuitBreaker = true;
+    throw error;
+  }
+
   reqLogger.logTargetRequest(prepared.upstreamUrl, prepared.headers, prepared.upstreamBody);
-  return fetch(prepared.upstreamUrl, {
-    method: "POST",
-    headers: prepared.headers,
-    body: JSON.stringify(prepared.upstreamBody),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+  try {
+    const response = await fetch(prepared.upstreamUrl, {
+      method: "POST",
+      headers: prepared.headers,
+      body: JSON.stringify(prepared.upstreamBody),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    recordEmbeddingSuccessByUrl(prepared.upstreamUrl);
+    return response;
+  } catch (error) {
+    recordEmbeddingFailureByUrl(prepared.upstreamUrl);
+    throw error;
+  }
 }
 
 function pipelinePayloads(

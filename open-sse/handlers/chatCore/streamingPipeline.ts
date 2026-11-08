@@ -19,6 +19,7 @@ import {
   createProgressTransform as defaultProgress,
   wantsProgress as defaultWantsProgress,
 } from "../../utils/progressTracker.ts";
+import { createGovernanceTransform as defaultGovernance } from "../../governance/governanceTransform.ts";
 import { createPiiSseTransform as defaultPiiSse } from "@/lib/streamingPiiTransform";
 import {
   createCredentialSseTransform as defaultCredentialSse,
@@ -51,6 +52,8 @@ export interface StreamingPipelineDeps {
   createSseHeartbeatTransform: typeof defaultHeartbeat;
   shapeForClientFormat: typeof defaultShape;
   createModelEchoTransform: typeof defaultModelEcho;
+  /** Proxy governance layer — per-chunk client-facing tap. */
+  createGovernanceTransform: typeof defaultGovernance;
 }
 
 const DEFAULT_DEPS: StreamingPipelineDeps = {
@@ -63,6 +66,7 @@ const DEFAULT_DEPS: StreamingPipelineDeps = {
   createSseHeartbeatTransform: defaultHeartbeat,
   shapeForClientFormat: defaultShape,
   createModelEchoTransform: defaultModelEcho,
+  createGovernanceTransform: defaultGovernance,
 };
 
 export function assembleStreamingPipeline(
@@ -83,6 +87,11 @@ export function assembleStreamingPipeline(
      * request's pre-handoff readiness gate, so slow-first-content reasoning
      * models keep the same generous budget in both phases. */
     contentStallTimeoutMs?: number;
+    /**
+     * Proxy governance options. When omitted, no governance transform is
+     * enqueued and the chain is byte-identical to the pre-governance chain.
+     */
+    governance?: Parameters<typeof defaultGovernance>[0];
   },
   deps: StreamingPipelineDeps = DEFAULT_DEPS
 ) {
@@ -116,6 +125,18 @@ export function assembleStreamingPipeline(
     })
   ) {
     piiStream = piiStream.pipeThrough(deps.createCredentialSseTransform());
+  }
+
+  // ── Proxy governance layer ──
+  // Per-chunk tap on the client-facing stream: token-sentinel accounting,
+  // tool-call schema validation and loop detection. The transform is a
+  // pass-through unless governance actually intervenes, so a request with no
+  // governance signal is byte-identical to the previous behaviour.
+  //
+  // It is injected (not hard-coded) so it stays test-injectable through
+  // `StreamingPipelineDeps`, like every other transform in this chain.
+  if (args.governance) {
+    piiStream = piiStream.pipeThrough(deps.createGovernanceTransform(args.governance));
   }
 
   if (progressEnabled) {

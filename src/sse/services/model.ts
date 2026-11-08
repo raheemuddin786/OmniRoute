@@ -551,7 +551,7 @@ export async function getModelInfo(modelStr) {
 
   const attachRuntimeModelMeta = async (info: any) => {
     assertResolvedModelAvailable(info);
-    if (!info?.provider || !info?.model) return info;
+    if (!info?.provider || !info?.model || info?.provider === "auto") return info;
 
     const providerId = String(info.provider);
     const requestedModelId = String(info.model);

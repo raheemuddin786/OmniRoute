@@ -46,6 +46,11 @@ export function shouldTripProviderBreakerForResult(
     result.errorCode !== "proxy_unreachable" &&
     result.errorCode !== "RATE_LIMIT_QUEUE_TIMEOUT" &&
     result.errorCode !== "RATE_LIMIT_QUEUE_WEDGED" &&
+    result.errorCode !== "antigravity_pool_busy" &&
+    result.errorCode !== "chat_admission_busy" &&
+    result.errorCode !== "all_connections_busy" &&
+    result.errorCode !== "admission_limit_exceeded" &&
+    result.errorCode !== "concurrency_limit_exceeded" &&
     // #14815: a request that failed translation never left OmniRoute.
     result.errorCode !== TRANSLATION_FAILURE_CODE &&
     !isModelCapacityOverloadError(result.error) &&

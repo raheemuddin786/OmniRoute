@@ -98,7 +98,11 @@ export function detectCachingContext(
     hasCacheControl: hasCacheControl(body),
     provider,
     targetFormat,
-    isCachingProvider: providerSupportsCaching(provider, targetFormat, context.connectionCacheOverride),
+    isCachingProvider: providerSupportsCaching(
+      provider,
+      targetFormat,
+      context.connectionCacheOverride
+    ),
   };
 }
 
@@ -117,7 +121,16 @@ export function getCacheAwareStrategy(strategy: string, ctx: CachingContext): Ca
   // for those providers, so a prefix-compressing mode rewrote the prefix → guaranteed
   // cache miss. Treat `isCachingProvider` alone as sufficient; the explicit
   // `cache_control` path is now a subset of this.
-  if (ctx.isCachingProvider) {
+  // Exclude Claude Web from automatic caching because it multiplexes models on one cookie,
+  // and its variable session state (conversation / organization ID) can change mid-turn.
+  const excludeWebProviders = (provider?: string | null) => {
+    const id = String(provider || "")
+      .trim()
+      .toLowerCase();
+    return id === "claude-web" || id === "cw";
+  };
+
+  if (ctx.isCachingProvider && !excludeWebProviders(ctx.provider)) {
     return {
       strategy: ["aggressive", "ultra"].includes(strategy) ? "standard" : strategy,
       skipSystemPrompt: true,

@@ -10,6 +10,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { plaintextCollaborationFields } from "../translator/response/openai-responses/collaborationPlaintextMarker.ts";
 import { finalizeResponsesTerminalStatus } from "../translator/helpers/responsesTerminalStatus.ts";
+import { stripEmptyOptionalToolArgs } from "../translator/response/openai-responses/pureHelpers.ts";
 
 // #10223: threshold for detecting corrupted request_id fields. Normal
 // request IDs are <100 chars. DeepSeek's SSE encoder bug produces 200+
@@ -218,6 +219,7 @@ export function createResponsesApiTransformStream(
   } = {}
 ) {
   const lifecycle = new ToolCallLifecycle(options);
+  const toolSchemas = options.toolSchemas ?? null;
   const state = {
     seq: 0,
     responseId: `resp_${Date.now()}`,
@@ -501,27 +503,20 @@ export function createResponsesApiTransformStream(
       emitToolCallAdded(controller, idx, true);
       const selection = lifecycle.get(idx)!;
       const isCustomTool = selection.custom;
+      const toolName = selection?.name || state.funcNames[idx] || "";
 
-      // Fix #1674 & #1852: Final cleanup of empty string and empty array placeholders.
-      // Custom-tool input is intentionally allowed to be an empty string.
+      // Fix #1674 & #1852 / SubagentHandback message preservation: schema-aware cleanup
+      // via stripEmptyOptionalToolArgs. Required parameters (like `message` in SubagentHandback)
+      // are preserved according to the tool schema's `required` list.
       if (!isCustomTool) {
-        try {
-          const parsed = JSON.parse(args);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            let modified = false;
-            for (const [k, v] of Object.entries(parsed)) {
-              if (v === "" || (Array.isArray(v) && v.length === 0)) {
-                delete parsed[k];
-                modified = true;
-              }
-            }
-            if (modified) {
-              args = JSON.stringify(parsed);
-              state.funcArgsBuf[idx] = args;
-            }
-          }
-        } catch (e) {
-          // Ignore malformed JSON
+        const toolSchema = toolSchemas?.get(toolName);
+        const cleanedArgs = stripEmptyOptionalToolArgs(args, toolName, toolSchema);
+        if (typeof cleanedArgs === "string") {
+          args = cleanedArgs;
+          state.funcArgsBuf[idx] = args;
+        } else if (cleanedArgs && typeof cleanedArgs === "object") {
+          args = JSON.stringify(cleanedArgs);
+          state.funcArgsBuf[idx] = args;
         }
       }
 
@@ -918,19 +913,6 @@ export function createResponsesApiTransformStream(
               if (tc.function?.arguments) {
                 const refCallId = state.funcCallIds[tcIdx] || newCallId;
                 let deltaStr = tc.function.arguments;
-
-                // Fix #1674 & #1852: Strip empty strings and empty arrays from streaming deltas
-                if (
-                  deltaStr.includes('""') ||
-                  deltaStr.includes("[]") ||
-                  deltaStr.includes("[ ]")
-                ) {
-                  deltaStr = deltaStr
-                    .replace(/,"[a-zA-Z0-9_]+":""/g, "")
-                    .replace(/"[a-zA-Z0-9_]+":"",/g, "")
-                    .replace(/,"[a-zA-Z0-9_]+":\s*\[\s*\]/g, "")
-                    .replace(/"[a-zA-Z0-9_]+":\s*\[\s*\],?/g, "");
-                }
 
                 const existingArgs = state.funcArgsBuf[tcIdx] || "";
                 const nextArgs = appendToolCallArgumentDelta(existingArgs, deltaStr);

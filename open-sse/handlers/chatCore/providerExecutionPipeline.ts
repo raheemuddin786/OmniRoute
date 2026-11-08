@@ -1,3 +1,26 @@
+import {
+  inspectErrorResponse,
+  registerCooldownBlock,
+  recordGlobalRateLimitSuccess,
+  checkGlobalRateLimit,
+} from "../../services/globalRateLimiter.ts";
+import {
+  createSessionConcurrencyGuard,
+  type ConcurrentRequestToken,
+} from "./sessionConcurrencyGuard.ts";
+import {
+  lockExactModel,
+  recordModelLockoutFailure,
+  selectLockoutCooldownMs,
+  getProviderProfile,
+} from "../../services/accountFallback.ts";
+import { isModelScopedAccessDenial } from "../../services/accountFallback/modelScopedAccessDenial.ts";
+import {
+  isModelUnsupported401,
+  isModelNotFound404,
+} from "../../services/accountFallback/perModelFailureScope.ts";
+import { isModelPermanentlyUnavailable } from "../../services/accountFallback.ts";
+import { isRequestScoped400 } from "../../services/accountFallback/requestScoped400.ts";
 import type { ChatCoreErrorResult, ProviderLegUsage } from "@/lib/skills/toolLoopTypes.ts";
 import type { getProviderCredentials } from "@/sse/services/auth.ts";
 import type { updateFromHeaders, updateFromResponseBody } from "../../services/rateLimitManager.ts";
@@ -393,12 +416,39 @@ export async function runProviderExecutionPipeline(
 
     const status = attempt.response.status;
     if (status >= 200 && status < 300) {
+      recordGlobalRateLimitSuccess(
+        target.provider,
+        currentConnectionId(connection),
+        wire.currentModel
+      );
       return toOutcome(
         attempt,
         wire.currentModel,
         currentConnectionId(connection),
         target.provider
       );
+    }
+
+    // Inspect error response and register global cooldown block
+    try {
+      const cloneText = await attempt.response.clone().text();
+      const inspection = inspectErrorResponse({
+        status,
+        headers: attempt.response.headers,
+        errorBody: cloneText,
+        provider: target.provider,
+        model: wire.currentModel,
+      });
+      if (inspection.isBlocked) {
+        registerCooldownBlock({
+          provider: target.provider,
+          connectionId: currentConnectionId(connection),
+          model: wire.currentModel,
+          inspection,
+        });
+      }
+    } catch {
+      // non-fatal best effort
     }
 
     // Teach the runtime limiter BEFORE any recovery branch rotates or retries:
@@ -645,4 +695,209 @@ export async function runProviderExecutionPipeline(
     );
   }
   return leaseMismatch(wire.currentModel, currentConnectionId(connection));
+}
+
+/** Pipeline execution context */
+export interface PipelineContext {
+  provider: string;
+  connectionId: string;
+  model: string;
+  sessionId?: string;
+  reason?: string;
+  rawError?: unknown;
+  headers?: Headers | Record<string, string> | null;
+}
+
+/** Pipeline execution result */
+export interface PipelineResult {
+  success: boolean;
+  error?: Error;
+  cooldownMs?: number;
+  blockUntil?: number;
+  skipProviderBreaker?: boolean;
+  fallback?: boolean;
+  alternativeModel?: string;
+}
+
+/** Execute a request through the enhanced provider pipeline with global rate limiting and concurrency control */
+export async function executeWithGlobalPipeline(params: {
+  provider: string;
+  connectionId: string;
+  model: string;
+  sessionId: string;
+  executeRequest: () => Promise<PipelineResult>;
+}): Promise<PipelineResult> {
+  const { provider, connectionId, model, sessionId, executeRequest } = params;
+  const concurrencyGuard = createSessionConcurrencyGuard();
+  let requestToken: ConcurrentRequestToken | null = null;
+
+  try {
+    requestToken = await concurrencyGuard.acquire(model, provider, connectionId, sessionId);
+
+    const rateLimitCheck = checkGlobalRateLimit({
+      provider,
+      connectionId,
+      model,
+      entityId: connectionId,
+    });
+
+    if (!rateLimitCheck.allowed) {
+      throw new Error(
+        `Request blocked: ${rateLimitCheck.reason}. Retry after ${rateLimitCheck.retryAfterMs}ms`
+      );
+    }
+
+    const result = await executeRequest();
+
+    if (result.success) {
+      recordGlobalRateLimitSuccess(provider, connectionId, model);
+      if (requestToken) {
+        await requestToken.release(true);
+      }
+      return result;
+    }
+
+    await processErrorForPipeline(result, { provider, connectionId, model, sessionId });
+    if (requestToken) {
+      await requestToken.release(false);
+    }
+    return result;
+  } catch (error) {
+    if (requestToken) {
+      await requestToken.release(false);
+    }
+    const errorResult: PipelineResult = {
+      success: false,
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+    await processErrorForPipeline(errorResult, { provider, connectionId, model, sessionId });
+    return errorResult;
+  }
+}
+
+export async function processErrorForPipeline(
+  result: PipelineResult,
+  context: PipelineContext
+): Promise<void> {
+  const { provider, connectionId, model } = context;
+  const errorText = result.error?.message || "";
+  let status = 500;
+  if (result.error && "status" in result.error && typeof result.error.status === "number") {
+    status = result.error.status;
+  } else if (
+    result.error &&
+    "statusCode" in result.error &&
+    typeof result.error.statusCode === "number"
+  ) {
+    status = result.error.statusCode;
+  } else {
+    const match = errorText.match(/\b([45]\d{2})\b/);
+    if (match) {
+      status = parseInt(match[1], 10);
+    }
+  }
+
+  if (
+    status === 429 ||
+    status === 408 ||
+    status === 409 ||
+    status === 529 ||
+    (status >= 500 && status <= 504)
+  ) {
+    const inspection = inspectErrorResponse({
+      status,
+      errorBody: result.error,
+      headers: context.headers,
+      provider,
+      connectionId,
+      model,
+    });
+
+    if (inspection.isBlocked) {
+      registerCooldownBlock({
+        provider,
+        connectionId,
+        model,
+        inspection,
+      });
+
+      const profile = getProviderProfile(provider);
+      const lockoutCooldown = selectLockoutCooldownMs(
+        inspection.cooldownMs || COOLDOWN_MS.rateLimit,
+        {
+          baseCooldownMs: COOLDOWN_MS.rateLimit,
+          useExponentialBackoff: profile?.useExponentialBackoff || false,
+        }
+      );
+
+      await recordModelLockoutFailure(
+        provider,
+        connectionId,
+        model,
+        inspection.reason || "rate_limit_error",
+        status,
+        lockoutCooldown,
+        profile,
+        {
+          exactCooldownMs: inspection.retryAfterSeconds
+            ? inspection.retryAfterSeconds * 1000
+            : null,
+          maxCooldownMs: profile?.maxCooldownMs,
+          scope: inspection.isModelSpecific ? "exact" : "quota_family",
+          exactCooldownIsUpstreamReset: !!inspection.retryAfterSeconds,
+        }
+      );
+    }
+  }
+
+  if (status === 401 && isModelScopedAccessDenial(provider, status, errorText)) {
+    lockExactModel(provider, connectionId, model, "model_scope_denied", COOLDOWN_MS.authError);
+  }
+
+  if (status === 401 && isModelUnsupported401(status, errorText)) {
+    lockExactModel(provider, connectionId, model, "model_unsupported", COOLDOWN_MS.modelCapacity);
+  }
+
+  if (status === 404 && isModelNotFound404(status, errorText)) {
+    // Check if this is a permanently unavailable model (deprecated/retired) — if so,
+    // apply a 24h cooldown instead of the standard modelCapacity cooldown to prevent
+    // repeated futile retries (see accountFallback.ts isModelPermanentlyUnavailable).
+    const cooldownMs = isModelPermanentlyUnavailable(errorText || "")
+      ? 24 * 60 * 60 * 1000
+      : COOLDOWN_MS.modelCapacity;
+    lockExactModel(provider, connectionId, model, "model_not_found", cooldownMs);
+  }
+
+  if (status === 400 && isRequestScoped400(status, errorText)) {
+    recordModelLockoutFailure(
+      provider,
+      connectionId,
+      model,
+      "request_validation_failure",
+      status,
+      COOLDOWN_MS.requestValidationError,
+      null,
+      {
+        exactCooldownMs: null,
+        maxCooldownMs: COOLDOWN_MS.requestValidationError,
+        scope: "exact",
+      }
+    );
+  }
+}
+
+export async function executeProviderRequestWithPipeline(params: {
+  provider: string;
+  connectionId: string;
+  model: string;
+  sessionId: string;
+  requestFn: () => Promise<PipelineResult>;
+}): Promise<PipelineResult> {
+  return executeWithGlobalPipeline({
+    provider: params.provider,
+    connectionId: params.connectionId,
+    model: params.model,
+    sessionId: params.sessionId,
+    executeRequest: params.requestFn,
+  });
 }

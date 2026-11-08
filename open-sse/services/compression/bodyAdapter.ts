@@ -412,7 +412,8 @@ export function adaptBodyForCompression(
       }
 
       // Compaction restore (#8560): rebuild input so Layer-3 history drops actually shrink
-      // Responses payloads. Also drop orphan regular/custom call items whose outputs vanished.
+      // Responses payloads. Also drop orphan regular/custom call items whose outputs vanished,
+      // and orphan output items whose call items were pruned.
       const nextInput: unknown[] = [];
       const survivingOutputKeys = new Set<string>();
       inputItems.forEach((item, index) => {
@@ -438,32 +439,61 @@ export function adaptBodyForCompression(
         nextInput.push(item);
       });
 
+      const getExpectedOutputType = (callType: string): string | null => {
+        if (callType === "function_call") return "function_call_output";
+        if (callType === "custom_tool_call") return "custom_tool_call_output";
+        if (callType === "local_shell_call") return "local_shell_call_output";
+        if (callType === "apply_patch_call") return "apply_patch_call_output";
+        return null;
+      };
+
+      const getExpectedCallType = (outputType: string): string | null => {
+        if (outputType === "function_call_output") return "function_call";
+        if (outputType === "custom_tool_call_output") return "custom_tool_call";
+        if (outputType === "local_shell_call_output") return "local_shell_call";
+        if (outputType === "apply_patch_call_output") return "apply_patch_call";
+        return null;
+      };
+
+      const survivingCallKeys = new Set<string>();
+      for (const item of nextInput) {
+        if (isRecord(item) && typeof item.call_id === "string" && item.call_id.length > 0) {
+          const expectedOut = getExpectedOutputType(String(item.type));
+          if (expectedOut) {
+            survivingCallKeys.add(`${item.type}:${item.call_id}`);
+          }
+        }
+      }
+
       const cleanedInput = nextInput.filter((item) => {
         if (!isRecord(item)) return true;
-        const t = item.type;
-        if (
-          t !== "function_call" &&
-          t !== "custom_tool_call" &&
-          t !== "local_shell_call" &&
-          t !== "apply_patch_call"
-        ) {
-          return true;
+        const itemType = String(item.type);
+        const callId = typeof item.call_id === "string" ? item.call_id : "";
+
+        // Check call items: prune if output existed originally but did not survive
+        const expectedOutputType = getExpectedOutputType(itemType);
+        if (expectedOutputType) {
+          if (!callId) return true;
+          const hadMappedOutput = mappings.some((mapping) => {
+            const original = mapping.item;
+            return original.type === expectedOutputType && original.call_id === callId;
+          });
+          if (!hadMappedOutput) return true;
+          return survivingOutputKeys.has(`${expectedOutputType}:${callId}`);
         }
-        if (typeof item.call_id !== "string" || item.call_id.length === 0) return true;
-        const hadMappedOutput = mappings.some((mapping) => {
-          const original = mapping.item;
-          return (
-            (original.type === "function_call_output" ||
-              original.type === "custom_tool_call_output" ||
-              original.type === "local_shell_call_output" ||
-              original.type === "apply_patch_call_output") &&
-            original.call_id === item.call_id
+
+        // Check output items: prune if call existed originally but did not survive
+        const expectedCallType = getExpectedCallType(itemType);
+        if (expectedCallType) {
+          if (!callId) return true;
+          const hadOriginalCall = inputItems.some(
+            (orig) => isRecord(orig) && orig.type === expectedCallType && orig.call_id === callId
           );
-        });
-        if (!hadMappedOutput) return true;
-        const outputType =
-          item.type === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output";
-        return survivingOutputKeys.has(`${outputType}:${item.call_id}`);
+          if (!hadOriginalCall) return true;
+          return survivingCallKeys.has(`${expectedCallType}:${callId}`);
+        }
+
+        return true;
       });
 
       const rest = { ...compressedBody };
