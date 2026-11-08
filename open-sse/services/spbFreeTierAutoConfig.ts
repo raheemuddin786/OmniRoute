@@ -15,19 +15,59 @@ import { parseModel } from "./model";
 
 const lazyRequire = createRequire(import.meta.url);
 
-const freeCatalogSlugs = new Set<string>();
-for (const b of FREE_MODEL_BUDGETS) {
-  if (grantsFreeAccess(b.freeType)) {
-    freeCatalogSlugs.add(`${b.provider.toLowerCase()}/${b.modelId.toLowerCase()}`);
-  }
+/**
+ * Flagship proprietary model prefixes that are commercial paid models.
+ * Third-party aggregator / trial credit wrappers claiming these are NOT persistent free tiers.
+ */
+const PROPRIETARY_PAID_RE = /^(claude|gpt-4|gpt-5|grok|gemini-(?:1\.5|2\.5)-pro|gemini-pro)/i;
+
+export function isFlagshipCommercialPaidModel(modelId: string): boolean {
+  if (!modelId) return false;
+  const normalized = modelId.split("/").pop()!.toLowerCase();
+  return PROPRIETARY_PAID_RE.test(normalized);
 }
 
 /**
- * Checks whether a given model candidate string is a verified free-tier model.
+ * Curated slugs of verified free models from catalog that meet strict quality and zero-cost standards:
+ * - Grants free access
+ * - Not marked "avoid" in TOS
+ * - Not "one-time-initial" (promotional trial credits) or "discontinued"
+ * - Not a proprietary commercial flagship model
+ * - Cost verified as zero in getModelPricing
+ */
+const verifiedFreeCatalogSlugs = new Set<string>();
+for (const b of FREE_MODEL_BUDGETS) {
+  if (!grantsFreeAccess(b.freeType)) continue;
+  if (b.tos === "avoid") continue;
+  if (b.freeType === "one-time-initial" || b.freeType === "discontinued") continue;
+  if (isFlagshipCommercialPaidModel(b.modelId)) continue;
+
+  try {
+    const { getModelPricing } = lazyRequire("./providerCostData");
+    const pricing = getModelPricing(b.provider, b.modelId);
+    if (!pricing.isFree && (pricing.inputCostPer1M > 0 || pricing.outputCostPer1M > 0)) {
+      continue;
+    }
+  } catch {
+    // If providerCostData is unavailable during bootstrap, proceed
+  }
+
+  verifiedFreeCatalogSlugs.add(`${b.provider.toLowerCase()}/${b.modelId.toLowerCase()}`);
+}
+
+/**
+ * Genuine zero-auth / keyless providers supported by OmniRoute without requiring credentials.
+ */
+const GENUINE_NOAUTH_PROVIDERS = new Set<string>(["pollinations", "ovhcloud", "aihorde"]);
+
+/**
+ * Checks whether a given model candidate string is a strictly verified free-tier model.
  * Inspects:
- * 1. FREE_MODEL_BUDGETS catalog
- * 2. isFreeForProvider & isFreeModel from shared utils
- * 3. classifyTier (free pricing tier)
+ * 1. Proprietary commercial paid model check (rejects claude, gpt-4, grok, etc.)
+ * 2. Explicit model pricing (> 0 cost strictly rejected)
+ * 3. Verified free catalog entries
+ * 4. Genuine no-auth provider definitions
+ * 5. ClassifyTier free economic assignment
  */
 export function isFreeModelTarget(targetStr: string): boolean {
   if (!targetStr || typeof targetStr !== "string") return false;
@@ -43,31 +83,52 @@ export function isFreeModelTarget(targetStr: string): boolean {
   const modelLower = model.toLowerCase();
   const rawProvider = trimmed.includes("/") ? trimmed.split("/")[0].toLowerCase() : "";
 
-  // Check freeCatalogSlugs against parsed canonical provider, alias, and raw prefix
-  if (provider && freeCatalogSlugs.has(`${provider}/${modelLower}`)) return true;
-  if (providerAlias && freeCatalogSlugs.has(`${providerAlias}/${modelLower}`)) return true;
-  if (rawProvider && freeCatalogSlugs.has(`${rawProvider}/${modelLower}`)) return true;
+  // 1. Strict veto: commercial flagship paid models must NEVER pass as free
+  if (isFlagshipCommercialPaidModel(modelLower)) {
+    return false;
+  }
 
+  // 2. Strict pricing check: if any provider pricing lookup gives cost > 0 or isFree === false, reject
   try {
-    const { isFreeForProvider, isFreeModel } = lazyRequire("@/shared/utils/freeModels");
-    if (provider && isFreeForProvider(provider, { id: model })) return true;
-    if (providerAlias && isFreeForProvider(providerAlias, { id: model })) return true;
-    if (rawProvider && isFreeForProvider(rawProvider, { id: model })) return true;
-    if (provider && isFreeModel(provider, { id: model })) return true;
-    if (providerAlias && isFreeModel(providerAlias, { id: model })) return true;
-    if (rawProvider && isFreeModel(rawProvider, { id: model })) return true;
+    const { getModelPricing } = lazyRequire("./providerCostData");
+    for (const p of [provider, providerAlias, rawProvider].filter(Boolean)) {
+      const pricing = getModelPricing(p, model);
+      if (!pricing.isFree && (pricing.inputCostPer1M > 0 || pricing.outputCostPer1M > 0)) {
+        return false;
+      }
+    }
   } catch {
     // ignore
   }
 
+  // 3. Check verified free catalog slugs (which exclude avoid/one-time-initial/trial credits)
+  if (provider && verifiedFreeCatalogSlugs.has(`${provider}/${modelLower}`)) return true;
+  if (providerAlias && verifiedFreeCatalogSlugs.has(`${providerAlias}/${modelLower}`)) return true;
+  if (rawProvider && verifiedFreeCatalogSlugs.has(`${rawProvider}/${modelLower}`)) return true;
+
+  // 4. Check genuine no-auth providers
+  for (const p of [provider, providerAlias, rawProvider].filter(Boolean)) {
+    if (GENUINE_NOAUTH_PROVIDERS.has(p)) {
+      return true;
+    }
+  }
+
+  try {
+    const { NOAUTH_PROVIDERS } = lazyRequire("@/shared/constants/providers");
+    for (const p of [provider, providerAlias, rawProvider].filter(Boolean)) {
+      if (p in NOAUTH_PROVIDERS) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 5. Check classifyTier
   try {
     const { classifyTier } = lazyRequire("./tierResolver");
-    if (provider) {
-      const classification = classifyTier(provider, model);
-      if (classification && classification.tier === "free") return true;
-    }
-    if (rawProvider && rawProvider !== provider) {
-      const classification = classifyTier(rawProvider, model);
+    for (const p of [provider, providerAlias, rawProvider].filter(Boolean)) {
+      const classification = classifyTier(p, model);
       if (classification && classification.tier === "free") return true;
     }
   } catch {
@@ -152,7 +213,13 @@ export function classifyFreeModelTier(
 }
 
 /**
- * Discovers and returns all available free-tier models across active provider connections.
+ * Discovers and returns all strictly verified free-tier models across active provider connections.
+ * Applies stringent verification:
+ * - Reject models with tos: "avoid"
+ * - Reject models with freeType: "one-time-initial" (promotional trial credits) or "discontinued"
+ * - Reject commercial flagship paid models (claude, gpt-4, grok, etc.)
+ * - Reject models with positive input/output token pricing (> 0)
+ * - Match against connected providers or genuine no-auth providers
  */
 export function discoverAvailableFreeTierModels(): FreeTierDiscoveredModel[] {
   const activeProviders = getActiveConnectedProviders();
@@ -161,13 +228,35 @@ export function discoverAvailableFreeTierModels(): FreeTierDiscoveredModel[] {
 
   for (const budget of FREE_MODEL_BUDGETS) {
     if (!grantsFreeAccess(budget.freeType)) continue;
+    if (budget.tos === "avoid") continue;
+    if (budget.freeType === "one-time-initial" || budget.freeType === "discontinued") continue;
+    if (isFlagshipCommercialPaidModel(budget.modelId)) continue;
 
     const providerLower = budget.provider.toLowerCase();
-    // If user has active connections, prioritize providers they have configured, or keyless/noauth
-    if (activeProviders.size > 0 && !activeProviders.has(providerLower)) {
-      if (budget.freeType !== "keyless" && budget.freeType !== "recurring-uncapped") {
+    const isConnected = activeProviders.has(providerLower);
+    const isNoAuth = GENUINE_NOAUTH_PROVIDERS.has(providerLower);
+
+    // If user has active connections in DB, require connected provider OR genuine noauth provider
+    if (activeProviders.size > 0) {
+      if (!isConnected && !isNoAuth) {
         continue;
       }
+    } else {
+      // If no active connections configured, only discover genuine zero-auth providers
+      if (!isNoAuth) {
+        continue;
+      }
+    }
+
+    // Verify model pricing is free
+    try {
+      const { getModelPricing } = lazyRequire("./providerCostData");
+      const pricing = getModelPricing(budget.provider, budget.modelId);
+      if (!pricing.isFree && (pricing.inputCostPer1M > 0 || pricing.outputCostPer1M > 0)) {
+        continue;
+      }
+    } catch {
+      // ignore
     }
 
     const fullModelSlug = `${budget.provider}/${budget.modelId}`;

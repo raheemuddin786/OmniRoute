@@ -8,15 +8,21 @@ import {
 } from "../../open-sse/services/spbFreeTierAutoConfig.ts";
 
 describe("SPB Free Tier Auto-Config", () => {
-  it("verifies paid models are rejected and free models are recognized by isFreeModelTarget", () => {
+  it("verifies paid models are rejected and verified free models are recognized by isFreeModelTarget", () => {
     // Explicit paid models must always return false
     assert.equal(isFreeModelTarget("openai/gpt-4o"), false);
     assert.equal(isFreeModelTarget("anthropic/claude-3-5-sonnet"), false);
+    assert.equal(isFreeModelTarget("anthropic/claude-3.7-sonnet"), false);
+    assert.equal(isFreeModelTarget("api-airforce/anthropic/claude-3.7-sonnet"), false);
+    assert.equal(isFreeModelTarget("api-airforce/x-ai/grok-3"), false);
+    assert.equal(isFreeModelTarget("agentrouter/claude-opus-5"), false);
+    assert.equal(isFreeModelTarget("blackbox/gpt-4o"), false);
     assert.equal(isFreeModelTarget("cohere/command-r"), false);
 
-    // Free models from catalog / zero pricing must return true
-    assert.equal(isFreeModelTarget("duckduckgo-web/gpt-5.4-mini"), true);
-    assert.equal(isFreeModelTarget("agentrouter/claude-opus-4-8"), true);
+    // Verified genuine free models must return true
+    assert.equal(isFreeModelTarget("pollinations/qwen-coder"), true);
+    assert.equal(isFreeModelTarget("ovhcloud/gpt-oss-120b"), true);
+    assert.equal(isFreeModelTarget("aihorde/google/gemma-4-31b"), true);
   });
 
   it("classifies free models into apex, resilient, and local based on capabilities and suffixes", () => {
