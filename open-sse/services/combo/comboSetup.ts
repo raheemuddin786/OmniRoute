@@ -57,7 +57,8 @@ function resolveContextCachePin(ctx: ComboContext): {
   pinnedModel: string | null;
 } {
   const { combo, relayOptions, log } = ctx;
-  const effectiveSessionId: string | null = combo.context_cache_protection
+  const isCacheProtected = Boolean(combo.context_cache_protection);
+  const effectiveSessionId: string | null = isCacheProtected
     ? scopeHandoffSessionId(
         relayOptions?.sessionId ?? deriveComboSessionKey(ctx.body),
         relayOptions?.apiKeyId
@@ -65,7 +66,7 @@ function resolveContextCachePin(ctx: ComboContext): {
     : null;
   let pinnedModel: string | null = null;
   if (
-    combo.context_cache_protection &&
+    isCacheProtected &&
     effectiveSessionId &&
     !(ctx.body as Record<string, unknown>)?.[SKIP_UNIVERSAL_HANDOFF_FLAG]
   ) {

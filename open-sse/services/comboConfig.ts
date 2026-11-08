@@ -29,7 +29,12 @@ export const PRE_SCREEN_CONCURRENCY = 5;
  * An explicit `targetTimeoutMs` in the resolved combo config (the combo's own config or the
  * global `comboDefaults`) overrides the declared budgets.
  */
-export const DEFAULT_COMBO_TARGET_TIMEOUT_MS = 120_000;
+export const DEFAULT_COMBO_TARGET_TIMEOUT_MS =
+  typeof process !== "undefined" &&
+  process.env?.COMBO_TARGET_TIMEOUT_MS &&
+  Number(process.env.COMBO_TARGET_TIMEOUT_MS) > 0
+    ? Number(process.env.COMBO_TARGET_TIMEOUT_MS)
+    : 120_000;
 
 /**
  * Upper bound on how far a declared budget may stretch a combo target's first-output wait.

@@ -212,7 +212,7 @@ function deriveTargetFailure(
   });
   const isModelScopedClaudeQuota = claudeQuotaScope.scope === "model";
   const isConnectionScopedClaudeQuota =
-    canonicalProvider === "claude" &&
+    (canonicalProvider === "claude" || canonicalProvider === "claude-web") &&
     opts.result.status === 429 &&
     isExplicitClaudeQuota429Text(opts.errorText) &&
     claudeQuotaScope.scope === "connection";
@@ -310,7 +310,7 @@ export function applyComboTargetExhaustion(
   }
 
   if (
-    canonicalProvider === "claude" &&
+    (canonicalProvider === "claude" || canonicalProvider === "claude-web") &&
     result.status === 429 &&
     isExplicitClaudeQuota429Text(errorText)
   ) {
@@ -387,13 +387,21 @@ export function applyComboTargetExhaustion(
     ) {
       return { ...derived, providerExhausted: false };
     }
-    // #14136: For per-model-quota providers (gemini, vertex, codex, antigravity, passthrough models),
+    // #14136: For per-model-quota providers (gemini, vertex, codex, antigravity, passthrough models)
+    // or multiplexed providers with per-model failure scope (claude, claude-web),
     // a 403 is model-scoped (tier restriction or model access denial), not an invalid credential.
     // Sibling combo legs on the same connection remain eligible, unless verified as a connection-wide
     // denial (e.g. Vertex SERVICE_DISABLED or non-models IAM denial).
     if (
       result.status === 403 &&
-      hasPerModelQuota(provider, opts.rawModel) &&
+      (hasPerModelQuota(provider, opts.rawModel) ||
+        hasPerModelFailureScope(
+          provider,
+          opts.rawModel,
+          undefined,
+          result.status,
+          opts.errorText
+        )) &&
       !(provider === "vertex" && isVertexConnectionWidePermissionDenied(opts.errorText))
     ) {
       return { ...derived, providerExhausted: false };
@@ -441,7 +449,7 @@ export function applyComboTargetExhaustion(
  * models behind one connection, so a quota 429 for one model must NOT skip fallback targets for
  * another model on the same provider.
  */
-function isProviderQuotaExhausted(
+export function isProviderQuotaExhausted(
   provider: string | null | undefined,
   opts: Pick<
     ApplyComboTargetExhaustionOptions,
@@ -469,15 +477,34 @@ function isProviderQuotaExhausted(
   // fallbackResult derived from it). Ours is a local, transient cooldown — never a
   // provider quota signal — so it must not skip the remaining same-provider targets.
   const isLocalCooldown = Boolean(result?.headers?.get?.(LOCAL_MODEL_COOLDOWN_HEADER));
+  if (!provider || provider === "unknown" || isLocalCooldown) {
+    return false;
+  }
+  if (requestScopedFailure || isRequestScopedUpstreamFailure(structuredError)) {
+    return false;
+  }
+  if (
+    (canonicalProvider === "claude" || canonicalProvider === "claude-web") &&
+    isClaudeMinuteRateLimitText(errorText)
+  ) {
+    return false;
+  }
+
+  // All accounts exhausted means the entire provider cannot serve any model right now,
+  // regardless of whether the provider is declared as passthrough/per-model-quota.
+  const isAllAccountsExhausted =
+    Boolean(allAccountsRateLimited) ||
+    /all .* accounts have exhausted their quota/i.test(errorText || "") ||
+    /all accounts have exhausted their quota/i.test(errorText || "");
+
+  if (isAllAccountsExhausted) {
+    return true;
+  }
+
   return (
-    Boolean(provider && provider !== "unknown") &&
-    !isLocalCooldown &&
-    !(requestScopedFailure || isRequestScopedUpstreamFailure(structuredError)) &&
     !hasPerModelQuota(provider as string, rawModel) &&
-    !(canonicalProvider === "claude" && isClaudeMinuteRateLimitText(errorText)) &&
     (isProviderExhaustedReason(fallbackResult) ||
-      classifyErrorText(structuredError?.code || errorText) === RateLimitReason.QUOTA_EXHAUSTED ||
-      allAccountsRateLimited)
+      classifyErrorText(structuredError?.code || errorText) === RateLimitReason.QUOTA_EXHAUSTED)
   );
 }
 

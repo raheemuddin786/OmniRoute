@@ -26,6 +26,9 @@ let _combosCacheTs = 0;
 let _combosCacheVersionSnapshot = -1;
 const COMBOS_CACHE_TTL = 10_000;
 
+// Combo limits cache — 10s TTL matches getCombosCached()
+const _comboLimitsCache = new Map<string, { limit: number; ts: number }>();
+
 export async function getCombosCached(): Promise<unknown[]> {
   const now = Date.now();
   const { getCombos } = await import("@/lib/db/combos");
@@ -51,6 +54,10 @@ export function clearCombosCache() {
   _combosPromise = null;
   _combosCacheTs = 0;
   _combosCacheVersionSnapshot = -1;
+}
+
+export function clearComboLimitsCache() {
+  _comboLimitsCache.clear();
 }
 
 export function clearUpstreamProxyConfigCache(providerId?: string) {

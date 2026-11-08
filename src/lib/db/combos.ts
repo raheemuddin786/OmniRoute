@@ -13,6 +13,7 @@ import { clearSessionModelHistoryForCombo } from "./contextHandoffs";
 import { getDbInstance } from "./core";
 import { invalidateCachedLKGP, invalidateDbCache, invalidateModelCatalogCache } from "./readCache";
 import { invalidateReasoningRoutingRuleCache } from "./reasoningRoutingRules";
+import { clearComboLimitsCache } from "@omniroute/open-sse/handlers/chatCore/comboContextCache.ts";
 import { routingConfigRepositories } from "./repositories/routingConfigRepositories";
 
 const repository = routingConfigRepositories.combos;
@@ -41,6 +42,7 @@ export function getComboByNameInsensitive(name: string): Promise<ComboRecord | n
 export async function createCombo(data: ComboRecord): Promise<ComboRecord> {
   const combo = await repository.create(data);
   invalidateDbCache("combos");
+  clearComboLimitsCache();
   backupDbFile("pre-write");
   return combo;
 }
@@ -57,6 +59,7 @@ export async function updateCombo(id: string, data: ComboRecord): Promise<ComboR
   }
 
   invalidateDbCache("combos");
+  clearComboLimitsCache();
   backupDbFile("pre-write");
   return result.combo;
 }
@@ -65,6 +68,7 @@ export async function reorderCombos(comboIds: string[]): Promise<ComboRecord[]> 
   const result = await repository.reorder(comboIds);
   if (result.rowsReordered > 0) {
     invalidateDbCache("combos");
+    clearComboLimitsCache();
     backupDbFile("pre-write");
   }
   return result.combos;
@@ -75,6 +79,7 @@ export async function deleteCombo(id: string): Promise<boolean> {
   if (!deleted) return false;
 
   invalidateDbCache("combos");
+  clearComboLimitsCache();
   invalidateReasoningRoutingRuleCache();
   backupDbFile("pre-write");
   return true;
@@ -106,6 +111,7 @@ export async function importCombos(
     invalidateModelCatalogCache();
   }
   invalidateDbCache("combos");
+  clearComboLimitsCache();
   return { created: result.created, removed: result.removed };
 }
 
