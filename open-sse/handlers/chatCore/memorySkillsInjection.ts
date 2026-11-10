@@ -97,9 +97,34 @@ export async function injectMemoryAndSkills({
     canonicalProvider !== "chatgpt-web" &&
     canonicalProvider !== "chatgpt-web-codex";
 
+  // Rapid Tool-Loop Optimization: In automated tool-use loops where turns consist solely
+  // of tool results or command feedback, avoid re-running heavy embedding calls and redundant RAG
+  // memory retrieval on every single iteration. Memory is safely preserved in session context.
+  const isPureToolResultTurn = (() => {
+    const msgs = Array.isArray(body.messages)
+      ? body.messages
+      : Array.isArray(body.input)
+        ? body.input
+        : [];
+    if (msgs.length === 0) return false;
+    const lastMsg = msgs[msgs.length - 1] as Record<string, unknown> | undefined;
+    if (!lastMsg) return false;
+    if (lastMsg.role === "tool") return true;
+    if (Array.isArray(lastMsg.content)) {
+      return lastMsg.content.every(
+        (p: unknown) =>
+          p &&
+          typeof p === "object" &&
+          (("type" in p && p.type === "tool_result") || "tool_use_id" in p)
+      );
+    }
+    return false;
+  })();
+
   if (
     memoryOwnerId &&
     memorySettings &&
+    !isPureToolResultTurn &&
     shouldInjectMemory(body as Parameters<typeof shouldInjectMemory>[0], {
       enabled: memorySettings.enabled && memorySettings.maxTokens > 0,
     })
