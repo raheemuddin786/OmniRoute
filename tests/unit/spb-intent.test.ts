@@ -650,4 +650,27 @@ test("SPB dynamic tier steering with agent tools provided (Claude plan mode, exe
   assert.equal(readOnlyInspectionDecision.intent.taskPhase, "INSPECTION_SYNTHESIS");
   assert.equal(readOnlyInspectionDecision.tierAssignment.tier, "tier_3_local");
   assert.equal(readOnlyInspectionDecision.selectedModel, "test-local-1");
+
+  // Turn 6: Autonomous SDLC full cycle prompt -> Classified as ARCHITECTURAL_PLANNING and routes to Tier 1 Apex
+  const sdlcPrompt =
+    "Fix Smart Proxy Bridge to execute complete SDLC cycle autonomously in a single execution from a single prompt: requirements -> architecture -> implementation -> testing -> local verification -> deployment -> cloud verification -> stabilization.";
+  const sdlcDecision = await processSmartProxyRouting({
+    sessionId: "sdlc_session_autonomous_test",
+    messages: [{ role: "user", content: sdlcPrompt }],
+    tools: agentTools,
+  });
+  assert.equal(sdlcDecision.intent.taskPhase, "ARCHITECTURAL_PLANNING");
+  assert.equal(sdlcDecision.tierAssignment.tier, "tier_1_apex");
+  assert.equal(
+    sdlcDecision.tierAssignment.guidanceContract?.constraints?.some((c) =>
+      c.includes("Execute complete SDLC cycle autonomously")
+    ),
+    true
+  );
+  assert.equal(
+    sdlcDecision.tierAssignment.guidanceContract?.verificationCriteria?.some((v) =>
+      v.includes("Cloud deployment verified")
+    ),
+    true
+  );
 });

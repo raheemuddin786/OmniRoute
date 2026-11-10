@@ -265,16 +265,23 @@ export function classifyIntent(
       targetText
     );
 
-  const isBroadSystemContext =
+  const isAutonomousSdlcPrompt =
     isDirectHumanPrompt &&
-    !isExplicitPureCodeExecution &&
-    !hasDeterministicKeywords &&
-    !hasTestKeywords &&
-    !hasRefactorKeywords &&
-    (/\b(adapt|screen|screens|app|mobile|redesign|system architecture|architectural|design flow|end-to-end|workflow|multi-page|multi-step|roadmap|blueprint|research|investigate|audit|plan|planning|strategy|deep analysis)\b/i.test(
+    /\b(sdlc|end-to-end autonomous|full autonomous|single prompt.*full|single execution.*single prompt|autonomous-executor|requirements.*architecture.*implementation.*testing)\b/i.test(
       targetText
-    ) ||
-      (userMessages.length === 1 && !hasCodeKeywords));
+    );
+
+  const isBroadSystemContext =
+    isAutonomousSdlcPrompt ||
+    (isDirectHumanPrompt &&
+      !isExplicitPureCodeExecution &&
+      !hasDeterministicKeywords &&
+      !hasTestKeywords &&
+      !hasRefactorKeywords &&
+      (/\b(adapt|screen|screens|app|mobile|redesign|system architecture|architectural|design flow|end-to-end|workflow|multi-page|multi-step|roadmap|blueprint|research|investigate|audit|plan|planning|strategy|deep analysis)\b/i.test(
+        targetText
+      ) ||
+        (userMessages.length === 1 && !hasCodeKeywords)));
 
   // Multi-file mutation detection: if the request references >3 distinct source files for mutation/refactor,
   // route to ARCHITECTURAL_PLANNING to establish a supervisor guidance contract before delegating to Tier 2

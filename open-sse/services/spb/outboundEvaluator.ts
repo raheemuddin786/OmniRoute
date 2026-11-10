@@ -202,7 +202,7 @@ export function evaluateResponseIntent(
   // Patterns that indicate the model is suggesting the user run commands manually
   // instead of executing them autonomously via tools.
   const isAutonomousPrompt =
-    /\b(autonomous|execute|run|verify|test|capture|screenshot|implement|build|fix)\b/i.test(
+    /\b(autonomous|execute|run|verify|test|capture|screenshot|implement|build|fix|sdlc|single execution|single prompt)\b/i.test(
       originalPrompt
     );
 

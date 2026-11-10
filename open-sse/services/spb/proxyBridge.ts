@@ -415,6 +415,11 @@ export async function processSmartProxyRouting(
       const cleanInstruction =
         cleanUserInstruction(lastUserText) || "Supervised autonomous execution";
       const anchors = extractContextAnchors(messages);
+      const isAutonomousSdlc =
+        /\b(sdlc|end-to-end autonomous|full autonomous|single prompt.*full|single execution.*single prompt|autonomous-executor|requirements.*architecture.*implementation.*testing)\b/i.test(
+          cleanInstruction
+        );
+
       activeGuidanceContract = {
         supervisorTier: tierAssignment.tier,
         origin: tierAssignment.tier === "tier_1_apex" ? "supervisor" : "auto",
@@ -423,11 +428,25 @@ export async function processSmartProxyRouting(
           "Zero unverified assumptions",
           "Preserve existing architecture and contracts",
           "Execute all required tool operations autonomously without delegating commands to the user",
+          ...(isAutonomousSdlc
+            ? [
+                "Execute complete SDLC cycle autonomously: research -> architecture -> implementation -> test -> local verify -> deploy -> cloud verify -> stabilize",
+                "Do not halt for human confirmation between SDLC phases",
+                "Zero placeholders, mocks, or hardcoding",
+              ]
+            : []),
         ],
         instructions: [cleanInstruction],
         targetFiles: anchors.referencedFiles,
         verificationCriteria: [
           "All test and verification suites must pass with zero errors",
+          ...(isAutonomousSdlc
+            ? [
+                "Local tests and quality checks pass",
+                "Cloud deployment verified with live health check",
+                "All side effects stabilized",
+              ]
+            : []),
           ...(anchors.diagnosedErrors.length > 0
             ? [`Remediate diagnosed error: ${anchors.diagnosedErrors[0]}`]
             : []),

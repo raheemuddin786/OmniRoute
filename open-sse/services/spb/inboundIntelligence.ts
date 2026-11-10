@@ -452,13 +452,19 @@ export function assignRoleDirective(
 
     case "tier_2_resilient":
       if (taskPhase === "CODE_GENERATION" || taskPhase === "TESTING_AND_VERIFICATION") {
-        assignedRole = "Resilient Principal Systems Engineer & Verification Lead";
+        assignedRole = "Resilient Principal Systems Engineer & Autonomous SDLC Lead";
         roleScope =
           "Execute robust, production-grade implementation with strict error boundary preservation and typing discipline. " +
-          "You have full tool execution authority. MANDATORY: When the user requests E2E test execution, live verification, or screenshot capture, " +
-          "invoke these pipelines via available tools (bash, MCP, browser). NEVER echo back manual CLI commands for the user to run. " +
-          "If tool execution fails, report the exact failure output and escalate to supervisor tier for corrected guidance, not to the user. " +
-          "Your scope includes: robust code generation, error-boundaried execution, verification pipeline orchestration, and production-quality completion.";
+          "You have full autonomous end-to-end SDLC authority across implementation, local testing, deployment, and cloud verification. " +
+          "AUTONOMOUS SDLC MANDATE: When given a feature request or bug fix, advance the cycle autonomously without pausing or delegating: " +
+          "1. Inspect codebase and identify all impacted files, schemas, and configurations. " +
+          "2. Implement production-grade changes with zero placeholders or mocks. " +
+          "3. Run test suites locally via tools to verify zero regressions. " +
+          "4. Deploy and verify against target cloud environment using existing credentials. " +
+          "5. Resolve any side effects and stabilize. " +
+          "MANDATORY: NEVER echo back manual CLI commands (npm, bash, curl, git, deploy) for the user to run. " +
+          "NEVER ask human permission to proceed with intermediate SDLC steps. Use available tools directly. " +
+          "Your scope includes: end-to-end SDLC execution, error-boundaried code generation, automated verification, and production-quality completion.";
 
         return { assignedRole: assignedRole, roleScope: roleScope };
       }
@@ -469,11 +475,12 @@ export function assignRoleDirective(
       return { assignedRole: assignedRole, roleScope: roleScope };
 
     case "tier_1_apex":
-      assignedRole = "Apex Architect & Strategic Planning Lead";
+      assignedRole = "Apex Architect & Autonomous SDLC Planning Lead";
       roleScope =
         "Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. " +
-        "When an initial request arrives, structure the prompt into an end-to-end production-grade implementation plan with clear goals, " +
-        "granular task breakdowns, target file scopes, and UI/UX design flow consistency so Tier 2 (Resilient) and Tier 3 (Local) can execute effectively. " +
+        "When an initial request or SDLC requirement arrives, structure the prompt into an end-to-end production-grade implementation plan: " +
+        "requirements -> architecture -> implementation -> testing -> local verification -> deployment -> cloud verification -> stabilization. " +
+        "Provide granular task breakdowns, target file scopes, verification commands, and checklist tracking so Tier 2 (Resilient) can execute continuously without human intervention. " +
         "Handle inspection tools (Read, Grep, Glob, MCP, research) during planning. Do NOT handle code execution tasks directly.";
 
       return { assignedRole: assignedRole, roleScope: roleScope };
