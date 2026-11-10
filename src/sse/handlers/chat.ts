@@ -444,6 +444,19 @@ async function applySpbOutboundZeroLoss(
     const taskPhase: TaskPhase = spbDecision.intent?.taskPhase || "CODE_GENERATION";
     const sessionId = runtimeOpts.sessionId || "default_session";
 
+    let detectedWorkspaceRoot: string | null = null;
+    try {
+      const { resolveWorkspaceLinker } = await import("@/lib/usage/workspaceLinker");
+      const linked = resolveWorkspaceLinker({
+        headers: clientRawRequest?.headers || request?.headers || null,
+        body: clientRawRequest?.body || body || null,
+        sessionTag: runtimeOpts.conversationId || runtimeOpts.sessionAffinityKey || null,
+      });
+      detectedWorkspaceRoot = linked.workspaceRoot;
+    } catch {
+      // Best-effort workspace detection
+    }
+
     const evaluatedResponse = await processSpbOutboundZeroLoss({
       initialResponse: response,
       dispatchModel: (newBody: any) =>
@@ -466,6 +479,7 @@ async function applySpbOutboundZeroLoss(
       taskPhase,
       sessionId,
       maxReprompts: 2,
+      workspaceRoot: detectedWorkspaceRoot,
     });
 
     // Update checkpoint with satisfaction score for cross-tier restoration

@@ -456,15 +456,18 @@ export function assignRoleDirective(
         roleScope =
           "Execute robust, production-grade implementation with strict error boundary preservation and typing discipline. " +
           "You have full autonomous end-to-end SDLC authority across implementation, local testing, deployment, and cloud verification. " +
+          "CHECKLIST & FACTUAL VERIFICATION MANDATE: You MUST organize your work into an explicit checklist following all SDLC steps. " +
+          "Never assume changes are applied or tests passed without physical execution. " +
           "AUTONOMOUS SDLC MANDATE: When given a feature request or bug fix, advance the cycle autonomously without pausing or delegating: " +
           "1. Inspect codebase and identify all impacted files, schemas, and configurations. " +
-          "2. Implement production-grade changes with zero placeholders or mocks. " +
+          "2. Implement production-grade changes with zero placeholders or mocks using file editing tools. " +
           "3. Run test suites locally via tools to verify zero regressions. " +
           "4. Deploy and verify against target cloud environment using existing credentials. " +
           "5. Resolve any side effects and stabilize. " +
           "MANDATORY: NEVER echo back manual CLI commands (npm, bash, curl, git, deploy) for the user to run. " +
+          "NEVER claim completion or pass tests without physical tool execution. " +
           "NEVER ask human permission to proceed with intermediate SDLC steps. Use available tools directly. " +
-          "Your scope includes: end-to-end SDLC execution, error-boundaried code generation, automated verification, and production-quality completion.";
+          "Your scope includes: end-to-end SDLC execution, organized checklist tracking, factual tool verification, and production-quality completion.";
 
         return { assignedRole: assignedRole, roleScope: roleScope };
       }
@@ -480,6 +483,7 @@ export function assignRoleDirective(
         "Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. " +
         "When an initial request or SDLC requirement arrives, structure the prompt into an end-to-end production-grade implementation plan: " +
         "requirements -> architecture -> implementation -> testing -> local verification -> deployment -> cloud verification -> stabilization. " +
+        "MANDATORY CHECKLIST: Always construct an explicit, trackable checklist of all SDLC tasks and steps. " +
         "Provide granular task breakdowns, target file scopes, verification commands, and checklist tracking so Tier 2 (Resilient) can execute continuously without human intervention. " +
         "Handle inspection tools (Read, Grep, Glob, MCP, research) during planning. Do NOT handle code execution tasks directly.";
 

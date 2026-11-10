@@ -14,7 +14,6 @@ import { TaskPhase } from "./intentAnalyzer.ts";
 import { ModelTier } from "./tieredRegistry.ts";
 import { recordIntentEvaluation, saveLearnedOptimization } from "../../../src/lib/db/spbState.ts";
 import { computePatternHash } from "./inboundIntelligence.ts";
-import { isFeatureFlagEnabled } from "../../../src/shared/utils/featureFlags.ts";
 import { spawnSync } from "node:child_process";
 
 /**
@@ -31,9 +30,9 @@ export const SPB_REVIEWER_DISCREPANCY_MARKER =
  * UPSTREAM_CWD env var; finally falls back to process.cwd().
  */
 function resolveDiffCwd(explicitCwd?: string): string {
-  if (explicitCwd) return explicitCwd;
+  if (explicitCwd && explicitCwd.trim()) return explicitCwd.trim();
   const envCwd = process.env.UPSTREAM_CWD;
-  if (envCwd) return envCwd;
+  if (envCwd && envCwd.trim()) return envCwd.trim();
   return process.cwd();
 }
 
@@ -442,7 +441,7 @@ export function verifyCodeDiffAgainstConclusion(
     const claimsCompletionWithoutAnyDiff =
       actualModifiedFiles.length === 0 &&
       claimedFiles.length > 0 &&
-      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed))\b/i.test(
+      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed)|(?:resolved|fixed|implemented|updated|verified)\s*&\s*verified|tests?\s*(?:passed|verified)|deployed?\s*(?:successfully|cleanly))\b/i.test(
         conclusionText
       );
 
@@ -738,6 +737,7 @@ export async function processSpbOutboundZeroLoss(args: {
   taskPhase: TaskPhase;
   sessionId: string;
   maxReprompts?: number;
+  workspaceRoot?: string | null;
 }): Promise<Response> {
   const maxReprompts = args.maxReprompts ?? 2;
   let currentResponse = args.initialResponse;
@@ -788,19 +788,21 @@ export async function processSpbOutboundZeroLoss(args: {
     // conclusion explicitly claims completed edits. Planning, analysis, audit, and inspection
     // phases must never trigger a discrepancy loop merely because no code diff exists yet.
     const claimsEditsInText =
-      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed))\b/i.test(
+      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed)|(?:resolved|fixed|implemented|updated|verified)\s*&\s*verified|tests?\s*(?:passed|verified)|deployed?\s*(?:successfully|cleanly))\b/i.test(
         extracted.text.trim()
       );
 
     if (
-      isFeatureFlagEnabled("REVIEWER_ASSISTANT_ENABLED") &&
       !extracted.hasToolCalls &&
       isCodePhase &&
       !isNonModificationPhase &&
       extracted.text.trim() &&
       claimsEditsInText
     ) {
-      const diffReview = verifyCodeDiffAgainstConclusion(extracted.text);
+      const diffReview = verifyCodeDiffAgainstConclusion(
+        extracted.text,
+        args.workspaceRoot ?? undefined
+      );
       if (!diffReview.passed && diffReview.report) {
         reviewerDiscrepancyDetected = true;
         evalResult.isSatisfied = false;
