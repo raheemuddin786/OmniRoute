@@ -1231,6 +1231,8 @@
     "contextLlmlingua": "LLMLingua",
     "combosLive": "Combo Studio",
     "combosLiveSubtitle": "Live routing cascade",
+    "smartProxy": "Smart Proxy Bridge",
+    "smartProxySubtitle": "Intelligent multi-tier routing & token optimization",
     "compressionStudio": "Compression Studio",
     "compressionExclusions": "Exclusions",
     "contextSettingsSubtitle": "Global defaults",

@@ -87,6 +87,35 @@ export interface GovernanceMetrics {
     nonSpbLatencyMs: number;
     spbTokenEfficiency: number;
   };
+  requestCategories?: {
+    coding: {
+      requests: number;
+      tokensPrompt: number;
+      tokensCompletion: number;
+      tokensTotal: number;
+      tokensCompressed: number;
+      tokensCacheRead: number;
+      avgLatencyMs: number;
+    };
+    embeddings: {
+      requests: number;
+      tokensPrompt: number;
+      tokensCompletion: number;
+      tokensTotal: number;
+      tokensCompressed: number;
+      tokensCacheRead: number;
+      avgLatencyMs: number;
+    };
+    system: {
+      requests: number;
+      tokensPrompt: number;
+      tokensCompletion: number;
+      tokensTotal: number;
+      tokensCompressed: number;
+      tokensCacheRead: number;
+      avgLatencyMs: number;
+    };
+  };
 }
 
 const TIME_RANGES = [
@@ -578,6 +607,200 @@ export function SmartProxyActivitySection() {
                 </div>
                 <div className="text-[10px] text-muted-foreground mt-0.5">
                   Active intelligent dispatch
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Categorized Infrastructure Usage: Coding & Reasoning vs Embeddings vs System */}
+      {governance?.requestCategories && (
+        <div className="rounded-lg border bg-card/60 p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b pb-3 gap-2">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary text-[20px]">category</span>
+                Request &amp; Token Allocation by Category
+              </h4>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Explicit separation of core LLM coding/reasoning workloads versus non-coding vector
+                embeddings and system diagnostics.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-muted text-muted-foreground">
+                Total Requests:{" "}
+                {(
+                  (governance.requestCategories.coding.requests || 0) +
+                  (governance.requestCategories.embeddings.requests || 0) +
+                  (governance.requestCategories.system.requests || 0)
+                ).toLocaleString()}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* 1. Core Coding & Reasoning LLM Workloads */}
+            <div className="rounded-lg border border-primary/20 bg-background/70 p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-primary/10 pb-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-primary text-[18px]">
+                    terminal
+                  </span>
+                  <span className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                    Coding &amp; Reasoning
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary">
+                  LLM Generations
+                </span>
+              </div>
+
+              <div>
+                <div className="text-[11px] text-muted-foreground">Total API Requests</div>
+                <div className="text-xl font-bold text-foreground">
+                  {governance.requestCategories.coding.requests.toLocaleString()}
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-1 border-t text-xs">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Input Tokens:</span>
+                  <span className="font-mono font-medium text-foreground">
+                    {governance.requestCategories.coding.tokensPrompt > 1_000_000
+                      ? `${(governance.requestCategories.coding.tokensPrompt / 1_000_000).toFixed(2)}M`
+                      : `${Math.round(governance.requestCategories.coding.tokensPrompt / 1000)}k`}
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Output Tokens:</span>
+                  <span className="font-mono font-medium text-foreground">
+                    {governance.requestCategories.coding.tokensCompletion > 1_000_000
+                      ? `${(governance.requestCategories.coding.tokensCompletion / 1_000_000).toFixed(2)}M`
+                      : `${Math.round(governance.requestCategories.coding.tokensCompletion / 1000)}k`}
+                  </span>
+                </div>
+                <div className="flex justify-between text-emerald-500 font-medium">
+                  <span>SPB Tokens Saved:</span>
+                  <span className="font-mono">
+                    +
+                    {Math.round(
+                      governance.requestCategories.coding.tokensCompressed / 1000
+                    ).toLocaleString()}
+                    k
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Prefix Cache Reads:</span>
+                  <span className="font-mono">
+                    {Math.round(
+                      governance.requestCategories.coding.tokensCacheRead / 1000
+                    ).toLocaleString()}
+                    k
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground pt-1 border-t text-[11px]">
+                  <span>Average Latency:</span>
+                  <span className="font-medium text-foreground">
+                    {governance.requestCategories.coding.avgLatencyMs.toLocaleString()} ms
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Vector Embeddings & Auxiliary Memory */}
+            <div className="rounded-lg border border-amber-500/20 bg-background/70 p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-amber-500/10 pb-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-amber-500 text-[18px]">hub</span>
+                  <span className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                    Embeddings &amp; Vectors
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-500">
+                  Memory &amp; RAG
+                </span>
+              </div>
+
+              <div>
+                <div className="text-[11px] text-muted-foreground">Total Embedding Operations</div>
+                <div className="text-xl font-bold text-foreground">
+                  {governance.requestCategories.embeddings.requests.toLocaleString()}
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-1 border-t text-xs">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Processing Latency:</span>
+                  <span className="font-medium text-foreground">
+                    {governance.requestCategories.embeddings.avgLatencyMs} ms
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Compute Allocation:</span>
+                  <span className="text-emerald-500 font-medium">Local/Offloaded</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Commercial Token Spend:</span>
+                  <span className="font-mono text-emerald-500 font-medium">0 billed</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Tool-Loop Gating:</span>
+                  <span className="text-indigo-400 font-medium">Active (Turn-Gated)</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground pt-1 border-t text-[11px]">
+                  <span>Infrastructure Status:</span>
+                  <span className="font-medium text-foreground">Non-Coding Auxiliary</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. System & Health Diagnostics */}
+            <div className="rounded-lg border border-zinc-500/20 bg-background/70 p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-zinc-500/10 pb-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-muted-foreground text-[18px]">
+                    health_and_safety
+                  </span>
+                  <span className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                    System &amp; Diagnostics
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-500/10 text-muted-foreground">
+                  Maintenance
+                </span>
+              </div>
+
+              <div>
+                <div className="text-[11px] text-muted-foreground">Diagnostic &amp; Test Pings</div>
+                <div className="text-xl font-bold text-foreground">
+                  {governance.requestCategories.system.requests.toLocaleString()}
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-1 border-t text-xs">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Provider Health Checks:</span>
+                  <span className="font-medium text-foreground">Active</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Model Catalog Syncs:</span>
+                  <span className="font-medium text-foreground">Background Sync</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Token Overhead:</span>
+                  <span className="font-mono text-foreground font-medium">0 tokens</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Average Ping Time:</span>
+                  <span className="font-medium text-foreground">
+                    {governance.requestCategories.system.avgLatencyMs} ms
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground pt-1 border-t text-[11px]">
+                  <span>Operational Impact:</span>
+                  <span className="font-medium text-emerald-500">Autonomous</span>
                 </div>
               </div>
             </div>

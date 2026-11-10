@@ -9,6 +9,7 @@ export const HIDEABLE_SIDEBAR_ITEM_IDS = [
   "embedded-services",
   "combos",
   "combos-live",
+  "smart-proxy",
   "quota",
   // OmniProxy > Compression Context (Settings → Combos → engines → Studio)
   "context-settings",

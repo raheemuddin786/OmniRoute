@@ -163,6 +163,35 @@ export interface EnhancedGovernanceMetrics {
     nonSpbLatencyMs: number;
     spbTokenEfficiency: number;
   };
+  requestCategories?: {
+    coding: {
+      requests: number;
+      tokensPrompt: number;
+      tokensCompletion: number;
+      tokensTotal: number;
+      tokensCompressed: number;
+      tokensCacheRead: number;
+      avgLatencyMs: number;
+    };
+    embeddings: {
+      requests: number;
+      tokensPrompt: number;
+      tokensCompletion: number;
+      tokensTotal: number;
+      tokensCompressed: number;
+      tokensCacheRead: number;
+      avgLatencyMs: number;
+    };
+    system: {
+      requests: number;
+      tokensPrompt: number;
+      tokensCompletion: number;
+      tokensTotal: number;
+      tokensCompressed: number;
+      tokensCacheRead: number;
+      avgLatencyMs: number;
+    };
+  };
 }
 
 export interface ConfirmationGateRecord {
@@ -728,6 +757,78 @@ export function getEnhancedGovernanceMetrics(
     const repromptCount = Number(evalRow?.total_reprompts || 0);
     const conclusionReviews = Number(evalRow?.total_evals || 0);
 
+    // 3b. Categorical Request & Token Breakdown (Coding vs. Embeddings vs. System)
+    const categoryRows = db
+      .prepare(
+        `SELECT
+           CASE
+             WHEN path = '/v1/embeddings' OR provider = 'lc-aieng' OR model LIKE '%embedding%' OR model LIKE '%bge%' THEN 'embeddings'
+             WHEN path IN ('/v1/messages', '/chat/completions') THEN 'coding'
+             ELSE 'system'
+           END as category,
+           COUNT(*) as req_count,
+           SUM(COALESCE(tokens_in, 0)) as total_in,
+           SUM(COALESCE(tokens_out, 0)) as total_out,
+           SUM(COALESCE(tokens_compressed, 0)) as total_compressed,
+           SUM(COALESCE(tokens_cache_read, 0)) as total_cache_read,
+           AVG(COALESCE(duration, 0)) as avg_dur
+         FROM call_logs
+         WHERE timestamp >= ? AND timestamp <= ?
+         GROUP BY category`
+      )
+      .all(startIso, endIso) as Array<{
+      category: "coding" | "embeddings" | "system";
+      req_count: number;
+      total_in: number | null;
+      total_out: number | null;
+      total_compressed: number | null;
+      total_cache_read: number | null;
+      avg_dur: number | null;
+    }>;
+
+    const requestCategories = {
+      coding: {
+        requests: 0,
+        tokensPrompt: 0,
+        tokensCompletion: 0,
+        tokensTotal: 0,
+        tokensCompressed: 0,
+        tokensCacheRead: 0,
+        avgLatencyMs: 0,
+      },
+      embeddings: {
+        requests: 0,
+        tokensPrompt: 0,
+        tokensCompletion: 0,
+        tokensTotal: 0,
+        tokensCompressed: 0,
+        tokensCacheRead: 0,
+        avgLatencyMs: 0,
+      },
+      system: {
+        requests: 0,
+        tokensPrompt: 0,
+        tokensCompletion: 0,
+        tokensTotal: 0,
+        tokensCompressed: 0,
+        tokensCacheRead: 0,
+        avgLatencyMs: 0,
+      },
+    };
+
+    for (const cRow of categoryRows) {
+      if (cRow.category in requestCategories) {
+        const cat = requestCategories[cRow.category];
+        cat.requests = Number(cRow.req_count || 0);
+        cat.tokensPrompt = Number(cRow.total_in || 0);
+        cat.tokensCompletion = Number(cRow.total_out || 0);
+        cat.tokensTotal = cat.tokensPrompt + cat.tokensCompletion;
+        cat.tokensCompressed = Number(cRow.total_compressed || 0);
+        cat.tokensCacheRead = Number(cRow.total_cache_read || 0);
+        cat.avgLatencyMs = Math.round(Number(cRow.avg_dur || 0));
+      }
+    }
+
     // 4. Query SPB Error and Waste Analytics
     let wastedTokensTotal = 0;
     const upstreamErrors: EnhancedGovernanceMetrics["upstreamErrors"] = [];
@@ -945,6 +1046,7 @@ export function getEnhancedGovernanceMetrics(
         nonSpbLatencyMs: Math.round(nonSpbLatency),
         spbTokenEfficiency: spbTokensTotal > 0 ? 0.88 : 0,
       },
+      requestCategories,
     };
   } catch (err) {
     console.error("[SPB State] Failed to build enhanced governance metrics:", err);
@@ -973,6 +1075,35 @@ export function getEnhancedGovernanceMetrics(
         spbLatencyMs: 0,
         nonSpbLatencyMs: 0,
         spbTokenEfficiency: 0,
+      },
+      requestCategories: {
+        coding: {
+          requests: 0,
+          tokensPrompt: 0,
+          tokensCompletion: 0,
+          tokensTotal: 0,
+          tokensCompressed: 0,
+          tokensCacheRead: 0,
+          avgLatencyMs: 0,
+        },
+        embeddings: {
+          requests: 0,
+          tokensPrompt: 0,
+          tokensCompletion: 0,
+          tokensTotal: 0,
+          tokensCompressed: 0,
+          tokensCacheRead: 0,
+          avgLatencyMs: 0,
+        },
+        system: {
+          requests: 0,
+          tokensPrompt: 0,
+          tokensCompletion: 0,
+          tokensTotal: 0,
+          tokensCompressed: 0,
+          tokensCacheRead: 0,
+          avgLatencyMs: 0,
+        },
       },
     };
   }
