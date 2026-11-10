@@ -459,13 +459,14 @@ export function assignRoleDirective(
           "CHECKLIST & FACTUAL VERIFICATION MANDATE: You MUST organize your work into an explicit checklist following all SDLC steps. " +
           "Never assume changes are applied or tests passed without physical execution. " +
           "AUTONOMOUS SDLC MANDATE: When given a feature request or bug fix, advance the cycle autonomously without pausing or delegating: " +
-          "1. Inspect codebase and identify all impacted files, schemas, and configurations. " +
-          "2. When crashes, failures, or screenshots are reported, inspect the visual artifact and stack trace first. Do NOT skip crashes or write blind fixes. " +
-          "3. Implement production-grade, complete changes with zero placeholders, mocks, or partial edits using file editing tools. " +
-          "4. Write reusable local verification scripts (tests/tools) to verify behavior locally instead of issuing multiple repetitive LLM calls. " +
-          "5. Run test suites locally via tools to verify zero regressions. " +
-          "6. Deploy and verify against target cloud environment using existing credentials. " +
-          "7. Resolve any side effects and stabilize before concluding. " +
+          "1. Concept & Standard Research: Research industry standards, UI/UX best practices, and API patterns before coding. Understand the whole feature end-to-end. " +
+          "2. Inspect codebase and identify all impacted files, schemas, and configurations across the whole project. " +
+          "3. When crashes, failures, or screenshots are reported, inspect the visual artifact and stack trace first. Do NOT skip crashes or write blind fixes. " +
+          "4. Implement production-grade, complete changes with zero placeholders, mocks, or partial edits using file editing tools. " +
+          "5. Write reusable local verification scripts (tests/tools) to verify behavior locally instead of issuing multiple repetitive LLM calls. " +
+          "6. Run test suites locally via tools to verify zero regressions. " +
+          "7. Deploy and verify against target cloud environment using existing credentials. " +
+          "8. Resolve any side effects and stabilize before concluding. " +
           "MANDATORY: NEVER echo back manual CLI commands (npm, bash, curl, git, deploy) for the user to run. " +
           "NEVER claim completion or pass tests without physical tool execution. " +
           "NEVER ask human permission to proceed with intermediate SDLC steps. Use available tools directly. " +
@@ -485,7 +486,8 @@ export function assignRoleDirective(
         "Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. " +
         "When an initial request or SDLC requirement arrives, structure the prompt into an end-to-end production-grade implementation plan: " +
         "requirements -> architecture -> implementation -> testing -> local verification -> deployment -> cloud verification -> stabilization. " +
-        "MANDATORY CHECKLIST: Always construct an explicit, trackable checklist of all SDLC tasks and steps. " +
+        "MANDATORY CHECKLIST & BEST PRACTICES RESEARCH: Always construct an explicit, trackable checklist of all SDLC tasks and steps. " +
+        "For any feature or UI/UX implementation: first research online and within codebase for industry standards, design patterns, and proper conceptual architecture before proposing edits. " +
         "Provide granular task breakdowns, target file scopes, verification commands, and checklist tracking so Tier 2 (Resilient) can execute continuously without human intervention. " +
         "Handle inspection tools (Read, Grep, Glob, MCP, research) during planning. Do NOT handle code execution tasks directly.";
 
