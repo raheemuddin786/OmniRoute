@@ -36,55 +36,111 @@ export interface IntentProfile {
   duplicateFilePath?: string;
   guidanceContract?: GuidanceContract;
   originalPrompt?: string; // preserved context for recovery and debugging
+  hasVisualOrCrashData?: boolean;
+  hasTestOrDiagnosticFailure?: boolean;
 }
 
 interface ExtractedContent {
   userText: string;
   hasToolResult: boolean;
   toolResultText: string;
+  hasVisualOrCrashData: boolean;
+  hasTestOrDiagnosticFailure: boolean;
 }
 
 function extractMessageContent(msg: { role: string; content?: unknown }): ExtractedContent {
   const content = msg.content;
+  const crashKeywordsRegex =
+    /\b(error|exception|fail(?:ed|ure)?|crash|fatal|traceback|syntaxerror|typeerror|referenceerror|broken|exited with code [1-9]|npm err!)\b/i;
+  const testFailureRegex =
+    /\b(failing|failed|assertionerror|test failed|vitest|jest|mocha|pytest|spec|assert|expect)\b/i;
+
   if (typeof content === "string") {
-    return { userText: content, hasToolResult: false, toolResultText: "" };
+    const hasCrash = crashKeywordsRegex.test(content);
+    return {
+      userText: content,
+      hasToolResult: false,
+      toolResultText: "",
+      hasVisualOrCrashData: hasCrash,
+      hasTestOrDiagnosticFailure: hasCrash && testFailureRegex.test(content),
+    };
   }
   if (!content) {
-    return { userText: "", hasToolResult: false, toolResultText: "" };
+    return {
+      userText: "",
+      hasToolResult: false,
+      toolResultText: "",
+      hasVisualOrCrashData: false,
+      hasTestOrDiagnosticFailure: false,
+    };
   }
   let userText = "";
   let toolResultText = "";
   let hasToolResult = false;
+  let hasVisualOrCrashData = false;
+  let hasTestOrDiagnosticFailure = false;
 
   if (Array.isArray(content)) {
     for (const part of content) {
       if (typeof part === "string") {
         userText += " " + part;
+        if (crashKeywordsRegex.test(part)) hasVisualOrCrashData = true;
+        if (testFailureRegex.test(part)) hasTestOrDiagnosticFailure = true;
       } else if (part && typeof part === "object") {
         const item = part as Record<string, unknown>;
+        if (
+          item.type === "image" ||
+          item.type === "image_url" ||
+          item.image ||
+          item.source !== undefined
+        ) {
+          hasVisualOrCrashData = true;
+        }
+
         if (item.type === "tool_result" || item.tool_use_id) {
           hasToolResult = true;
           const res =
             typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? "");
           toolResultText += " " + res;
+          if (crashKeywordsRegex.test(res)) hasVisualOrCrashData = true;
+          if (testFailureRegex.test(res)) hasTestOrDiagnosticFailure = true;
         } else if (typeof item.text === "string") {
           userText += " " + item.text;
+          if (crashKeywordsRegex.test(item.text)) hasVisualOrCrashData = true;
+          if (testFailureRegex.test(item.text)) hasTestOrDiagnosticFailure = true;
         } else if (typeof item.content === "string") {
           userText += " " + item.content;
+          if (crashKeywordsRegex.test(item.content)) hasVisualOrCrashData = true;
+          if (testFailureRegex.test(item.content)) hasTestOrDiagnosticFailure = true;
         }
       }
     }
   } else if (typeof content === "object") {
     const item = content as Record<string, unknown>;
+    if (
+      item.type === "image" ||
+      item.type === "image_url" ||
+      item.image ||
+      item.source !== undefined
+    ) {
+      hasVisualOrCrashData = true;
+    }
+
     if (item.type === "tool_result" || item.tool_use_id) {
       hasToolResult = true;
       const res =
         typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? "");
       toolResultText += " " + res;
+      if (crashKeywordsRegex.test(res)) hasVisualOrCrashData = true;
+      if (testFailureRegex.test(res)) hasTestOrDiagnosticFailure = true;
     } else if (typeof item.text === "string") {
-      userText = item.text;
+      userText += " " + item.text;
+      if (crashKeywordsRegex.test(item.text)) hasVisualOrCrashData = true;
+      if (testFailureRegex.test(item.text)) hasTestOrDiagnosticFailure = true;
     } else if (typeof item.content === "string") {
-      userText = item.content;
+      userText += " " + item.content;
+      if (crashKeywordsRegex.test(item.content)) hasVisualOrCrashData = true;
+      if (testFailureRegex.test(item.content)) hasTestOrDiagnosticFailure = true;
     }
   }
 
@@ -92,6 +148,8 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
     userText: userText.trim(),
     hasToolResult,
     toolResultText: toolResultText.trim(),
+    hasVisualOrCrashData,
+    hasTestOrDiagnosticFailure,
   };
 }
 
@@ -393,6 +451,8 @@ export function classifyIntent(
     isDuplicateFileRead,
     duplicateFilePath,
     originalPrompt: originalPromptText || "",
+    hasVisualOrCrashData: latestExtracted.hasVisualOrCrashData,
+    hasTestOrDiagnosticFailure: latestExtracted.hasTestOrDiagnosticFailure,
   };
 }
 

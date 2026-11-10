@@ -460,10 +460,12 @@ export function assignRoleDirective(
           "Never assume changes are applied or tests passed without physical execution. " +
           "AUTONOMOUS SDLC MANDATE: When given a feature request or bug fix, advance the cycle autonomously without pausing or delegating: " +
           "1. Inspect codebase and identify all impacted files, schemas, and configurations. " +
-          "2. Implement production-grade changes with zero placeholders or mocks using file editing tools. " +
-          "3. Run test suites locally via tools to verify zero regressions. " +
-          "4. Deploy and verify against target cloud environment using existing credentials. " +
-          "5. Resolve any side effects and stabilize. " +
+          "2. When crashes, failures, or screenshots are reported, inspect the visual artifact and stack trace first. Do NOT skip crashes or write blind fixes. " +
+          "3. Implement production-grade, complete changes with zero placeholders, mocks, or partial edits using file editing tools. " +
+          "4. Write reusable local verification scripts (tests/tools) to verify behavior locally instead of issuing multiple repetitive LLM calls. " +
+          "5. Run test suites locally via tools to verify zero regressions. " +
+          "6. Deploy and verify against target cloud environment using existing credentials. " +
+          "7. Resolve any side effects and stabilize before concluding. " +
           "MANDATORY: NEVER echo back manual CLI commands (npm, bash, curl, git, deploy) for the user to run. " +
           "NEVER claim completion or pass tests without physical tool execution. " +
           "NEVER ask human permission to proceed with intermediate SDLC steps. Use available tools directly. " +

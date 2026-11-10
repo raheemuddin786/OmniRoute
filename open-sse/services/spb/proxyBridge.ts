@@ -231,16 +231,26 @@ export async function processSmartProxyRouting(
     // 3. Only an actual code mutation tool result resets the counter to 0.
     const priorConsecutiveReads = existingCheckpoint?.consecutiveReads ?? 0;
     const isNonMutatingToolResult = intent.isToolResultTurn && !intent.isCodeMutationToolResult;
+    // Visual crash inspection or active diagnostic error turns should NOT count as passive stagnation.
+    // When the agent is diagnosing a crash screenshot, test failure, or stack trace, it must be granted
+    // diagnostic latitude to inspect the relevant error line or visual artifact before editing code blindly.
+    const isDiagnosticOrVisualTurn = Boolean(
+      intent.hasVisualOrCrashData || intent.hasTestOrDiagnosticFailure
+    );
+
     const isInspectionPhase =
       intent.taskPhase === "INSPECTION_SYNTHESIS" ||
       intent.taskPhase === "DETERMINISTIC_ROUTING" ||
-      intent.taskPhase === "TESTING_AND_VERIFICATION";
+      (intent.taskPhase === "TESTING_AND_VERIFICATION" && !isDiagnosticOrVisualTurn);
 
     if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
       // Confirmed code mutation: reset counter
       consecutiveReads = 0;
+    } else if (isDiagnosticOrVisualTurn) {
+      // Diagnostic turn inspecting failure or visual crash output: preserve counter without incrementing
+      consecutiveReads = priorConsecutiveReads || 0;
     } else if (isNonMutatingToolResult || isInspectionPhase) {
-      // Any non-mutating tool execution or inspection phase accumulates stagnation
+      // Any passive non-mutating tool execution or inspection phase accumulates stagnation
       consecutiveReads = (priorConsecutiveReads || 0) + 1;
     } else {
       // Direct human instruction turns preserve the prior counter
