@@ -10,7 +10,7 @@ import {
   detectModelCapabilities,
   detectComboCapabilities,
   isModelEligibleForTier,
-  matchesCapabilityFilter,
+  matchesCapabilityFilters,
   getTierColorClass,
 } from "./tierModelSelectHelpers";
 import {
@@ -63,9 +63,14 @@ export default function TierModelSelectModal({
   const [localSelected, setLocalSelected] = useState<Set<string>>(() => new Set(selectedModels));
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [customModels, setCustomModels] = useState<Record<string, unknown[]>>({});
+  const [syncedModels, setSyncedModels] = useState<
+    Record<string, Array<{ id?: string; name?: string }>>
+  >({});
   const [combos, setCombos] = useState<ComboItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeCapabilityFilter, setActiveCapabilityFilter] = useState<CapabilityFilterKey>("all");
+  const [activeCapabilityFilters, setActiveCapabilityFilters] = useState<Set<CapabilityFilterKey>>(
+    () => new Set(["all"])
+  );
   const [selectedProviderFilter, setSelectedProviderFilter] = useState<string>("all");
   const [showConfiguredOnly, setShowConfiguredOnly] = useState(true);
   const [sortOrder, setSortOrder] = useState<"free-first" | "context-desc" | "name-asc">(
@@ -80,23 +85,44 @@ export default function TierModelSelectModal({
     if (isOpen) {
       setLocalSelected(new Set(selectedModels));
       setSearchQuery("");
-      setActiveCapabilityFilter("all");
+      setActiveCapabilityFilters(new Set(["all"]));
       setSelectedProviderFilter("all");
       setSortOrder("free-first");
       setCustomInput("");
     }
   }
 
-  // Fetch connections and custom models
+  // Multi-select capability filter handler
+  const handleToggleCapabilityFilter = (filterKey: CapabilityFilterKey) => {
+    setActiveCapabilityFilters((prev) => {
+      const next = new Set(prev);
+      if (filterKey === "all") {
+        return new Set(["all"]);
+      }
+      next.delete("all");
+      if (next.has(filterKey)) {
+        next.delete(filterKey);
+        if (next.size === 0) {
+          next.add("all");
+        }
+      } else {
+        next.add(filterKey);
+      }
+      return next;
+    });
+  };
+
+  // Fetch connections, custom models, synced catalog, and combos
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
 
     const loadData = async () => {
       try {
-        const [connRes, customRes, combosRes] = await Promise.all([
+        const [connRes, customRes, syncedRes, combosRes] = await Promise.all([
           fetch("/api/providers").catch(() => null),
           fetch("/api/provider-models").catch(() => null),
+          fetch("/api/synced-available-models").catch(() => null),
           fetch("/api/combos").catch(() => null),
         ]);
 
@@ -108,6 +134,11 @@ export default function TierModelSelectModal({
         if (!cancelled && customRes?.ok) {
           const customData = await customRes.json();
           setCustomModels(customData.models || {});
+        }
+
+        if (!cancelled && syncedRes?.ok) {
+          const syncedData = await syncedRes.json();
+          setSyncedModels(syncedData || {});
         }
 
         if (!cancelled && combosRes?.ok) {
@@ -211,9 +242,37 @@ export default function TierModelSelectModal({
           });
         }
       });
+
+      // 3. Synced models from active upstream providers
+      const providerSynced = (syncedModels[providerId] || []) as Array<{
+        id: string;
+        name?: string;
+        toolCalling?: boolean;
+        supportsReasoning?: boolean;
+        alwaysReasons?: boolean;
+        supportsVision?: boolean;
+        contextLength?: number;
+      }>;
+      providerSynced.forEach((m) => {
+        const fullValue = `${alias}/${m.id}`;
+        const caps = detectModelCapabilities(providerId, m, urlOrHost);
+        if (!seenValues.has(fullValue)) {
+          seenValues.add(fullValue);
+          pool.push({
+            id: m.id,
+            name: m.name || m.id,
+            fullValue,
+            providerId,
+            providerAlias: alias,
+            providerName,
+            capabilities: caps,
+            isConfigured,
+          });
+        }
+      });
     });
 
-    // 3. Combos pool
+    // 4. Combos pool (persisted user combos)
     combos.forEach((combo) => {
       const comboName = combo.name || combo.id;
       if (!comboName) return;
@@ -242,8 +301,89 @@ export default function TierModelSelectModal({
       }
     });
 
+    // 5. Dynamic Built-in Auto Combos (auto/best-coding, auto/best-reasoning, auto/best-free, etc.)
+    const BUILTIN_AUTO_COMBOS = [
+      {
+        id: "auto/best-coding",
+        name: "auto/best-coding",
+        description: "Built-in auto routing: Best coding model selection across active providers",
+      },
+      {
+        id: "auto/best-reasoning",
+        name: "auto/best-reasoning",
+        description:
+          "Built-in auto routing: Best reasoning model selection across active providers",
+      },
+      {
+        id: "auto/best-fast",
+        name: "auto/best-fast",
+        description:
+          "Built-in auto routing: Lowest latency fast model selection across active providers",
+      },
+      {
+        id: "auto/best-vision",
+        name: "auto/best-vision",
+        description:
+          "Built-in auto routing: Multimodal and vision model selection across active providers",
+      },
+      {
+        id: "auto/best-chat",
+        name: "auto/best-chat",
+        description: "Built-in auto routing: General chat model selection across active providers",
+      },
+      {
+        id: "auto/best-coding-fast",
+        name: "auto/best-coding-fast",
+        description: "Built-in auto routing: Fast coding model selection across active providers",
+      },
+      {
+        id: "auto/best-free",
+        name: "auto/best-free",
+        description:
+          "Built-in auto routing: 100% strictly verified free models across active providers",
+      },
+      {
+        id: "auto/best-chaos",
+        name: "auto/best-chaos",
+        description:
+          "Built-in auto routing: Parallel multi-model dispatch to top stable candidates",
+      },
+      {
+        id: "auto/coding:free",
+        name: "auto/coding:free",
+        description: "Built-in auto routing: Free coding models across active providers",
+      },
+      {
+        id: "auto/reasoning:free",
+        name: "auto/reasoning:free",
+        description: "Built-in auto routing: Free reasoning models across active providers",
+      },
+    ];
+
+    BUILTIN_AUTO_COMBOS.forEach((ac) => {
+      if (!seenValues.has(ac.id)) {
+        seenValues.add(ac.id);
+        const caps = detectComboCapabilities(ac);
+        pool.push({
+          id: ac.id,
+          name: ac.name,
+          fullValue: ac.id,
+          providerId: "combo",
+          providerAlias: "combo",
+          providerName: "Combos",
+          capabilities: caps,
+          isConfigured: true,
+          isCombo: true,
+          comboId: ac.id,
+          comboStrategy: "auto",
+          comboModels: [],
+          comboDescription: ac.description,
+        });
+      }
+    });
+
     return pool;
-  }, [allProvidersMap, activeProviderIds, connections, customModels, combos]);
+  }, [allProvidersMap, activeProviderIds, connections, customModels, syncedModels, combos]);
 
   // Strictly filter models for the selected tier and capability filters
   const filteredModels = useMemo(() => {
@@ -264,8 +404,8 @@ export default function TierModelSelectModal({
           return false;
         }
 
-        // 4. Capability Filter Chip
-        if (!matchesCapabilityFilter(activeCapabilityFilter, model.capabilities, tier)) {
+        // 4. Capability Filter Chips (multi-select)
+        if (!matchesCapabilityFilters(activeCapabilityFilters, model.capabilities, tier)) {
           return false;
         }
 
@@ -312,7 +452,7 @@ export default function TierModelSelectModal({
     tier,
     showConfiguredOnly,
     selectedProviderFilter,
-    activeCapabilityFilter,
+    activeCapabilityFilters,
     searchQuery,
     sortOrder,
   ]);
@@ -513,15 +653,15 @@ export default function TierModelSelectModal({
           </select>
         </div>
 
-        {/* Capability Filters */}
+        {/* Capability Filters (Multi-Select) */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs select-none">
           <span className="text-[11px] text-muted-foreground font-medium mr-1">Capabilities:</span>
           <button
             type="button"
-            onClick={() => setActiveCapabilityFilter("all")}
+            onClick={() => handleToggleCapabilityFilter("all")}
             className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-              activeCapabilityFilter === "all"
-                ? "bg-primary text-primary-foreground border-primary"
+              activeCapabilityFilters.has("all")
+                ? "bg-primary text-primary-foreground border-primary shadow-sm"
                 : "bg-surface border-border text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -529,69 +669,87 @@ export default function TierModelSelectModal({
           </button>
           <button
             type="button"
-            onClick={() => setActiveCapabilityFilter("free")}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-              activeCapabilityFilter === "free"
-                ? "bg-emerald-600 text-white border-emerald-600"
+            onClick={() => handleToggleCapabilityFilter("free")}
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors flex items-center gap-1 ${
+              activeCapabilityFilters.has("free")
+                ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
                 : "bg-surface border-border text-emerald-400 hover:bg-emerald-500/10"
             }`}
           >
-            🎁 Free Models
+            <span>🎁 Free Models</span>
+            {activeCapabilityFilters.has("free") && (
+              <span className="material-symbols-outlined text-[13px] leading-none">check</span>
+            )}
           </button>
           <button
             type="button"
-            onClick={() => setActiveCapabilityFilter("apex")}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-              activeCapabilityFilter === "apex"
-                ? "bg-indigo-600 text-white border-indigo-600"
+            onClick={() => handleToggleCapabilityFilter("apex")}
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors flex items-center gap-1 ${
+              activeCapabilityFilters.has("apex")
+                ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
                 : "bg-surface border-border text-indigo-400 hover:bg-indigo-500/10"
             }`}
           >
-            🧠 Apex Reasoning
+            <span>🧠 Apex Reasoning</span>
+            {activeCapabilityFilters.has("apex") && (
+              <span className="material-symbols-outlined text-[13px] leading-none">check</span>
+            )}
           </button>
           <button
             type="button"
-            onClick={() => setActiveCapabilityFilter("resilient")}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-              activeCapabilityFilter === "resilient"
-                ? "bg-blue-600 text-white border-blue-600"
+            onClick={() => handleToggleCapabilityFilter("resilient")}
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors flex items-center gap-1 ${
+              activeCapabilityFilters.has("resilient")
+                ? "bg-blue-600 text-white border-blue-600 shadow-sm"
                 : "bg-surface border-border text-blue-400 hover:bg-blue-500/10"
             }`}
           >
-            🛡️ Resilient Execution
+            <span>🛡️ Resilient Execution</span>
+            {activeCapabilityFilters.has("resilient") && (
+              <span className="material-symbols-outlined text-[13px] leading-none">check</span>
+            )}
           </button>
           <button
             type="button"
-            onClick={() => setActiveCapabilityFilter("local")}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-              activeCapabilityFilter === "local"
-                ? "bg-emerald-600 text-white border-emerald-600"
+            onClick={() => handleToggleCapabilityFilter("local")}
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors flex items-center gap-1 ${
+              activeCapabilityFilters.has("local")
+                ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
                 : "bg-surface border-border text-emerald-400 hover:bg-emerald-500/10"
             }`}
           >
-            ⚡ Local Engine
+            <span>⚡ Local Engine</span>
+            {activeCapabilityFilters.has("local") && (
+              <span className="material-symbols-outlined text-[13px] leading-none">check</span>
+            )}
           </button>
           <button
             type="button"
-            onClick={() => setActiveCapabilityFilter("tools")}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-              activeCapabilityFilter === "tools"
-                ? "bg-amber-600 text-white border-amber-600"
+            onClick={() => handleToggleCapabilityFilter("tools")}
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors flex items-center gap-1 ${
+              activeCapabilityFilters.has("tools")
+                ? "bg-amber-600 text-white border-amber-600 shadow-sm"
                 : "bg-surface border-border text-amber-400 hover:bg-amber-500/10"
             }`}
           >
-            ⚙️ Tool Calling
+            <span>⚙️ Tool Calling</span>
+            {activeCapabilityFilters.has("tools") && (
+              <span className="material-symbols-outlined text-[13px] leading-none">check</span>
+            )}
           </button>
           <button
             type="button"
-            onClick={() => setActiveCapabilityFilter("vision")}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-              activeCapabilityFilter === "vision"
-                ? "bg-cyan-600 text-white border-cyan-600"
+            onClick={() => handleToggleCapabilityFilter("vision")}
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors flex items-center gap-1 ${
+              activeCapabilityFilters.has("vision")
+                ? "bg-cyan-600 text-white border-cyan-600 shadow-sm"
                 : "bg-surface border-border text-cyan-400 hover:bg-cyan-500/10"
             }`}
           >
-            👁️ Multimodal / Vision
+            <span>👁️ Multimodal / Vision</span>
+            {activeCapabilityFilters.has("vision") && (
+              <span className="material-symbols-outlined text-[13px] leading-none">check</span>
+            )}
           </button>
         </div>
       </div>

@@ -142,7 +142,7 @@ export function detectComboCapabilities(combo: {
   description?: string;
   computed_context_length?: number;
 }): ModelCapabilities {
-  const comboName = combo.name || combo.id || "";
+  const comboName = `${combo.id || ""} ${combo.name || ""}`;
   const comboDesc = combo.description || "";
   const memberModelStrings = (Array.isArray(combo.models) ? combo.models : []).map((m) =>
     typeof m === "string" ? m : m?.model || ""
@@ -151,13 +151,21 @@ export function detectComboCapabilities(combo: {
   const hasApexMember = memberModelStrings.some((m) => APEX_REASONING_REGEX.test(m));
   const nameMatchesApex =
     APEX_REASONING_REGEX.test(comboName) ||
-    /apex|reasoning|reasoner|thought|thinking|deep-think/i.test(comboName) ||
-    /apex|reasoning|reasoner|thought|thinking/i.test(comboDesc);
+    /apex|reasoning|reasoner|thought|thinking|deep-think|best-reasoning|pro-reasoning|best-coding|pro-coding/i.test(
+      comboName
+    ) ||
+    /apex|reasoning|reasoner|thought|thinking|best-reasoning|best-coding/i.test(comboDesc);
 
   const isApexReasoning = hasApexMember || nameMatchesApex;
 
   const hasResilientMember = memberModelStrings.some((m) => RESILIENT_EXECUTION_REGEX.test(m));
-  const isResilient = hasResilientMember;
+  const nameMatchesResilient =
+    RESILIENT_EXECUTION_REGEX.test(comboName) ||
+    /resilient|execution|coding|coder|best-coding|pro-coding|auto\/coding|auto\/best-coding/i.test(
+      comboName
+    ) ||
+    /resilient|execution|coding/i.test(comboDesc);
+  const isResilient = hasResilientMember || nameMatchesResilient;
 
   const allLocal =
     memberModelStrings.length > 0 &&
@@ -178,20 +186,25 @@ export function detectComboCapabilities(combo: {
 
   const nameMatchesLocal =
     LOCAL_MODEL_FAMILY_REGEX.test(comboName) ||
-    /local|edge|ollama|offline|fast|speed|quick|mini|lite|free|refactor|small/i.test(comboName) ||
+    /local|edge|ollama|offline|fast|speed|quick|mini|lite|free|refactor|small|best-fast|pro-fast/i.test(
+      comboName
+    ) ||
     /local|edge|ollama|offline|fast|speed|quick|mini|lite|free|refactor|small/i.test(comboDesc);
 
   const isLocalEngine = allLocal || hasLocalMember || nameMatchesLocal;
 
-  const hasToolCalling = !memberModelStrings.every((m) =>
-    /(embedding|tts|rerank|diffusion|whisper)/i.test(m)
-  );
+  const hasToolCalling =
+    comboName.startsWith("auto/") ||
+    (memberModelStrings.length > 0 &&
+      !memberModelStrings.every((m) => /(embedding|tts|rerank|diffusion|whisper)/i.test(m)));
 
-  const hasVision = memberModelStrings.some((m) => isVisionModelId(m));
+  const hasVision =
+    /vision|multimodal/i.test(comboName) || memberModelStrings.some((m) => isVisionModelId(m));
 
   const isFree =
-    memberModelStrings.length > 0 &&
-    memberModelStrings.every((m) => /(:free|free|gratis)/i.test(m));
+    /free/i.test(comboName) ||
+    (memberModelStrings.length > 0 &&
+      memberModelStrings.every((m) => /(:free|free|gratis)/i.test(m)));
 
   return {
     isApexReasoning,
@@ -243,6 +256,24 @@ export function matchesCapabilityFilter(
     default:
       return true;
   }
+}
+
+/**
+ * Checks whether model capabilities satisfy all selected capability filters (multi-select).
+ * "all" means no specific capability filter constraint.
+ * If multiple filters are active (e.g. ["free", "apex"]), the model must satisfy all of them.
+ */
+export function matchesCapabilityFilters(
+  activeFilters: Set<CapabilityFilterKey> | CapabilityFilterKey[],
+  caps: ModelCapabilities,
+  tier: SpbTierKey
+): boolean {
+  const filterList = Array.isArray(activeFilters) ? activeFilters : Array.from(activeFilters);
+  const specificFilters = filterList.filter((f) => f !== "all");
+  if (specificFilters.length === 0) {
+    return isModelEligibleForTier(tier, caps);
+  }
+  return specificFilters.every((f) => matchesCapabilityFilter(f, caps, tier));
 }
 
 export function getTierColorClass(tier: SpbTierKey): {

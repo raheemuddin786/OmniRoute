@@ -6,6 +6,7 @@ import {
   detectComboCapabilities,
   isModelEligibleForTier,
   matchesCapabilityFilter,
+  matchesCapabilityFilters,
   getTierColorClass,
 } from "../../src/shared/components/tierModelSelectHelpers";
 
@@ -175,4 +176,100 @@ test("detectComboCapabilities correctly qualifies edge, fast, free, and local co
   });
   assert.equal(qwenGemmaCombo.isLocalEngine, true);
   assert.equal(isModelEligibleForTier("local", qwenGemmaCombo), true);
+});
+
+test("matchesCapabilityFilters supports multi-select capability combinations", () => {
+  const freeApexCaps = {
+    isApexReasoning: true,
+    isResilient: true,
+    isLocalEngine: false,
+    hasToolCalling: true,
+    hasVision: true,
+    isFree: true,
+  };
+
+  const paidApexCaps = {
+    isApexReasoning: true,
+    isResilient: true,
+    isLocalEngine: false,
+    hasToolCalling: true,
+    hasVision: true,
+    isFree: false,
+  };
+
+  const freeLocalCaps = {
+    isApexReasoning: false,
+    isResilient: false,
+    isLocalEngine: true,
+    hasToolCalling: false,
+    hasVision: false,
+    isFree: true,
+  };
+
+  // 'all' matches any eligible model
+  assert.equal(matchesCapabilityFilters(["all"], freeApexCaps, "apex"), true);
+  assert.equal(matchesCapabilityFilters(new Set(["all"]), paidApexCaps, "apex"), true);
+
+  // Single select
+  assert.equal(matchesCapabilityFilters(["free"], freeApexCaps, "apex"), true);
+  assert.equal(matchesCapabilityFilters(["free"], paidApexCaps, "apex"), false);
+  assert.equal(matchesCapabilityFilters(["apex"], freeApexCaps, "apex"), true);
+  assert.equal(matchesCapabilityFilters(["apex"], freeLocalCaps, "apex"), false);
+
+  // Multi-select combinations: Free + Apex Reasoning
+  assert.equal(matchesCapabilityFilters(["free", "apex"], freeApexCaps, "apex"), true);
+  assert.equal(matchesCapabilityFilters(["free", "apex"], paidApexCaps, "apex"), false); // fails free
+  assert.equal(matchesCapabilityFilters(["free", "apex"], freeLocalCaps, "apex"), false); // fails apex
+
+  // Multi-select with Set
+  assert.equal(
+    matchesCapabilityFilters(new Set(["free", "tools"]), freeApexCaps, "resilient"),
+    true
+  );
+  assert.equal(
+    matchesCapabilityFilters(new Set(["free", "tools"]), freeLocalCaps, "resilient"),
+    false
+  ); // fails tools
+});
+
+test("detectComboCapabilities correctly classifies built-in auto combos", () => {
+  const autoCoding = detectComboCapabilities({
+    id: "auto/best-coding",
+    name: "Auto: Best Coding Model",
+    strategy: "auto",
+    models: ["auto"],
+  });
+  assert.equal(autoCoding.isApexReasoning, true);
+  assert.equal(autoCoding.isResilient, true);
+  assert.equal(autoCoding.hasToolCalling, true);
+
+  const autoReasoning = detectComboCapabilities({
+    id: "auto/best-reasoning",
+    name: "Auto: Best Reasoning Model",
+    strategy: "auto",
+    models: ["auto"],
+  });
+  assert.equal(autoReasoning.isApexReasoning, true);
+  assert.equal(autoReasoning.isResilient, false);
+  assert.equal(autoReasoning.hasToolCalling, true);
+
+  const autoFast = detectComboCapabilities({
+    id: "auto/best-fast",
+    name: "Auto: Fastest Low-Latency Model",
+    strategy: "auto",
+    models: ["auto"],
+  });
+  assert.equal(autoFast.isLocalEngine, true);
+  assert.equal(autoFast.isResilient, false);
+  assert.equal(autoFast.hasToolCalling, true);
+
+  const autoFree = detectComboCapabilities({
+    id: "auto/best-free",
+    name: "Auto: Best Free Model",
+    strategy: "auto",
+    models: ["auto"],
+  });
+  assert.equal(autoFree.isFree, true);
+  assert.equal(autoFree.isLocalEngine, true);
+  assert.equal(autoFree.hasToolCalling, true);
 });

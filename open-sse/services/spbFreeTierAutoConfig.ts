@@ -356,6 +356,129 @@ export function discoverAvailableFreeTierModels(): FreeTierDiscoveredModel[] {
     });
   }
 
+  // Also discover free models from active provider connections' synchronized catalogs
+  // and model capabilities whose IDs or display names contain "free".
+  try {
+    const { getDbInstance } = lazyRequire("../../src/lib/db/core") as {
+      getDbInstance: () => {
+        prepare: (s: string) => {
+          all: () => Array<{ key?: string; value?: string; provider?: string; model_id?: string }>;
+        };
+      };
+    };
+    const db = getDbInstance();
+
+    // 1. From syncedAvailableModels
+    const syncedRows = db
+      .prepare("SELECT key, value FROM key_value WHERE namespace = 'syncedAvailableModels'")
+      .all();
+
+    for (const row of syncedRows) {
+      if (!row.key || !row.value) continue;
+      const provider = row.key.split(":")[0].toLowerCase().trim();
+      if (!activeProviders.has(provider)) continue;
+
+      let list: Array<{ id?: string; name?: string }> = [];
+      try {
+        list = JSON.parse(row.value);
+      } catch {
+        continue;
+      }
+
+      for (const m of list) {
+        const modelId = m.id || "";
+        const modelName = m.name || modelId;
+        const mLower = modelId.toLowerCase();
+        const nameLower = modelName.toLowerCase();
+
+        // Must explicitly denote free
+        if (
+          mLower.includes("free") ||
+          nameLower.includes("free") ||
+          mLower.endsWith(":free") ||
+          isCatalogFreeModel(provider, modelId) ||
+          isFreeModel(provider, { id: modelId })
+        ) {
+          const fullModelSlug = `${provider}/${modelId}`;
+          if (seen.has(fullModelSlug)) continue;
+          seen.add(fullModelSlug);
+
+          const tier = classifyFreeModelTier(modelId, provider);
+          let reasoningCap =
+            mLower.includes("r1") || mLower.includes("reason") || mLower.includes("pro");
+          let toolCallCap = !mLower.includes("base") && !mLower.includes("preview");
+          let codingCap =
+            mLower.includes("code") || mLower.includes("coder") || mLower.includes("plus");
+
+          try {
+            const caps = getResolvedModelCapabilities({ provider, model: modelId });
+            if (caps) {
+              if (typeof caps.reasoning === "boolean") reasoningCap = caps.reasoning;
+              if (typeof caps.toolCalling === "boolean") toolCallCap = caps.toolCalling;
+            }
+          } catch {}
+
+          results.push({
+            provider,
+            model: modelId,
+            displayName: modelName,
+            tier,
+            capabilities: {
+              reasoning: reasoningCap,
+              toolCall: toolCallCap,
+              coding: codingCap,
+            },
+          });
+        }
+      }
+    }
+
+    // 2. From model_capabilities table for active providers
+    const capRows = db
+      .prepare("SELECT provider, model_id FROM model_capabilities WHERE model_id LIKE '%free%'")
+      .all();
+
+    for (const r of capRows) {
+      if (!r.provider || !r.model_id) continue;
+      const provLower = r.provider.toLowerCase().trim();
+      if (!activeProviders.has(provLower)) continue;
+
+      const fullModelSlug = `${provLower}/${r.model_id}`;
+      if (seen.has(fullModelSlug)) continue;
+      seen.add(fullModelSlug);
+
+      const tier = classifyFreeModelTier(r.model_id, provLower);
+      const mLower = r.model_id.toLowerCase();
+      let reasoningCap =
+        mLower.includes("r1") || mLower.includes("reason") || mLower.includes("pro");
+      let toolCallCap = !mLower.includes("base") && !mLower.includes("preview");
+      let codingCap =
+        mLower.includes("code") || mLower.includes("coder") || mLower.includes("plus");
+
+      try {
+        const caps = getResolvedModelCapabilities({ provider: provLower, model: r.model_id });
+        if (caps) {
+          if (typeof caps.reasoning === "boolean") reasoningCap = caps.reasoning;
+          if (typeof caps.toolCalling === "boolean") toolCallCap = caps.toolCalling;
+        }
+      } catch {}
+
+      results.push({
+        provider: provLower,
+        model: r.model_id,
+        displayName: r.model_id,
+        tier,
+        capabilities: {
+          reasoning: reasoningCap,
+          toolCall: toolCallCap,
+          coding: codingCap,
+        },
+      });
+    }
+  } catch {
+    // Non-fatal if DB queries fail
+  }
+
   return results;
 }
 
