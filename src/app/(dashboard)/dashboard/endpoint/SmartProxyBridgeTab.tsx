@@ -1931,11 +1931,24 @@ export function SmartProxyBridgeTab() {
                 )}
               </div>
               <button
+                type="button"
                 onClick={handleSaveConfig}
                 disabled={savingConfig}
-                className="inline-flex items-center justify-center rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground shadow hover:bg-secondary/80 transition-colors disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-md hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
               >
-                {savingConfig ? "Saving Configuration..." : "Apply Bridge Parameters"}
+                {savingConfig ? (
+                  <>
+                    <span className="material-symbols-outlined text-[16px] animate-spin">
+                      progress_activity
+                    </span>
+                    <span>Saving Configuration...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                    <span>Apply Bridge Parameters</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
