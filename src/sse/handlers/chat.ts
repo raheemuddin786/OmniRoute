@@ -1,10 +1,5 @@
 import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
-import {
-  getTierConfig,
-  resolveVirtualTierModels,
-  expandComboModelsFromDb,
-} from "@omniroute/open-sse/services/tierResolver";
-import { isFreeModelTarget } from "@omniroute/open-sse/services/spbFreeTierAutoConfig";
+import { getTierConfig } from "@omniroute/open-sse/services/tierResolver";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -64,10 +59,7 @@ import { isVerifiedNativeCodexRequest } from "@omniroute/open-sse/config/codexId
 import { resolveCompressionSettings } from "@omniroute/open-sse/handlers/chatCore/compressionSettings.ts";
 import { runWithTurnExecutionOwnership } from "@omniroute/open-sse/handlers/chatCore/turnExecutionContext.ts";
 import type { CompressionExclusions } from "@omniroute/open-sse/services/compression/exclusions.ts";
-import {
-  resolveComboConfig,
-  DEFAULT_COMBO_TARGET_TIMEOUT_MS,
-} from "@omniroute/open-sse/services/comboConfig.ts";
+import { resolveComboConfig } from "@omniroute/open-sse/services/comboConfig.ts";
 import { injectHandoffIntoBody } from "@omniroute/open-sse/services/contextHandoff.ts";
 import { runWithTransientBackendRetry } from "@omniroute/open-sse/services/transientBackendRetry.ts";
 import { isMarkedLocalProcessPressureResponse } from "@omniroute/open-sse/utils/localPressureResponse.ts";
@@ -1317,15 +1309,7 @@ async function handleChatImplementation(
     isVirtualTierModel ||
     (isSpbActive && (resolvedModelStr === "auto" || resolvedModelStr === "default"));
 
-  const isIncompatibleModality =
-    isSpbActive &&
-    (resolvedModelStr.includes("transcribe") ||
-      resolvedModelStr.includes("whisper") ||
-      resolvedModelStr.includes("diffusion"));
-
-  let spbCombo: any = null;
-
-  if (isSpbActive && (isSpbModel || isIncompatibleModality)) {
+  if (isSpbActive && isSpbModel) {
     const currentTierConfig = getTierConfig();
     const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
     let activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
@@ -1333,11 +1317,7 @@ async function handleChatImplementation(
     // Guard: Tier 3 models require a guidanceContract from Tier 1/Tier 2
     // to ensure supervised execution of modifications. Without guidance,
     // automatically escalate to Tier 2 resilient execution.
-    // INSPECTION_SYNTHESIS is NOT exempted - ALL Tier 3 phases require guidanceContract
-    // to enforce architectural supervision and prevent hallucinated file paths or
-    // premature termination of execution.
     const tierAssignment = spbDecision?.tierAssignment;
-    const _taskPhase = spbDecision?.intent?.taskPhase; // All Tier 3 phases require guidance, no phase exemptions
     const isUnguidedMutationTier3 =
       activeTier === "tier_3_local" && !tierAssignment?.guidanceContract;
 
@@ -1346,7 +1326,6 @@ async function handleChatImplementation(
         "SPB",
         "Tier 3 execution without guidanceContract - escalating to Tier 2 resilient for supervision"
       );
-      // Re-route by overriding the decision's tier to Tier 2
       (spbDecision.tierAssignment as any).tier = "tier_2_resilient";
       (spbDecision.tierAssignment as any).recommendedModels = tierModels.resilient || [];
       (spbDecision.tierAssignment as any).requiresGuidance = true;
@@ -1354,300 +1333,54 @@ async function handleChatImplementation(
       activeTier = "tier_2_resilient";
     }
 
-    // 1. First-class Combo Delegation:
-    // Check if the SPB-selected target or any configured model for this active tier
-    // resolves to an existing, registered Combo in SQLite.
-    // If so, dispatch directly to the combo without flattening or overriding its strategy.
-    const tierConfiguredTargets =
-      activeTier === "tier_1_apex"
-        ? tierModels.apex
+    // Fully dynamic model / combo resolution:
+    // Dispatches directly to the target configured by the operator in the Admin UI/config.
+    // Preserves combo identity, auto-combo multi-factor scoring, weights, and nested branches.
+    const tierKey =
+      activeTier === "tier_1_apex" ? "apex" : activeTier === "tier_3_local" ? "local" : "resilient";
+
+    const configuredTargets = tierModels[tierKey] || [];
+    const selectedTarget =
+      spbDecision?.selectedModel ||
+      configuredTargets[0] ||
+      (activeTier === "tier_1_apex"
+        ? tierModels.resilient?.[0] || tierModels.local?.[0]
         : activeTier === "tier_3_local"
-          ? tierModels.local
-          : tierModels.resilient;
+          ? tierModels.resilient?.[0] || tierModels.apex?.[0]
+          : tierModels.apex?.[0] || tierModels.local?.[0]);
 
-    const candidateLookupTargets = [
-      spbDecision?.selectedModel,
-      ...(tierConfiguredTargets || []),
-    ].filter((t): t is string => typeof t === "string" && Boolean(t.trim()));
-
-    let targetCombo: any = null;
-    for (const cand of candidateLookupTargets) {
-      const found = await getComboForModel(cand);
-      if (found) {
-        targetCombo = found;
-        break;
-      }
-    }
-
-    if (targetCombo) {
-      const comboName = targetCombo.name || candidateLookupTargets[0];
-      const preservedTierAssignment = spbDecision?.tierAssignment
-        ? { ...spbDecision.tierAssignment }
-        : {
-            tier: activeTier,
-            recommendedModels: [comboName],
-            maxTokens: 8192,
-            temperature: 0.2,
-            cacheEnabled: true,
-          };
-
-      log.info(
-        "SPB",
-        `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → combo "${comboName}" [${targetCombo.strategy || "auto"}] (${targetCombo.models?.length || 0} targets) (tier=${activeTier}, phase=${spbDecision?.intent?.taskPhase || "DEFAULT"})`
+    if (!selectedTarget) {
+      log.error("SPB", `SPB tier '${activeTier}' has no configured model or combo in tierModels.`);
+      return errorResponse(
+        503,
+        `SPB tier '${activeTier}' has no model or combo configured. Please configure it in the Admin UI.`
       );
-
-      resolvedModelStr = comboName;
-      body = {
-        ...body,
-        model: resolvedModelStr,
-        _spbActive: true,
-        _spbDecision: spbDecision
-          ? { ...spbDecision, selectedModel: resolvedModelStr }
-          : {
-              intent: {
-                taskPhase: "DEFAULT",
-                complexityScore: 0.5,
-                requiresTools: false,
-                promptAnchorHash: "",
-              },
-              tierAssignment: preservedTierAssignment,
-              selectedModel: resolvedModelStr,
-              checkpointRestored: false,
-            },
-      };
-
-      spbCombo = targetCombo;
-    } else {
-      // 2. Fallback to candidate model resolution ladder (for raw model arrays or unmapped virtual tiers)
-      // Build complete prioritized fallback ladder across tiers:
-      // primary tier models first, followed by sibling tier models in fallback order.
-      const candidateModels: string[] = [];
-      if (activeTier === "tier_1_apex") {
-        candidateModels.push(
-          ...(spbDecision?.tierAssignment?.recommendedModels?.length
-            ? spbDecision.tierAssignment.recommendedModels
-            : tierModels.apex || []),
-          ...(tierModels.resilient || []),
-          ...(tierModels.local || [])
-        );
-      } else if (activeTier === "tier_3_local") {
-        candidateModels.push(
-          ...(spbDecision?.tierAssignment?.recommendedModels?.length
-            ? spbDecision.tierAssignment.recommendedModels
-            : tierModels.local || []),
-          ...(tierModels.resilient || []),
-          ...(tierModels.apex || [])
-        );
-      } else {
-        // Default / tier_2_resilient: resilient -> apex -> local
-        candidateModels.push(
-          ...(spbDecision?.tierAssignment?.recommendedModels?.length
-            ? spbDecision.tierAssignment.recommendedModels
-            : tierModels.resilient || []),
-          ...(tierModels.apex || []),
-          ...(tierModels.local || [])
-        );
-      }
-
-      // Filter out non-chat modalities AND any self-referential virtual tier identifiers
-      // (e.g. 'resilient/spb-tier-2', 'spb-tier-2', 'tier_2_resilient') so they never become dispatch targets
-      const isVirtualModelName = (name: string) => {
-        const lower = name.toLowerCase();
-        return (
-          lower.startsWith("apex/") ||
-          lower.startsWith("resilient/") ||
-          lower.startsWith("local/") ||
-          lower.startsWith("spb-") ||
-          lower.startsWith("tier_") ||
-          lower.includes("spb-tier") ||
-          lower === "auto" ||
-          lower === "default" ||
-          lower === "auto/spb" ||
-          lower === "auto/smart-proxy-bridge"
-        );
-      };
-
-      // Expand virtual tier identifiers and configured combo models to concrete candidate models
-      const rawCandidates: string[] = [];
-      for (const m of candidateModels) {
-        const modelName = typeof m === "string" ? m : (m as any)?.model || "";
-        if (isVirtualModelName(modelName)) {
-          const resolved = resolveVirtualTierModels(modelName);
-          if (resolved.length > 0) {
-            rawCandidates.push(...resolved);
-          } else {
-            // If resolveVirtualTierModels didn't resolve directly, check if it's a combo in SQLite
-            const fromCombo = expandComboModelsFromDb(modelName);
-            if (fromCombo.length > 0) {
-              rawCandidates.push(...fromCombo);
-            }
-          }
-        } else {
-          // Direct model or custom-named combo
-          const fromCombo = expandComboModelsFromDb(modelName);
-          if (fromCombo.length > 0) {
-            rawCandidates.push(...fromCombo);
-          } else {
-            rawCandidates.push(modelName);
-          }
-        }
-      }
-      if (rawCandidates.length === 0) {
-        rawCandidates.push(...resolveVirtualTierModels(activeTier));
-      }
-
-      let uniqueTierModels = Array.from(new Set(rawCandidates)).filter((m) => {
-        const modelName = typeof m === "string" ? m : (m as any)?.model || "";
-        const lower = modelName.toLowerCase();
-        return (
-          !isVirtualModelName(modelName) &&
-          !lower.includes("diffusion") &&
-          !lower.includes("rerank") &&
-          !lower.includes("embedding") &&
-          !lower.includes("whisper") &&
-          !lower.includes("transcribe")
-        );
-      });
-
-      if (uniqueTierModels.length === 0) {
-        const dynamicModels = resolveVirtualTierModels(activeTier);
-        if (dynamicModels.length > 0) {
-          uniqueTierModels.push(...dynamicModels);
-        }
-      }
-
-      // Strict Free Tier Enforcement: If onlyFreeTierModels is active or tierMode is "free",
-      // filter candidate models to eliminate any paid models from entering the dispatch ladder.
-      const isFreeOnlyActive =
-        currentTierConfig?.onlyFreeTierModels === true ||
-        (activeTier === "tier_1_apex" && currentTierConfig?.tierModes?.apex === "free") ||
-        (activeTier === "tier_2_resilient" && currentTierConfig?.tierModes?.resilient === "free") ||
-        (activeTier === "tier_3_local" && currentTierConfig?.tierModes?.local === "free");
-
-      if (isFreeOnlyActive) {
-        const strictlyFree = uniqueTierModels.filter((m) => {
-          const modelName = typeof m === "string" ? m : (m as any)?.model || "";
-          return isFreeModelTarget(modelName);
-        });
-        if (strictlyFree.length > 0) {
-          uniqueTierModels = strictlyFree;
-        } else {
-          // If no configured models matched, attempt to pull purely free tier models directly
-          const dynamicFree = resolveVirtualTierModels(activeTier).filter((m) =>
-            isFreeModelTarget(m)
-          );
-          if (dynamicFree.length > 0) {
-            uniqueTierModels = dynamicFree;
-          }
-        }
-      }
-
-      // Check if the targeted tier lacks configured models and warn operator
-      const tierConfiguredCount =
-        activeTier === "tier_1_apex"
-          ? tierModels.apex?.length || 0
-          : activeTier === "tier_3_local"
-            ? tierModels.local?.length || 0
-            : tierModels.resilient?.length || 0;
-
-      if (tierConfiguredCount === 0 && candidateModels.length > 0) {
-        log.warn(
-          "SPB",
-          `Target tier '${activeTier}' has no configured models in tierModels; falling back to sibling tier models.`
-        );
-      }
-
-      const effectiveSelectedModel =
-        spbDecision?.selectedModel && uniqueTierModels.includes(spbDecision.selectedModel)
-          ? spbDecision.selectedModel
-          : uniqueTierModels.length > 0
-            ? typeof uniqueTierModels[0] === "string"
-              ? uniqueTierModels[0]
-              : (uniqueTierModels[0] as any).model
-            : null;
-
-      // Preserve the original SPB tier assignment's cacheEnabled and maxTokens
-      // so that downstream model execution respects the tier's caching and token budget.
-      const preservedTierAssignment = spbDecision?.tierAssignment
-        ? { ...spbDecision.tierAssignment }
-        : {
-            tier: activeTier,
-            recommendedModels: uniqueTierModels,
-            maxTokens: 8192,
-            temperature: 0.2,
-            cacheEnabled: true,
-          };
-
-      if (effectiveSelectedModel) {
-        log.info(
-          "SPB",
-          `SPB-IR Dynamic Dispatch: ${resolvedModelStr} → ${effectiveSelectedModel} (tier=${activeTier}, phase=${spbDecision?.intent?.taskPhase || "DEFAULT"})`
-        );
-        resolvedModelStr = effectiveSelectedModel;
-        body = {
-          ...body,
-          model: resolvedModelStr,
-          _spbActive: true,
-          _spbDecision: spbDecision
-            ? { ...spbDecision, selectedModel: effectiveSelectedModel }
-            : {
-                intent: {
-                  taskPhase: "DEFAULT",
-                  complexityScore: 0.5,
-                  requiresTools: false,
-                  promptAnchorHash: "",
-                },
-                tierAssignment: preservedTierAssignment,
-                selectedModel: effectiveSelectedModel,
-                checkpointRestored: false,
-              },
-        };
-
-        spbCombo = {
-          id: `spb-${activeTier}`,
-          name: `SPB ${activeTier}`,
-          type: "spb",
-          strategy: "priority",
-          models: uniqueTierModels.map((m) => (typeof m === "string" ? { model: m } : m)),
-          config: {
-            targetTimeoutMs:
-              typeof process !== "undefined" &&
-              process.env?.SPB_TARGET_TIMEOUT_MS &&
-              Number(process.env.SPB_TARGET_TIMEOUT_MS) > 0
-                ? Number(process.env.SPB_TARGET_TIMEOUT_MS)
-                : typeof currentTierConfig?.fallbackTimeout === "number" &&
-                    currentTierConfig.fallbackTimeout >= 60000
-                  ? currentTierConfig.fallbackTimeout
-                  : DEFAULT_COMBO_TARGET_TIMEOUT_MS,
-            // Preserve SPB-selected model as primary to bypass 58-model fallback cascade
-            candidatePool: uniqueTierModels
-              .map((m) => (typeof m === "string" ? m : (m as any).model || ""))
-              .filter(Boolean),
-          },
-        };
-      } else if (isVirtualTierModel || isSpbModel) {
-        // Safety net: when all configured tier models were virtual identifiers or empty,
-        // we do NOT fall back to hardcoded combos. All models must be explicitly configured
-        // in tier_config or provider registry. Fail fast with clear error.
-        log.error(
-          "SPB",
-          `Virtual tier or SPB model '${resolvedModelStr}' had no concrete models configured. ` +
-            `Configure models in tier_config (database) or provider registry. No hardcoded fallback applied.`
-        );
-        return errorResponse(
-          503,
-          `SPB tier '${activeTier}' has no configured models. Please configure models in tier_config or provider registry.`
-        );
-      } else if (isIncompatibleModality) {
-        const shieldModel = tierModels?.resilient?.[0] || resolvedModelStr;
-        log.warn(
-          "SPB",
-          `Modality Shield: Incompatible non-chat model detected (${resolvedModelStr}), safely redirecting to ${shieldModel}`
-        );
-        resolvedModelStr = shieldModel;
-        body = { ...body, model: resolvedModelStr };
-      }
     }
+
+    resolvedModelStr = selectedTarget;
+    body = {
+      ...body,
+      model: resolvedModelStr,
+      _spbActive: true,
+      _spbDecision: spbDecision
+        ? { ...spbDecision, selectedModel: resolvedModelStr }
+        : {
+            intent: {
+              taskPhase: "DEFAULT",
+              complexityScore: 0.5,
+              requiresTools: false,
+              promptAnchorHash: "",
+            },
+            tierAssignment: spbDecision?.tierAssignment,
+            selectedModel: resolvedModelStr,
+            checkpointRestored: false,
+          },
+    };
+
+    log.info(
+      "SPB",
+      `SPB-IR Dynamic Dispatch: ${modelStr} → "${resolvedModelStr}" (tier=${activeTier}, phase=${spbDecision?.intent?.taskPhase || "DEFAULT"})`
+    );
   }
 
   let _taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;
@@ -1709,7 +1442,7 @@ async function handleChatImplementation(
 
   // Check if model is a combo (has multiple models with fallback)
   telemetry.startPhase("resolve");
-  let combo: any = spbCombo || (await getComboForModel(resolvedModelStr));
+  let combo: any = await getComboForModel(resolvedModelStr);
   if (reasoningDecision?.targetCombo) combo = reasoningDecision.targetCombo;
 
   // "auto" prefix fuzzy matching: "auto/fast" → "auto/best-fast", etc.
