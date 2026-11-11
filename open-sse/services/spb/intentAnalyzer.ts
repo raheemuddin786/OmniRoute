@@ -241,12 +241,33 @@ export function classifyIntent(
 
   const targetText = activeHumanText;
 
-  // Detect code modification / mutation tools from tool results or user text
+  // Detect code modification / mutation tools from tool results, tool names, or user text
+  // 1. Check if the tool executed was an explicit mutation tool (Edit, Write, write_file, edit_file, patch)
+  const mutationToolNameRegex =
+    /^(?:edit|write|write_file|edit_file|file_write|patch|apply_diff|save_file|create_file)$/i;
+  let isMutationToolName = false;
+  if (isToolResultTurn) {
+    // Check tool_use calls in the conversation matching the tool results
+    const recentAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (recentAssistant && Array.isArray(recentAssistant.content)) {
+      isMutationToolName = recentAssistant.content.some((part) => {
+        if (part && typeof part === "object") {
+          const item = part as Record<string, unknown>;
+          if (item.type === "tool_use" && typeof item.name === "string") {
+            return mutationToolNameRegex.test(item.name);
+          }
+        }
+        return false;
+      });
+    }
+  }
+
   const isCodeMutationToolResult =
     isToolResultTurn &&
-    /\b(edit|edits|edited|editing|write|writes|written|writing|file_write|write_file|patch|patches|patched|diff|diffs|applied|saved|commit|committed)\b/i.test(
-      latestExtracted.toolResultText
-    );
+    (isMutationToolName ||
+      /\b(edit|edits|edited|editing|write|writes|written|writing|file_write|write_file|patch|patches|patched|diff|diffs|applied|saved|commit|committed|updated|created|replaced)\b/i.test(
+        latestExtracted.toolResultText
+      ));
 
   // Architecture / Plan Mode / Complex Reasoning keywords are evaluated on user instruction or intent
   // Tier 1 is reserved for architectural planning, plan mode, and apex reasoning.
