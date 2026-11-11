@@ -483,7 +483,10 @@ export function discoverAvailableFreeTierModels(): FreeTierDiscoveredModel[] {
 }
 
 /**
- * Resolves models for a tier based on user-configured models, tier mode, and global free toggle.
+ * Resolves models for a tier based on user-configured models, tier mode, provider selection, and global free toggle.
+ * When tierProviders are configured for this tier, models are dynamically resolved from active provider catalogs
+ * matching the tier's required capabilities (Apex = reasoning/planning, Resilient = execution/tools, Local = fast/edge/free),
+ * automatically skipping dead or 404 models without manual model selection.
  */
 export function resolveTierCandidateModels(
   tierKey: "apex" | "resilient" | "local",
@@ -491,9 +494,65 @@ export function resolveTierCandidateModels(
   options: {
     onlyFreeTierModels?: boolean;
     tierMode?: TierSelectionMode;
+    tierProviders?: string[];
   } = {}
 ): string[] {
-  const { onlyFreeTierModels = false, tierMode = "both" } = options;
+  const { onlyFreeTierModels = false, tierMode = "both", tierProviders = [] } = options;
+
+  // 1. Dynamic Provider-to-Tier Mapping:
+  // If specific providers are assigned to this tier, dynamically fetch eligible models from their live catalogs
+  let dynamicProviderModels: string[] = [];
+  if (Array.isArray(tierProviders) && tierProviders.length > 0) {
+    const selectedProvSet = new Set(tierProviders.map((p) => p.toLowerCase().trim()));
+    try {
+      const getDbInstance = lazyRequire("../../src/lib/db/core").getDbInstance;
+      const db = getDbInstance();
+      const syncedRows = db
+        .prepare("SELECT key, value FROM key_value WHERE namespace = 'syncedAvailableModels'")
+        .all();
+
+      for (const row of syncedRows) {
+        if (!row.key || !row.value) continue;
+        const provider = row.key.split(":")[0].toLowerCase().trim();
+        if (!selectedProvSet.has(provider)) continue;
+
+        let list: Array<{ id?: string; name?: string }> = [];
+        try {
+          list = JSON.parse(row.value);
+        } catch {
+          continue;
+        }
+
+        for (const item of list) {
+          if (!item.id) continue;
+          const fullId = `${provider}/${item.id}`;
+          // Check capability match for the tier
+          const tierMatch = classifyFreeModelTier(item.id, provider);
+          const isEligible =
+            tierKey === "apex"
+              ? tierMatch === "apex" || /reason|deep-think|pro|r1|claude-3-7|o1|o3/i.test(item.id)
+              : tierKey === "resilient"
+                ? tierMatch === "resilient" || /flash|plus|code|coder|instruct/i.test(item.id)
+                : tierMatch === "local" || /mini|flash|lite|small|edge|free/i.test(item.id);
+
+          if (isEligible) {
+            if (onlyFreeTierModels && !isFreeModelTarget(fullId)) {
+              continue;
+            }
+            if (!dynamicProviderModels.includes(fullId)) {
+              dynamicProviderModels.push(fullId);
+            }
+          }
+        }
+      }
+    } catch {
+      // Fallback cleanly if synced catalog lookup fails
+    }
+  }
+
+  // Use dynamically resolved provider models as the configured baseline if present
+  const effectiveConfiguredModels =
+    dynamicProviderModels.length > 0 ? dynamicProviderModels : configuredModels;
 
   const freeModels = discoverAvailableFreeTierModels()
     .filter((m) => m.tier === tierKey)
@@ -502,8 +561,8 @@ export function resolveTierCandidateModels(
   // When onlyFreeTierModels is enabled, user-configured models MUST be strictly filtered
   // so paid models are NEVER included.
   const safeConfiguredModels = onlyFreeTierModels
-    ? configuredModels.filter(isFreeModelTarget)
-    : configuredModels;
+    ? effectiveConfiguredModels.filter(isFreeModelTarget)
+    : effectiveConfiguredModels;
 
   if (onlyFreeTierModels || tierMode === "free") {
     if (tierMode === "free") {
@@ -524,11 +583,11 @@ export function resolveTierCandidateModels(
   }
 
   if (tierMode === "user") {
-    return configuredModels.length > 0 ? configuredModels : freeModels;
+    return effectiveConfiguredModels.length > 0 ? effectiveConfiguredModels : freeModels;
   }
 
   // Mode "both": Union of user configured models + free auto-discovered models
-  const combined = [...configuredModels];
+  const combined = [...effectiveConfiguredModels];
   for (const fm of freeModels) {
     if (!combined.includes(fm)) {
       combined.push(fm);

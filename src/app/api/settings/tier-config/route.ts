@@ -47,6 +47,13 @@ const tierSettingsPutSchema = z
         local: z.array(z.string().min(1)).default([]),
       })
       .optional(),
+    tierProviders: z
+      .object({
+        apex: z.array(z.string().min(1)).default([]),
+        resilient: z.array(z.string().min(1)).default([]),
+        local: z.array(z.string().min(1)).default([]),
+      })
+      .optional(),
     cacheThreshold: z.number().min(0).optional(),
     fallbackTimeout: z.number().min(0).optional(),
     spbConfig: spbRuntimeConfigSchema.optional(),
@@ -67,6 +74,7 @@ const tierSettingsPutSchema = z
       data.tierModes !== undefined ||
       data.tierWeights !== undefined ||
       data.tierModels !== undefined ||
+      data.tierProviders !== undefined ||
       data.cacheThreshold !== undefined ||
       data.fallbackTimeout !== undefined ||
       data.spbConfig !== undefined ||
@@ -82,6 +90,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ...config,
     tierModels: config.tierModels ?? { apex: [], resilient: [], local: [] },
+    tierProviders: config.tierProviders ?? { apex: [], resilient: [], local: [] },
     tierModes: config.tierModes ?? { apex: "both", resilient: "both", local: "both" },
     onlyFreeTierModels: config.onlyFreeTierModels ?? false,
     spbEnabled: config.spbEnabled || spbFlagActive,
@@ -108,6 +117,7 @@ export async function PUT(request: Request) {
     tierModes,
     tierWeights,
     tierModels,
+    tierProviders,
     cacheThreshold,
     fallbackTimeout,
     spbConfig,
@@ -146,6 +156,7 @@ export async function PUT(request: Request) {
     },
     tierWeights: tierWeights ?? config.tierWeights,
     tierModels: tierModels ?? config.tierModels,
+    tierProviders: tierProviders !== undefined ? tierProviders : config.tierProviders,
     cacheThreshold: cacheThreshold ?? config.cacheThreshold,
     fallbackTimeout: fallbackTimeout ?? config.fallbackTimeout,
     spbConfig: spbConfig !== undefined ? spbConfig : config.spbConfig,

@@ -430,17 +430,19 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
   if (!tierKey) return [];
 
   const tierModels = currentConfig.tierModels?.[tierKey] || [];
+  const tierProviders = currentConfig.tierProviders?.[tierKey] || [];
   const onlyFree = currentConfig.onlyFreeTierModels === true;
   const tierMode = currentConfig.tierModes?.[tierKey] || (onlyFree ? "free" : "both");
 
-  // Incorporate free-tier auto-candidates if mode permits or free toggle active
+  // Incorporate free-tier auto-candidates or dynamic provider mapping if configured
   let effectiveTierModels = [...tierModels];
-  if (onlyFree || tierMode === "free" || tierMode === "both") {
+  if (onlyFree || tierMode === "free" || tierMode === "both" || tierProviders.length > 0) {
     try {
       const { resolveTierCandidateModels } = lazyRequire("./spbFreeTierAutoConfig.ts");
       effectiveTierModels = resolveTierCandidateModels(tierKey, tierModels, {
         onlyFreeTierModels: onlyFree,
         tierMode,
+        tierProviders,
       });
     } catch {
       // Fail-open: keep tierModels
@@ -479,6 +481,34 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
 
   // Deduplicate while preserving resolution priority
   let uniqueConcrete = Array.from(new Set(concreteModels));
+
+  // Filter out models with persistent terminal 404s/deprecations so SPB never hangs on dead endpoints
+  try {
+    const getDbInstance = lazyRequire("../../src/lib/db/core").getDbInstance;
+    const db = getDbInstance();
+    // Query recent terminal 404s within the last 6 hours
+    const staleRows = db
+      .prepare(
+        `SELECT DISTINCT provider || '/' || model AS full_id
+         FROM call_logs
+         WHERE (error_type = 'model_not_found' OR error_summary LIKE '%404%' OR error_summary LIKE '%Function%Not found%')
+           AND timestamp >= datetime('now', '-6 hours')
+         GROUP BY provider, model
+         HAVING count(*) >= 2`
+      )
+      .all() as Array<{ full_id: string }>;
+
+    if (staleRows.length > 0) {
+      const staleSet = new Set(staleRows.map((r) => r.full_id.toLowerCase()));
+      // Only prune if we have alternative healthy models available in this tier
+      const pruned = uniqueConcrete.filter((m) => !staleSet.has(m.toLowerCase()));
+      if (pruned.length > 0) {
+        uniqueConcrete = pruned;
+      }
+    }
+  } catch {
+    // Fail-open: keep models if SQLite check fails
+  }
 
   // If onlyFreeTierModels is active or tier mode is "free", strictly filter out any paid models
   if (onlyFree || tierMode === "free") {

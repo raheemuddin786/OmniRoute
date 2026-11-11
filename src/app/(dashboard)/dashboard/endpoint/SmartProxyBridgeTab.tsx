@@ -78,6 +78,16 @@ export function SmartProxyBridgeTab() {
     resilient: [],
     local: [],
   });
+  const [tierProviders, setTierProviders] = useState<{
+    apex: string[];
+    resilient: string[];
+    local: string[];
+  }>({
+    apex: [],
+    resilient: [],
+    local: [],
+  });
+  const [availableProvidersList, setAvailableProvidersList] = useState<string[]>([]);
   const [knownComboNames, setKnownComboNames] = useState<Set<string>>(() => new Set());
 
   const [onlyFreeTierModels, setOnlyFreeTierModels] = useState<boolean>(false);
@@ -109,6 +119,16 @@ export function SmartProxyBridgeTab() {
     tierTitle: "Tier 1: Apex Reasoning",
     tierDescription: "Architectural Planning & Complex Reasoning",
   });
+
+  const toggleTierProvider = (tier: keyof TierModels, providerId: string) => {
+    setTierProviders((prev) => {
+      const current = prev[tier] || [];
+      const next = current.includes(providerId)
+        ? current.filter((p) => p !== providerId)
+        : [...current, providerId];
+      return { ...prev, [tier]: next };
+    });
+  };
 
   const openTierModal = (tier: keyof TierModels) => {
     const meta = {
@@ -176,6 +196,15 @@ export function SmartProxyBridgeTab() {
               ? tierData.tierModels.resilient
               : [],
             local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
+          });
+        }
+        if (tierData.tierProviders) {
+          setTierProviders({
+            apex: Array.isArray(tierData.tierProviders.apex) ? tierData.tierProviders.apex : [],
+            resilient: Array.isArray(tierData.tierProviders.resilient)
+              ? tierData.tierProviders.resilient
+              : [],
+            local: Array.isArray(tierData.tierProviders.local) ? tierData.tierProviders.local : [],
           });
         }
         if (tierData.spbConfig) {
@@ -248,10 +277,11 @@ export function SmartProxyBridgeTab() {
 
     const runFetch = async () => {
       try {
-        const [tierRes, healthRes, combosRes] = await Promise.all([
+        const [tierRes, healthRes, combosRes, provRes] = await Promise.all([
           fetch("/api/settings/tier-config", { signal: controller.signal }),
           fetch("/api/monitoring/health", { signal: controller.signal }),
           fetch("/api/combos", { signal: controller.signal }).catch(() => null),
+          fetch("/api/providers", { signal: controller.signal }).catch(() => null),
         ]);
 
         if (!ignore && tierRes.ok) {
@@ -285,6 +315,17 @@ export function SmartProxyBridgeTab() {
                 ? tierData.tierModels.resilient
                 : [],
               local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
+            });
+          }
+          if (tierData.tierProviders) {
+            setTierProviders({
+              apex: Array.isArray(tierData.tierProviders.apex) ? tierData.tierProviders.apex : [],
+              resilient: Array.isArray(tierData.tierProviders.resilient)
+                ? tierData.tierProviders.resilient
+                : [],
+              local: Array.isArray(tierData.tierProviders.local)
+                ? tierData.tierProviders.local
+                : [],
             });
           }
           if (tierData.spbConfig) {
@@ -351,6 +392,21 @@ export function SmartProxyBridgeTab() {
             if (c.name) names.add(c.name.toLowerCase());
           });
           setKnownComboNames(names);
+        }
+
+        if (!ignore && provRes?.ok) {
+          const provData = await provRes.json();
+          const activeList: string[] = [];
+          (provData.providers || []).forEach(
+            (p: { provider?: string; is_active?: boolean; isActive?: boolean }) => {
+              const id = p.provider?.toLowerCase();
+              const active = p.is_active ?? p.isActive ?? true;
+              if (id && active && !activeList.includes(id)) {
+                activeList.push(id);
+              }
+            }
+          );
+          setAvailableProvidersList(activeList.sort());
         }
       } catch (err: unknown) {
         if (!controller.signal.aborted) {
@@ -484,6 +540,7 @@ export function SmartProxyBridgeTab() {
           fallbackTimeout,
           tierWeights,
           tierModels,
+          tierProviders,
           spbConfig: effectiveSpbConfig,
         }),
       });
@@ -881,6 +938,29 @@ export function SmartProxyBridgeTab() {
                     Architectural Planning & Complex Reasoning
                   </span>
                 </div>
+                <div className="flex flex-wrap items-center gap-1.5 mb-2.5 pt-1">
+                  <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mr-1">
+                    Active Providers:
+                  </span>
+                  {availableProvidersList.map((prov) => {
+                    const isSelected = (tierProviders.apex || []).includes(prov);
+                    return (
+                      <button
+                        key={prov}
+                        type="button"
+                        onClick={() => toggleTierProvider("apex", prov)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                          isSelected
+                            ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-sm"
+                            : "bg-muted/30 text-muted-foreground border-transparent hover:border-border hover:text-foreground"
+                        }`}
+                      >
+                        {isSelected && "✓ "}
+                        {prov}
+                      </button>
+                    );
+                  })}
+                </div>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {tierModels.apex.length === 0 ? (
                     <span className="text-xs text-muted-foreground italic py-0.5">
@@ -955,6 +1035,29 @@ export function SmartProxyBridgeTab() {
                     Code Generation, Tests & Iteration
                   </span>
                 </div>
+                <div className="flex flex-wrap items-center gap-1.5 mb-2.5 pt-1">
+                  <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mr-1">
+                    Active Providers:
+                  </span>
+                  {availableProvidersList.map((prov) => {
+                    const isSelected = (tierProviders.resilient || []).includes(prov);
+                    return (
+                      <button
+                        key={prov}
+                        type="button"
+                        onClick={() => toggleTierProvider("resilient", prov)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                          isSelected
+                            ? "bg-blue-500/20 text-blue-300 border-blue-500/40 shadow-sm"
+                            : "bg-muted/30 text-muted-foreground border-transparent hover:border-border hover:text-foreground"
+                        }`}
+                      >
+                        {isSelected && "✓ "}
+                        {prov}
+                      </button>
+                    );
+                  })}
+                </div>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {tierModels.resilient.length === 0 ? (
                     <span className="text-xs text-muted-foreground italic py-0.5">
@@ -1028,6 +1131,29 @@ export function SmartProxyBridgeTab() {
                   <span className="text-[11px] text-muted-foreground">
                     Fast Refactor, Formatting & Deterministic
                   </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mb-2.5 pt-1">
+                  <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mr-1">
+                    Active Providers:
+                  </span>
+                  {availableProvidersList.map((prov) => {
+                    const isSelected = (tierProviders.local || []).includes(prov);
+                    return (
+                      <button
+                        key={prov}
+                        type="button"
+                        onClick={() => toggleTierProvider("local", prov)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                          isSelected
+                            ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm"
+                            : "bg-muted/30 text-muted-foreground border-transparent hover:border-border hover:text-foreground"
+                        }`}
+                      >
+                        {isSelected && "✓ "}
+                        {prov}
+                      </button>
+                    );
+                  })}
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {tierModels.local.length === 0 ? (

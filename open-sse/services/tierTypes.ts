@@ -23,6 +23,12 @@ export interface TierModelsConfig {
   local: string[];
 }
 
+export interface TierProvidersConfig {
+  apex: string[];
+  resilient: string[];
+  local: string[];
+}
+
 export type TierSelectionMode = "free" | "user" | "both";
 
 export interface TierModesConfig {
@@ -130,6 +136,7 @@ export interface TierConfig {
     local: number;
   };
   tierModels?: TierModelsConfig;
+  tierProviders?: TierProvidersConfig;
   cacheThreshold?: number;
   fallbackTimeout?: number;
   spbConfig?: SpbRuntimeConfig;

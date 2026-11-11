@@ -183,6 +183,14 @@ export const tierConfigSchema = z.object({
       local: z.array(z.string().min(1)).default([]),
     })
     .default({ apex: [], resilient: [], local: [] }),
+  tierProviders: z
+    .object({
+      apex: z.array(z.string().min(1)).default([]),
+      resilient: z.array(z.string().min(1)).default([]),
+      local: z.array(z.string().min(1)).default([]),
+    })
+    .default({ apex: [], resilient: [], local: [] })
+    .optional(),
   cacheThreshold: z.number().min(0).default(5000),
   fallbackTimeout: z.number().min(0).default(5000),
   spbConfig: spbRuntimeConfigSchema.optional(),
