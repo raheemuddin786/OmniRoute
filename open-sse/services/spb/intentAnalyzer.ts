@@ -4,6 +4,8 @@
  * into task phases and computes token depth profiles for intelligent routing.
  */
 
+import { getTierConfig } from "../tierResolver.ts";
+
 export type TaskPhase =
   | "ARCHITECTURAL_PLANNING"
   | "CODE_GENERATION"
@@ -341,20 +343,24 @@ export function classifyIntent(
       ) ||
         (userMessages.length === 1 && !hasCodeKeywords)));
 
-  // Multi-file mutation detection: if the request references >3 distinct source files for mutation/refactor,
+  // Multi-file mutation detection: if the request references > multiFileThreshold distinct source files for mutation/refactor,
   // route to ARCHITECTURAL_PLANNING to establish a supervisor guidance contract before delegating to Tier 2
+  const currentConfig = getTierConfig();
+  const multiFileThreshold = currentConfig?.spbConfig?.multiFileThreshold ?? 3;
+  const duplicateReadThreshold = currentConfig?.spbConfig?.duplicateReadThreshold ?? 3;
+
   const referencedFileMatches = targetText.match(
     /(?:[a-zA-Z0-9_\-./]+\/)?(?:src|open-sse|tests|scripts|electron|lib|app|components)\/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g
   );
   const uniqueReferencedFiles = new Set(referencedFileMatches || []);
   const isMultiFileMutation =
     isDirectHumanPrompt &&
-    uniqueReferencedFiles.size > 3 &&
+    uniqueReferencedFiles.size > multiFileThreshold &&
     (hasCodeKeywords || hasRefactorKeywords);
 
   // Duplicate file read loop guard:
   // Track files being inspected across rolling assistant/user tool turns.
-  // If an agent calls Read/inspect on the SAME file >= 3 times without an intervening
+  // If an agent calls Read/inspect on the SAME file >= duplicateReadThreshold times without an intervening
   // code mutation, force CODE_GENERATION to break the infinite read loop.
   let isDuplicateFileRead = false;
   let duplicateFilePath: string | undefined;
@@ -381,7 +387,7 @@ export function classifyIntent(
               if (filePath) {
                 const count = (fileReadCounts.get(filePath) || 0) + 1;
                 fileReadCounts.set(filePath, count);
-                if (count >= 3) {
+                if (count >= duplicateReadThreshold) {
                   isDuplicateFileRead = true;
                   duplicateFilePath = filePath;
                 }

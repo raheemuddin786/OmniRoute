@@ -43,6 +43,74 @@ export const DEFAULT_SPB_TIER_MODES: TierModesConfig = {
   local: "both",
 };
 
+export interface SpbTokenBoundTier {
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface SpbTierProfile {
+  temperature: number;
+  reasoningEffort: "low" | "medium" | "high";
+}
+
+export interface SpbRuntimeConfig {
+  stagnationThreshold?: number;
+  multiFileThreshold?: number;
+  duplicateReadThreshold?: number;
+  diffTimeoutMs?: number;
+  minResponseLength?: number;
+  retryStatusCodes?: number[];
+  tokenBounds?: {
+    apex?: Partial<SpbTokenBoundTier>;
+    resilient?: Partial<SpbTokenBoundTier>;
+    local?: Partial<SpbTokenBoundTier>;
+  };
+  tierProfiles?: {
+    apex?: Partial<SpbTierProfile>;
+    resilient?: Partial<SpbTierProfile>;
+    local?: Partial<SpbTierProfile>;
+  };
+}
+
+export interface ConcreteSpbRuntimeConfig {
+  stagnationThreshold: number;
+  multiFileThreshold: number;
+  duplicateReadThreshold: number;
+  diffTimeoutMs: number;
+  minResponseLength: number;
+  retryStatusCodes: number[];
+  tokenBounds: {
+    apex: SpbTokenBoundTier;
+    resilient: SpbTokenBoundTier;
+    local: SpbTokenBoundTier;
+  };
+  tierProfiles: {
+    apex: SpbTierProfile;
+    resilient: SpbTierProfile;
+    local: SpbTierProfile;
+  };
+}
+
+export const DEFAULT_SPB_RUNTIME_CONFIG: ConcreteSpbRuntimeConfig = {
+  stagnationThreshold: 2,
+  multiFileThreshold: 3,
+  duplicateReadThreshold: 3,
+  diffTimeoutMs: 5000,
+  minResponseLength: 20,
+  retryStatusCodes: [400, 402, 408, 409, 429, 500, 502, 503, 504, 529],
+  tokenBounds: {
+    apex: { high: 16384, medium: 12288, low: 8192 },
+    resilient: { high: 8192, medium: 8192, low: 4096 },
+    local: { high: 4096, medium: 4096, low: 2048 },
+  },
+  tierProfiles: {
+    apex: { temperature: 0.2, reasoningEffort: "high" },
+    resilient: { temperature: 0.2, reasoningEffort: "medium" },
+    local: { temperature: 0.1, reasoningEffort: "low" },
+  },
+};
+
 export interface TierConfig {
   version: string;
   defaults: {
@@ -63,6 +131,7 @@ export interface TierConfig {
   tierModels?: TierModelsConfig;
   cacheThreshold?: number;
   fallbackTimeout?: number;
+  spbConfig?: SpbRuntimeConfig;
 }
 
 export interface ProviderTierOverride {

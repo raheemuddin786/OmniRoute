@@ -6,6 +6,7 @@ import { setTierConfig } from "@omniroute/open-sse/services/tierResolver";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
+import { spbRuntimeConfigSchema } from "@omniroute/open-sse/services/tierConfig";
 
 /**
  * Settings route for routing-tier and SPB-IR configurations (#7818, SPB-IR).
@@ -13,7 +14,7 @@ import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
  * `classifyTier()` (`open-sse/services/tierResolver.ts`) already honors
  * `TierConfig.providerOverrides` — an array of `{ provider, tier }` keyed by the
  * provider **id string**. This route manages both individual provider tier overrides
- * and global SPB-IR parameters (spbEnabled, tierWeights, tierModels, cacheThreshold, fallbackTimeout).
+ * and global SPB-IR parameters (spbEnabled, tierWeights, tierModels, cacheThreshold, fallbackTimeout, spbConfig).
  * It persists changes in `tier_config` (and synchronizes the `SPB_ENABLED` feature flag),
  * and busts the in-process routing cache via `setTierConfig()` so changes take effect
  * on the very next request without a restart.
@@ -48,6 +49,7 @@ const tierSettingsPutSchema = z
       .optional(),
     cacheThreshold: z.number().min(0).optional(),
     fallbackTimeout: z.number().min(0).optional(),
+    spbConfig: spbRuntimeConfigSchema.optional(),
     providerOverrides: z
       .array(
         z.object({
@@ -67,6 +69,7 @@ const tierSettingsPutSchema = z
       data.tierModels !== undefined ||
       data.cacheThreshold !== undefined ||
       data.fallbackTimeout !== undefined ||
+      data.spbConfig !== undefined ||
       data.providerOverrides !== undefined,
     { message: "At least one configuration property must be provided" }
   );
@@ -107,6 +110,7 @@ export async function PUT(request: Request) {
     tierModels,
     cacheThreshold,
     fallbackTimeout,
+    spbConfig,
     providerOverrides,
   } = parsed.data;
   const config = loadTierConfig();
@@ -144,6 +148,7 @@ export async function PUT(request: Request) {
     tierModels: tierModels ?? config.tierModels,
     cacheThreshold: cacheThreshold ?? config.cacheThreshold,
     fallbackTimeout: fallbackTimeout ?? config.fallbackTimeout,
+    spbConfig: spbConfig !== undefined ? spbConfig : config.spbConfig,
   };
 
   saveTierConfig(nextConfig);

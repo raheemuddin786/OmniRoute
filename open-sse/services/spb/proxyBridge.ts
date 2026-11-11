@@ -763,6 +763,12 @@ export async function processSmartProxyRouting(
 
 export function shouldTriggerZeroLossFallback(statusCode: number): boolean {
   // Trigger recovery on rate limits, bad requests (model-scoped rejections), credits exhaustion, gateway errors, overload, or timeouts
+  const tierConfig = getTierConfig();
+  const configuredCodes = tierConfig?.spbConfig?.retryStatusCodes;
+  if (Array.isArray(configuredCodes) && configuredCodes.length > 0) {
+    return configuredCodes.includes(statusCode);
+  }
+
   return (
     statusCode === 400 ||
     statusCode === 402 ||

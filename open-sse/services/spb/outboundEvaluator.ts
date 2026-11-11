@@ -15,6 +15,7 @@ import { ModelTier } from "./tieredRegistry.ts";
 import { recordIntentEvaluation, saveLearnedOptimization } from "../../../src/lib/db/spbState.ts";
 import { computePatternHash } from "./inboundIntelligence.ts";
 import { spawnSync } from "node:child_process";
+import { getTierConfig } from "../tierResolver.ts";
 
 /**
  * Marker injected into stream/json responses when a reviewer discrepancy is unresolved.
@@ -109,8 +110,11 @@ export function evaluateResponseIntent(
   const oddities: string[] = [];
   let score = 1.0;
 
+  const currentConfig = getTierConfig();
+  const minResponseLength = currentConfig?.spbConfig?.minResponseLength ?? 20;
+
   // 1. Detect empty or suspiciously truncated response
-  if (!responseText || responseText.trim().length < 20) {
+  if (!responseText || responseText.trim().length < minResponseLength) {
     omissions.push("Response is empty, severely truncated, or lacks substantive content.");
     score -= 0.6;
   }
@@ -384,16 +388,18 @@ export function verifyCodeDiffAgainstConclusion(
   _cwd?: string
 ): CodeDiffReviewResult {
   const cwd = resolveDiffCwd(_cwd);
+  const currentConfig = getTierConfig();
+  const diffTimeoutMs = currentConfig?.spbConfig?.diffTimeoutMs ?? 5000;
   try {
     const diffProc = spawnSync("git", ["diff", "--name-only", "HEAD"], {
       cwd,
       encoding: "utf8",
-      timeout: 5000,
+      timeout: diffTimeoutMs,
     });
     const statusProc = spawnSync("git", ["status", "--porcelain"], {
       cwd,
       encoding: "utf8",
-      timeout: 5000,
+      timeout: diffTimeoutMs,
     });
 
     if (diffProc.status !== 0 && statusProc.status !== 0) {

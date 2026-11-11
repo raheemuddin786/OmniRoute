@@ -76,15 +76,44 @@ export function selectModelTier(
     local: prioritizeHealthyTierModels(rawLocal),
   };
 
-  // Dynamically calibrate token bounds based on task complexity (0.0 to 1.0)
+  // Dynamically calibrate token bounds based on task complexity (0.0 to 1.0) and runtime config
   const normScore =
     typeof complexityScore === "number" && Number.isFinite(complexityScore)
       ? Math.max(0, Math.min(1, complexityScore))
       : 0.5;
 
-  const apexMaxTokens = normScore >= 0.7 ? 16384 : normScore <= 0.3 ? 8192 : 12288;
-  const resilientMaxTokens = normScore >= 0.7 ? 8192 : normScore <= 0.3 ? 4096 : 8192;
-  const localMaxTokens = normScore >= 0.7 ? 4096 : normScore <= 0.3 ? 2048 : 4096;
+  const spbConfig = currentConfig?.spbConfig;
+  const apexBounds = spbConfig?.tokenBounds?.apex ?? { high: 16384, medium: 12288, low: 8192 };
+  const resilientBounds = spbConfig?.tokenBounds?.resilient ?? {
+    high: 8192,
+    medium: 8192,
+    low: 4096,
+  };
+  const localBounds = spbConfig?.tokenBounds?.local ?? { high: 4096, medium: 4096, low: 2048 };
+
+  const apexMaxTokens =
+    normScore >= 0.7 ? apexBounds.high : normScore <= 0.3 ? apexBounds.low : apexBounds.medium;
+  const resilientMaxTokens =
+    normScore >= 0.7
+      ? resilientBounds.high
+      : normScore <= 0.3
+        ? resilientBounds.low
+        : resilientBounds.medium;
+  const localMaxTokens =
+    normScore >= 0.7 ? localBounds.high : normScore <= 0.3 ? localBounds.low : localBounds.medium;
+
+  const apexProfile = spbConfig?.tierProfiles?.apex ?? {
+    temperature: 0.2,
+    reasoningEffort: "high" as const,
+  };
+  const resilientProfile = spbConfig?.tierProfiles?.resilient ?? {
+    temperature: 0.2,
+    reasoningEffort: "medium" as const,
+  };
+  const localProfile = spbConfig?.tierProfiles?.local ?? {
+    temperature: 0.1,
+    reasoningEffort: "low" as const,
+  };
 
   // 1. Tier 1: Strictly reserved for architectural planning and complex apex reasoning.
   if (taskPhase === "ARCHITECTURAL_PLANNING") {
@@ -92,9 +121,9 @@ export function selectModelTier(
       tier: "tier_1_apex",
       recommendedModels: models.apex,
       maxTokens: apexMaxTokens,
-      temperature: 0.2,
+      temperature: apexProfile.temperature,
       cacheEnabled: true,
-      reasoningEffort: "high",
+      reasoningEffort: apexProfile.reasoningEffort,
       guidanceContract,
       requiresGuidance: false,
     };
@@ -143,9 +172,9 @@ export function selectModelTier(
       tier: "tier_3_local",
       recommendedModels: models.local,
       maxTokens: localMaxTokens,
-      temperature: 0.1,
+      temperature: localProfile.temperature,
       cacheEnabled: false,
-      reasoningEffort: "low",
+      reasoningEffort: localProfile.reasoningEffort,
       guidanceContract,
       requiresGuidance: effectiveRequiresGuidance,
     };
@@ -164,9 +193,9 @@ export function selectModelTier(
     tier: "tier_2_resilient",
     recommendedModels: models.resilient,
     maxTokens: resilientMaxTokens,
-    temperature: 0.2,
+    temperature: resilientProfile.temperature,
     cacheEnabled: true,
-    reasoningEffort: "medium",
+    reasoningEffort: resilientProfile.reasoningEffort,
     guidanceContract,
     requiresGuidance: false,
   };
@@ -218,7 +247,8 @@ export function detectAndRecoverFromStagnation(
   newTaskPhase?: TaskPhase;
   escalationTier?: "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 } {
-  const _STAGNATION_THRESHOLD = 3;
+  const currentConfig = getTierConfig();
+  const stagnationThreshold = currentConfig?.spbConfig?.stagnationThreshold ?? 2;
   let isStagnant = false;
   let recoveryDirective: string | undefined;
   let newTaskPhase: TaskPhase | undefined;
@@ -229,8 +259,8 @@ export function detectAndRecoverFromStagnation(
   // taskPhase (including CODE_GENERATION), so the guard must not be gated on
   // taskPhase — otherwise a read-only loop classified as CODE_GENERATION evades
   // detection entirely.
-  // Lower threshold to 2 turns to immediately catch read loops
-  if (consecutiveReads >= 2) {
+  // Lower threshold (default 2 turns) to immediately catch read loops
+  if (consecutiveReads >= stagnationThreshold) {
     isStagnant = true;
 
     // Generate strict recovery directive to break the loop
