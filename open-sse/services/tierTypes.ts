@@ -52,6 +52,7 @@ export interface SpbTokenBoundTier {
 export interface SpbTierProfile {
   temperature: number;
   reasoningEffort: "low" | "medium" | "high";
+  systemPrompt?: string;
 }
 
 export interface SpbRuntimeConfig {

@@ -451,8 +451,35 @@ async function applySpbOutboundZeroLoss(
 
     const evaluatedResponse = await processSpbOutboundZeroLoss({
       initialResponse: response,
-      dispatchModel: (newBody: any) =>
-        handleSingleModelChat(
+      dispatchModel: async (newBody: any) => {
+        if (comboName) {
+          const combo = await getComboByName(comboName).catch(() => null);
+          if (combo) {
+            return (handleComboChat as any)({
+              body: newBody,
+              combo,
+              endpointPath: new URL(request.url).pathname,
+              requestHeaders: request.headers,
+              handleSingleModel: (b: any, m: string) =>
+                handleSingleModelChat(
+                  b,
+                  m,
+                  clientRawRequest,
+                  request,
+                  combo.name,
+                  apiKeyInfo,
+                  telemetry,
+                  runtimeOpts,
+                  combo.strategy,
+                  false
+                ),
+              sessionId,
+              sessionAffinityKey: runtimeOpts.sessionAffinityKey || sessionId,
+              log,
+            });
+          }
+        }
+        return handleSingleModelChat(
           newBody,
           resolvedModelStr,
           clientRawRequest,
@@ -463,7 +490,8 @@ async function applySpbOutboundZeroLoss(
           runtimeOpts,
           null,
           false
-        ),
+        );
+      },
       body,
       originalPrompt: lastUserPrompt,
       preservedIntentions,

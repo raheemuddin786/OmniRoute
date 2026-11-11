@@ -12,6 +12,7 @@
 import { TaskPhase, type GuidanceContract } from "./intentAnalyzer.ts";
 import { ModelTier } from "./tieredRegistry.ts";
 import { getLearnedOptimization } from "../../../src/lib/db/spbState.ts";
+import { getTierConfig } from "../tierResolver.ts";
 import { createHash } from "node:crypto";
 
 export interface NecessityCheckResult {
@@ -336,27 +337,38 @@ export function enhanceInboundPrompt(
   }
 
   // Synthesize Tier-Specific Prompt Contract
+  // Configurable tier system prompt override: allows operators to customize system instructions
+  // via tierProfiles[tier].systemPrompt or combo configuration without expensive rebuilds.
+  const tierConfig = getTierConfig();
+  const tierKey = tier === "tier_1_apex" ? "apex" : tier === "tier_3_local" ? "local" : "resilient";
+  const configuredTierPrompt = tierConfig?.spbConfig?.tierProfiles?.[tierKey]?.systemPrompt?.trim();
+
   let tierPreamble = "";
   const repositoryTruthDirective =
     "ARCHITECTURAL GROUNDING: Always treat the existing repository file system, types, and architecture as the authoritative source of truth. Ground all decisions and code in existing patterns before taking action.";
 
-  switch (tier) {
-    case "tier_1_apex": {
-      tierPreamble = `[SPB-IR Apex Directive: Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. ${repositoryTruthDirective}]`;
-      appliedOptimizations.push("Tier 1 Apex Architectural Invariant Framing");
-      break;
-    }
+  if (configuredTierPrompt) {
+    tierPreamble = `[SPB-IR Directive: ${configuredTierPrompt}\n${repositoryTruthDirective}]`;
+    appliedOptimizations.push(`Custom Configured ${tierKey.toUpperCase()} Directive Framing`);
+  } else {
+    switch (tier) {
+      case "tier_1_apex": {
+        tierPreamble = `[SPB-IR Apex Directive: Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. ${repositoryTruthDirective}]`;
+        appliedOptimizations.push("Tier 1 Apex Architectural Invariant Framing");
+        break;
+      }
 
-    case "tier_2_resilient": {
-      tierPreamble = `[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries. When editing, perform precise search-and-replace targeting minimal diffs; never rewrite or truncate existing working code without explicit instruction. Never delete or overwrite working implementations without explicit architectural specification. Verify changes using project tests and typecheckers before completing turns. ${repositoryTruthDirective}]`;
-      appliedOptimizations.push("Tier 2 Resilient Implementation & Error Boundary Enforcement");
-      break;
-    }
+      case "tier_2_resilient": {
+        tierPreamble = `[SPB-IR Resilient Directive: Execute robust, production-grade implementation. Adhere strictly to existing typing, zero untested regressions, and exact error boundaries. When editing, perform precise search-and-replace targeting minimal diffs; never rewrite or truncate existing working code without explicit instruction. Never delete or overwrite working implementations without explicit architectural specification. Verify changes using project tests and typecheckers before completing turns. ${repositoryTruthDirective}]`;
+        appliedOptimizations.push("Tier 2 Resilient Implementation & Error Boundary Enforcement");
+        break;
+      }
 
-    case "tier_3_local": {
-      tierPreamble = `[SPB-IR Local Directive: Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations. Strictly preserve all existing code and architecture. ${repositoryTruthDirective}]`;
-      appliedOptimizations.push("Tier 3 Surgical Scope & Deterministic Boundary Confinement");
-      break;
+      case "tier_3_local": {
+        tierPreamble = `[SPB-IR Local Directive: Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations. Strictly preserve all existing code and architecture. ${repositoryTruthDirective}]`;
+        appliedOptimizations.push("Tier 3 Surgical Scope & Deterministic Boundary Confinement");
+        break;
+      }
     }
   }
 

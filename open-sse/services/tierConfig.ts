@@ -115,6 +115,7 @@ export const spbRuntimeConfigSchema = z
             reasoningEffort: z
               .enum(["low", "medium", "high"])
               .default(DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.apex.reasoningEffort),
+            systemPrompt: z.string().max(50000).optional(),
           })
           .default(DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.apex),
         resilient: z
@@ -127,6 +128,7 @@ export const spbRuntimeConfigSchema = z
             reasoningEffort: z
               .enum(["low", "medium", "high"])
               .default(DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.resilient.reasoningEffort),
+            systemPrompt: z.string().max(50000).optional(),
           })
           .default(DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.resilient),
         local: z
@@ -139,6 +141,7 @@ export const spbRuntimeConfigSchema = z
             reasoningEffort: z
               .enum(["low", "medium", "high"])
               .default(DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.local.reasoningEffort),
+            systemPrompt: z.string().max(50000).optional(),
           })
           .default(DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.local),
       })

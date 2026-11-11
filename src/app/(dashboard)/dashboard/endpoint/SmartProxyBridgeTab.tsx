@@ -1384,6 +1384,29 @@ export function SmartProxyBridgeTab() {
                                 <option value="high">High</option>
                               </select>
                             </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Custom System Prompt (Optional)
+                              </label>
+                              <textarea
+                                rows={2}
+                                placeholder="Default: Exhaustive architectural precision & invariant framing..."
+                                value={spbConfig.tierProfiles.apex.systemPrompt || ""}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      apex: {
+                                        ...prev.tierProfiles.apex,
+                                        systemPrompt: e.target.value,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full rounded bg-background border px-2 py-1 text-xs font-mono"
+                              />
+                            </div>
                           </div>
                         </div>
 
@@ -1444,6 +1467,29 @@ export function SmartProxyBridgeTab() {
                                 <option value="high">High</option>
                               </select>
                             </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Custom System Prompt (Optional)
+                              </label>
+                              <textarea
+                                rows={2}
+                                placeholder="Default: Robust SDLC implementation & checklist enforcement..."
+                                value={spbConfig.tierProfiles.resilient.systemPrompt || ""}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      resilient: {
+                                        ...prev.tierProfiles.resilient,
+                                        systemPrompt: e.target.value,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full rounded bg-background border px-2 py-1 text-xs font-mono"
+                              />
+                            </div>
                           </div>
                         </div>
 
@@ -1503,6 +1549,29 @@ export function SmartProxyBridgeTab() {
                                 <option value="medium">Medium</option>
                                 <option value="high">High</option>
                               </select>
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Custom System Prompt (Optional)
+                              </label>
+                              <textarea
+                                rows={2}
+                                placeholder="Default: Surgical minimal diff & local preservation..."
+                                value={spbConfig.tierProfiles.local.systemPrompt || ""}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      local: {
+                                        ...prev.tierProfiles.local,
+                                        systemPrompt: e.target.value,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full rounded bg-background border px-2 py-1 text-xs font-mono"
+                              />
                             </div>
                           </div>
                         </div>
