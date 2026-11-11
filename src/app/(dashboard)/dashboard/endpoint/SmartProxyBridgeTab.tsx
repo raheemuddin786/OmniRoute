@@ -8,6 +8,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import Toggle from "@/shared/components/Toggle";
 import TierModelSelectModal from "@/shared/components/TierModelSelectModal";
 import SmartProxyActivitySection from "./SmartProxyActivitySection";
+import type { ConcreteSpbRuntimeConfig } from "@omniroute/open-sse/services/tierTypes";
+import { DEFAULT_SPB_RUNTIME_CONFIG } from "@omniroute/open-sse/services/tierTypes";
 
 interface BridgeStats {
   totalRouted: number;
@@ -89,6 +91,13 @@ export function SmartProxyBridgeTab() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  // Advanced SPB runtime parameters
+  const [spbConfig, setSpbConfig] = useState<ConcreteSpbRuntimeConfig>(DEFAULT_SPB_RUNTIME_CONFIG);
+  const [retryCodesInput, setRetryCodesInput] = useState<string>(
+    DEFAULT_SPB_RUNTIME_CONFIG.retryStatusCodes.join(", ")
+  );
+  const [showAdvancedParams, setShowAdvancedParams] = useState(false);
+
   const [tierModalConfig, setTierModalConfig] = useState<{
     isOpen: boolean;
     tier: keyof TierModels;
@@ -169,6 +178,43 @@ export function SmartProxyBridgeTab() {
             local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
           });
         }
+        if (tierData.spbConfig) {
+          setSpbConfig({
+            ...DEFAULT_SPB_RUNTIME_CONFIG,
+            ...tierData.spbConfig,
+            tokenBounds: {
+              apex: {
+                ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.apex,
+                ...(tierData.spbConfig.tokenBounds?.apex || {}),
+              },
+              resilient: {
+                ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.resilient,
+                ...(tierData.spbConfig.tokenBounds?.resilient || {}),
+              },
+              local: {
+                ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.local,
+                ...(tierData.spbConfig.tokenBounds?.local || {}),
+              },
+            },
+            tierProfiles: {
+              apex: {
+                ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.apex,
+                ...(tierData.spbConfig.tierProfiles?.apex || {}),
+              },
+              resilient: {
+                ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.resilient,
+                ...(tierData.spbConfig.tierProfiles?.resilient || {}),
+              },
+              local: {
+                ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.local,
+                ...(tierData.spbConfig.tierProfiles?.local || {}),
+              },
+            },
+          });
+          if (Array.isArray(tierData.spbConfig.retryStatusCodes)) {
+            setRetryCodesInput(tierData.spbConfig.retryStatusCodes.join(", "));
+          }
+        }
       }
 
       // 2. Fetch System Health Telemetry
@@ -240,6 +286,43 @@ export function SmartProxyBridgeTab() {
                 : [],
               local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
             });
+          }
+          if (tierData.spbConfig) {
+            setSpbConfig({
+              ...DEFAULT_SPB_RUNTIME_CONFIG,
+              ...tierData.spbConfig,
+              tokenBounds: {
+                apex: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.apex,
+                  ...(tierData.spbConfig.tokenBounds?.apex || {}),
+                },
+                resilient: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.resilient,
+                  ...(tierData.spbConfig.tokenBounds?.resilient || {}),
+                },
+                local: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.local,
+                  ...(tierData.spbConfig.tokenBounds?.local || {}),
+                },
+              },
+              tierProfiles: {
+                apex: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.apex,
+                  ...(tierData.spbConfig.tierProfiles?.apex || {}),
+                },
+                resilient: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.resilient,
+                  ...(tierData.spbConfig.tierProfiles?.resilient || {}),
+                },
+                local: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.local,
+                  ...(tierData.spbConfig.tierProfiles?.local || {}),
+                },
+              },
+            });
+            if (Array.isArray(tierData.spbConfig.retryStatusCodes)) {
+              setRetryCodesInput(tierData.spbConfig.retryStatusCodes.join(", "));
+            }
           }
         }
 
@@ -379,6 +462,17 @@ export function SmartProxyBridgeTab() {
     setSavingConfig(true);
     setStatusMessage(null);
     try {
+      const parsedRetryCodes = retryCodesInput
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n >= 100 && n <= 599);
+
+      const effectiveSpbConfig: ConcreteSpbRuntimeConfig = {
+        ...spbConfig,
+        retryStatusCodes:
+          parsedRetryCodes.length > 0 ? parsedRetryCodes : spbConfig.retryStatusCodes,
+      };
+
       const res = await fetch("/api/settings/tier-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -390,10 +484,12 @@ export function SmartProxyBridgeTab() {
           fallbackTimeout,
           tierWeights,
           tierModels,
+          spbConfig: effectiveSpbConfig,
         }),
       });
 
       if (res.ok) {
+        setSpbConfig(effectiveSpbConfig);
         setStatusMessage("SPB parameters and target models saved successfully.");
       } else {
         const errText = await res.text();
@@ -1060,6 +1156,584 @@ export function SmartProxyBridgeTab() {
                     className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                 </div>
+              </div>
+
+              {/* Advanced SPB Runtime Configuration Section */}
+              <div className="rounded-lg border border-border/80 bg-muted/10 p-4 mt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedParams((prev) => !prev)}
+                  className="flex w-full items-center justify-between text-left text-sm font-semibold text-foreground hover:text-primary transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-base text-primary">tune</span>
+                    Advanced SPB Runtime Parameters &amp; Loop Protection
+                  </span>
+                  <span className="text-xs font-normal text-muted-foreground flex items-center gap-1">
+                    {showAdvancedParams ? "Collapse" : "Expand settings"}
+                    <span className="material-symbols-outlined text-[16px]">
+                      {showAdvancedParams ? "expand_less" : "expand_more"}
+                    </span>
+                  </span>
+                </button>
+
+                {showAdvancedParams && (
+                  <div className="space-y-4 pt-4 border-t border-border/50 mt-3">
+                    {/* Stagnation & Loop Guards */}
+                    <div>
+                      <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Loop &amp; Stagnation Protection
+                      </h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Stagnation Threshold
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Consecutive reads before recovery
+                          </span>
+                          <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={spbConfig.stagnationThreshold}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                stagnationThreshold: Math.max(1, parseInt(e.target.value, 10) || 1),
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Duplicate Read Limit
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Same file reads before code gen
+                          </span>
+                          <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={spbConfig.duplicateReadThreshold}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                duplicateReadThreshold: Math.max(
+                                  1,
+                                  parseInt(e.target.value, 10) || 1
+                                ),
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Multi-File Scope Limit
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Files before Tier 1 planning
+                          </span>
+                          <input
+                            type="number"
+                            min="1"
+                            max="20"
+                            value={spbConfig.multiFileThreshold}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                multiFileThreshold: Math.max(1, parseInt(e.target.value, 10) || 1),
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Zero-Loss & Execution Output Verification */}
+                    <div>
+                      <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Zero-Loss Verification &amp; Outbound Diff
+                      </h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Code Diff Timeout (ms)
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Subprocess git diff / status timeout
+                          </span>
+                          <input
+                            type="number"
+                            step="500"
+                            min="500"
+                            value={spbConfig.diffTimeoutMs}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                diffTimeoutMs: Math.max(500, parseInt(e.target.value, 10) || 500),
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Min Response Length (chars)
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Below this triggers truncation guard
+                          </span>
+                          <input
+                            type="number"
+                            min="5"
+                            max="500"
+                            value={spbConfig.minResponseLength}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                minResponseLength: Math.max(1, parseInt(e.target.value, 10) || 1),
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-medium text-foreground block">
+                          Zero-Loss Fallback HTTP Status Codes
+                        </label>
+                        <span className="text-[11px] text-muted-foreground block mb-1">
+                          Comma-separated status codes triggering automatic resilient model retry
+                        </span>
+                        <input
+                          type="text"
+                          value={retryCodesInput}
+                          onChange={(e) => setRetryCodesInput(e.target.value)}
+                          placeholder="400, 402, 408, 409, 429, 500, 502, 503, 504, 529"
+                          className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm font-mono text-foreground shadow-sm"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Tier Profiles: Temperatures & Reasoning Efforts */}
+                    <div>
+                      <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Tier Profiles (Temperature &amp; Reasoning Effort)
+                      </h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {/* Apex Profile */}
+                        <div className="rounded-md border p-2.5 bg-background">
+                          <span className="text-xs font-semibold text-indigo-400 block mb-2">
+                            Tier 1: Apex Profile
+                          </span>
+                          <div className="space-y-2">
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Temperature ({spbConfig.tierProfiles.apex.temperature})
+                              </label>
+                              <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={spbConfig.tierProfiles.apex.temperature}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      apex: {
+                                        ...prev.tierProfiles.apex,
+                                        temperature: parseFloat(e.target.value),
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Reasoning Effort
+                              </label>
+                              <select
+                                value={spbConfig.tierProfiles.apex.reasoningEffort}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      apex: {
+                                        ...prev.tierProfiles.apex,
+                                        reasoningEffort: e.target.value as
+                                          "low" | "medium" | "high",
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full rounded bg-background border px-2 py-1 text-xs"
+                              >
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Resilient Profile */}
+                        <div className="rounded-md border p-2.5 bg-background">
+                          <span className="text-xs font-semibold text-blue-400 block mb-2">
+                            Tier 2: Resilient Profile
+                          </span>
+                          <div className="space-y-2">
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Temperature ({spbConfig.tierProfiles.resilient.temperature})
+                              </label>
+                              <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={spbConfig.tierProfiles.resilient.temperature}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      resilient: {
+                                        ...prev.tierProfiles.resilient,
+                                        temperature: parseFloat(e.target.value),
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Reasoning Effort
+                              </label>
+                              <select
+                                value={spbConfig.tierProfiles.resilient.reasoningEffort}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      resilient: {
+                                        ...prev.tierProfiles.resilient,
+                                        reasoningEffort: e.target.value as
+                                          "low" | "medium" | "high",
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full rounded bg-background border px-2 py-1 text-xs"
+                              >
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Local Profile */}
+                        <div className="rounded-md border p-2.5 bg-background">
+                          <span className="text-xs font-semibold text-emerald-400 block mb-2">
+                            Tier 3: Local Profile
+                          </span>
+                          <div className="space-y-2">
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Temperature ({spbConfig.tierProfiles.local.temperature})
+                              </label>
+                              <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={spbConfig.tierProfiles.local.temperature}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      local: {
+                                        ...prev.tierProfiles.local,
+                                        temperature: parseFloat(e.target.value),
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground block">
+                                Reasoning Effort
+                              </label>
+                              <select
+                                value={spbConfig.tierProfiles.local.reasoningEffort}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tierProfiles: {
+                                      ...prev.tierProfiles,
+                                      local: {
+                                        ...prev.tierProfiles.local,
+                                        reasoningEffort: e.target.value as
+                                          "low" | "medium" | "high",
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-full rounded bg-background border px-2 py-1 text-xs"
+                              >
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Tier Token Bounds (Max Tokens High/Medium/Low) */}
+                    <div>
+                      <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Dynamic Token Allocation Bounds (Max Output Tokens)
+                      </h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {/* Apex Bounds */}
+                        <div className="rounded-md border p-2.5 bg-background">
+                          <span className="text-xs font-semibold text-indigo-400 block mb-2">
+                            Tier 1 (Apex)
+                          </span>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">High (&ge;0.7):</span>
+                              <input
+                                type="number"
+                                step="1024"
+                                value={spbConfig.tokenBounds.apex.high}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      apex: {
+                                        ...prev.tokenBounds.apex,
+                                        high: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Med (0.3-0.7):</span>
+                              <input
+                                type="number"
+                                step="1024"
+                                value={spbConfig.tokenBounds.apex.medium}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      apex: {
+                                        ...prev.tokenBounds.apex,
+                                        medium: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Low (&le;0.3):</span>
+                              <input
+                                type="number"
+                                step="1024"
+                                value={spbConfig.tokenBounds.apex.low}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      apex: {
+                                        ...prev.tokenBounds.apex,
+                                        low: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Resilient Bounds */}
+                        <div className="rounded-md border p-2.5 bg-background">
+                          <span className="text-xs font-semibold text-blue-400 block mb-2">
+                            Tier 2 (Resilient)
+                          </span>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">High (&ge;0.7):</span>
+                              <input
+                                type="number"
+                                step="1024"
+                                value={spbConfig.tokenBounds.resilient.high}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      resilient: {
+                                        ...prev.tokenBounds.resilient,
+                                        high: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Med (0.3-0.7):</span>
+                              <input
+                                type="number"
+                                step="1024"
+                                value={spbConfig.tokenBounds.resilient.medium}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      resilient: {
+                                        ...prev.tokenBounds.resilient,
+                                        medium: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Low (&le;0.3):</span>
+                              <input
+                                type="number"
+                                step="1024"
+                                value={spbConfig.tokenBounds.resilient.low}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      resilient: {
+                                        ...prev.tokenBounds.resilient,
+                                        low: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Local Bounds */}
+                        <div className="rounded-md border p-2.5 bg-background">
+                          <span className="text-xs font-semibold text-emerald-400 block mb-2">
+                            Tier 3 (Local)
+                          </span>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">High (&ge;0.7):</span>
+                              <input
+                                type="number"
+                                step="512"
+                                value={spbConfig.tokenBounds.local.high}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      local: {
+                                        ...prev.tokenBounds.local,
+                                        high: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Med (0.3-0.7):</span>
+                              <input
+                                type="number"
+                                step="512"
+                                value={spbConfig.tokenBounds.local.medium}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      local: {
+                                        ...prev.tokenBounds.local,
+                                        medium: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Low (&le;0.3):</span>
+                              <input
+                                type="number"
+                                step="512"
+                                value={spbConfig.tokenBounds.local.low}
+                                onChange={(e) =>
+                                  setSpbConfig((prev) => ({
+                                    ...prev,
+                                    tokenBounds: {
+                                      ...prev.tokenBounds,
+                                      local: {
+                                        ...prev.tokenBounds.local,
+                                        low: parseInt(e.target.value, 10) || 0,
+                                      },
+                                    },
+                                  }))
+                                }
+                                className="w-24 rounded border px-1.5 py-0.5 text-right font-mono text-xs"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               <button
                 onClick={handleSaveConfig}
