@@ -68,6 +68,9 @@ export default function TierModelSelectModal({
   const [activeCapabilityFilter, setActiveCapabilityFilter] = useState<CapabilityFilterKey>("all");
   const [selectedProviderFilter, setSelectedProviderFilter] = useState<string>("all");
   const [showConfiguredOnly, setShowConfiguredOnly] = useState(true);
+  const [sortOrder, setSortOrder] = useState<"free-first" | "context-desc" | "name-asc">(
+    "free-first"
+  );
   const [customInput, setCustomInput] = useState("");
 
   // Render-time state adjustment when modal opens (avoids cascading render warning)
@@ -79,6 +82,7 @@ export default function TierModelSelectModal({
       setSearchQuery("");
       setActiveCapabilityFilter("all");
       setSelectedProviderFilter("all");
+      setSortOrder("free-first");
       setCustomInput("");
     }
   }
@@ -230,6 +234,7 @@ export default function TierModelSelectModal({
           capabilities: caps,
           isConfigured: true,
           isCombo: true,
+          comboId: combo.id,
           comboStrategy: combo.strategy || "priority",
           comboModels: memberModels,
           comboDescription: combo.description || undefined,
@@ -242,54 +247,66 @@ export default function TierModelSelectModal({
 
   // Strictly filter models for the selected tier and capability filters
   const filteredModels = useMemo(() => {
-    return allCandidateModels.filter((model) => {
-      // 1. Strict Tier Eligibility
-      if (!isModelEligibleForTier(tier, model.capabilities)) {
-        return false;
-      }
-
-      // 2. Configured Providers Only toggle
-      if (showConfiguredOnly && !model.isConfigured) {
-        return false;
-      }
-
-      // 3. Provider filter (left sidebar)
-      if (selectedProviderFilter !== "all" && model.providerId !== selectedProviderFilter) {
-        return false;
-      }
-
-      // 4. Capability Filter Chip
-      if (!matchesCapabilityFilter(activeCapabilityFilter, model.capabilities, tier)) {
-        return false;
-      }
-
-      // 5. Search Query Filter
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchesName = model.name.toLowerCase().includes(q);
-        const matchesId = model.id.toLowerCase().includes(q);
-        const matchesFull = model.fullValue.toLowerCase().includes(q);
-        const matchesProvider =
-          model.providerName.toLowerCase().includes(q) ||
-          model.providerAlias.toLowerCase().includes(q);
-        const matchesDesc = model.comboDescription?.toLowerCase().includes(q);
-        const matchesStrategy = model.comboStrategy?.toLowerCase().includes(q);
-        const matchesTargets = model.comboModels?.some((m) => m.toLowerCase().includes(q));
-        if (
-          !matchesName &&
-          !matchesId &&
-          !matchesFull &&
-          !matchesProvider &&
-          !matchesDesc &&
-          !matchesStrategy &&
-          !matchesTargets
-        ) {
+    return allCandidateModels
+      .filter((model) => {
+        // 1. Strict Tier Eligibility
+        if (!isModelEligibleForTier(tier, model.capabilities)) {
           return false;
         }
-      }
 
-      return true;
-    });
+        // 2. Configured Providers Only toggle
+        if (showConfiguredOnly && !model.isConfigured) {
+          return false;
+        }
+
+        // 3. Provider filter (left sidebar)
+        if (selectedProviderFilter !== "all" && model.providerId !== selectedProviderFilter) {
+          return false;
+        }
+
+        // 4. Capability Filter Chip
+        if (!matchesCapabilityFilter(activeCapabilityFilter, model.capabilities, tier)) {
+          return false;
+        }
+
+        // 5. Search Query Filter
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          const matchesName = model.name.toLowerCase().includes(q);
+          const matchesId = model.id.toLowerCase().includes(q);
+          const matchesFull = model.fullValue.toLowerCase().includes(q);
+          const matchesProvider =
+            model.providerName.toLowerCase().includes(q) ||
+            model.providerAlias.toLowerCase().includes(q);
+          const matchesDesc = model.comboDescription?.toLowerCase().includes(q);
+          const matchesStrategy = model.comboStrategy?.toLowerCase().includes(q);
+          const matchesTargets = model.comboModels?.some((m) => m.toLowerCase().includes(q));
+          if (
+            !matchesName &&
+            !matchesId &&
+            !matchesFull &&
+            !matchesProvider &&
+            !matchesDesc &&
+            !matchesStrategy &&
+            !matchesTargets
+          ) {
+            return false;
+          }
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortOrder === "free-first") {
+          if (a.capabilities.isFree && !b.capabilities.isFree) return -1;
+          if (!a.capabilities.isFree && b.capabilities.isFree) return 1;
+        } else if (sortOrder === "context-desc") {
+          const ctxA = a.capabilities.contextLength || 0;
+          const ctxB = b.capabilities.contextLength || 0;
+          if (ctxA !== ctxB) return ctxB - ctxA;
+        }
+        return a.name.localeCompare(b.name);
+      });
   }, [
     allCandidateModels,
     tier,
@@ -297,6 +314,7 @@ export default function TierModelSelectModal({
     selectedProviderFilter,
     activeCapabilityFilter,
     searchQuery,
+    sortOrder,
   ]);
 
   // Distinct providers that have at least one eligible model
@@ -483,6 +501,16 @@ export default function TierModelSelectModal({
             />
             <span>Active Providers Only</span>
           </label>
+          <select
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value as any)}
+            className="bg-muted/40 border border-border text-xs text-foreground rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+            title="Sort models"
+          >
+            <option value="free-first">Sort: Free Models First</option>
+            <option value="context-desc">Sort: Context Window (High to Low)</option>
+            <option value="name-asc">Sort: Name (A to Z)</option>
+          </select>
         </div>
 
         {/* Capability Filters */}
@@ -498,6 +526,17 @@ export default function TierModelSelectModal({
             }`}
           >
             All Tier Models
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveCapabilityFilter("free")}
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+              activeCapabilityFilter === "free"
+                ? "bg-emerald-600 text-white border-emerald-600"
+                : "bg-surface border-border text-emerald-400 hover:bg-emerald-500/10"
+            }`}
+          >
+            🎁 Free Models
           </button>
           <button
             type="button"
@@ -682,11 +721,31 @@ export default function TierModelSelectModal({
                         <span className="text-[10px] text-muted-foreground font-mono bg-muted/60 px-1.5 py-0.2 rounded border border-border">
                           {model.fullValue}
                         </span>
+                        {model.capabilities.isFree && (
+                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                            FREE
+                          </span>
+                        )}
                         {model.isCombo && (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30">
                             <span className="material-symbols-outlined text-[11px]">layers</span>
                             Combo: {model.comboStrategy || "priority"}
                           </span>
+                        )}
+                        {model.isCombo && (
+                          <a
+                            href={`/dashboard/combos?highlight=${encodeURIComponent(model.comboId || model.id)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-purple-500/10 text-purple-300 hover:text-purple-100 hover:bg-purple-500/25 border border-purple-500/30 transition-colors ml-auto"
+                            title="Open combo in Dashboard"
+                          >
+                            <span>Open Combo</span>
+                            <span className="material-symbols-outlined text-[12px]">
+                              open_in_new
+                            </span>
+                          </a>
                         )}
                       </div>
 

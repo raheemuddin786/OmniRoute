@@ -110,11 +110,23 @@ test("matchesCapabilityFilter filters by specific operational capabilities", () 
     isLocalEngine: false,
     hasToolCalling: true,
     hasVision: true,
+    isFree: false,
+  };
+
+  const freeCaps = {
+    isApexReasoning: false,
+    isResilient: true,
+    isLocalEngine: false,
+    hasToolCalling: true,
+    hasVision: false,
+    isFree: true,
   };
 
   assert.equal(matchesCapabilityFilter("all", visionToolCaps, "resilient"), true);
   assert.equal(matchesCapabilityFilter("vision", visionToolCaps, "resilient"), true);
   assert.equal(matchesCapabilityFilter("tools", visionToolCaps, "resilient"), true);
+  assert.equal(matchesCapabilityFilter("free", visionToolCaps, "resilient"), false);
+  assert.equal(matchesCapabilityFilter("free", freeCaps, "resilient"), true);
   assert.equal(matchesCapabilityFilter("apex", visionToolCaps, "resilient"), false);
   assert.equal(matchesCapabilityFilter("local", visionToolCaps, "resilient"), false);
 });

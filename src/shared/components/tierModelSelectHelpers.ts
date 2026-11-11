@@ -1,9 +1,11 @@
 import { LOCAL_PROVIDERS } from "@/shared/constants/providers";
 import { isVisionModelId } from "@/shared/constants/visionModels";
+import { isFreeModel } from "@/shared/utils/freeModels";
 
 export type SpbTierKey = "apex" | "resilient" | "local";
 
-export type CapabilityFilterKey = "all" | "apex" | "resilient" | "local" | "tools" | "vision";
+export type CapabilityFilterKey =
+  "all" | "free" | "apex" | "resilient" | "local" | "tools" | "vision";
 
 export interface ModelCapabilities {
   isApexReasoning: boolean;
@@ -11,6 +13,7 @@ export interface ModelCapabilities {
   isLocalEngine: boolean;
   hasToolCalling: boolean;
   hasVision: boolean;
+  isFree: boolean;
   contextLength?: number;
 }
 
@@ -24,6 +27,7 @@ export interface TierSelectableModel {
   capabilities: ModelCapabilities;
   isConfigured: boolean;
   isCombo?: boolean;
+  comboId?: string;
   comboStrategy?: string;
   comboModels?: string[];
   comboDescription?: string;
@@ -114,12 +118,18 @@ export function detectModelCapabilities(
     isVisionModelId(modelId) ||
     isVisionModelId(`${providerId}/${modelId}`);
 
+  const isFree =
+    isFreeModel(providerId, { id: modelId, name: modelName }) ||
+    modelId.endsWith(":free") ||
+    /free/i.test(modelId);
+
   return {
     isApexReasoning,
     isResilient,
     isLocalEngine,
     hasToolCalling,
     hasVision,
+    isFree,
     contextLength: model.contextLength,
   };
 }
@@ -179,12 +189,17 @@ export function detectComboCapabilities(combo: {
 
   const hasVision = memberModelStrings.some((m) => isVisionModelId(m));
 
+  const isFree =
+    memberModelStrings.length > 0 &&
+    memberModelStrings.every((m) => /(:free|free|gratis)/i.test(m));
+
   return {
     isApexReasoning,
     isResilient,
     isLocalEngine,
     hasToolCalling,
     hasVision,
+    isFree,
     contextLength:
       typeof combo.computed_context_length === "number" && combo.computed_context_length > 0
         ? combo.computed_context_length
@@ -213,6 +228,8 @@ export function matchesCapabilityFilter(
   switch (filter) {
     case "all":
       return isModelEligibleForTier(tier, caps);
+    case "free":
+      return caps.isFree;
     case "apex":
       return caps.isApexReasoning;
     case "resilient":
