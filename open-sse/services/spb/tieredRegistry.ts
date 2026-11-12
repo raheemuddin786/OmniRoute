@@ -8,7 +8,7 @@ import { TaskPhase, type GuidanceContract } from "./intentAnalyzer.ts";
 import { type TierModelsConfig } from "../tierTypes.ts";
 import { checkCooldownStatus } from "../globalRateLimiter.ts";
 import { isFreeModelTarget } from "../spbFreeTierAutoConfig.ts";
-import { getTierConfig } from "../tierResolver.ts";
+import { getTierConfig, resolveVirtualTierModels } from "../tierResolver.ts";
 
 export type ModelTier = "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 

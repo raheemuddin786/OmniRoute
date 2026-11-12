@@ -1,5 +1,5 @@
 import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
-import { getTierConfig } from "@omniroute/open-sse/services/tierResolver";
+import { getTierConfig, resolveVirtualTierModels } from "@omniroute/open-sse/services/tierResolver";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -1381,8 +1381,6 @@ async function handleChatImplementation(
     // from free tier models or dynamic provider mapping (e.g. resolveVirtualTierModels)
     if (!selectedTarget) {
       try {
-        const { resolveVirtualTierModels } =
-          await import("@omniroute/open-sse/services/tierResolver");
         const dynamicCandidates = resolveVirtualTierModels(activeTier);
         if (dynamicCandidates.length > 0) {
           selectedTarget = dynamicCandidates[0];
