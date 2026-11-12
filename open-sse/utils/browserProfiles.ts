@@ -10,6 +10,7 @@
  * rather than silently pinning a degenerate fingerprint (the #5591 trap).
  */
 import * as nodeModule from "node:module";
+import * as path from "node:path";
 
 // #12491 — anchor on process.argv[1]||cwd() rather than import.meta.url: the
 // standalone Docker runtime re-lays-out files at a different relative depth
@@ -17,7 +18,18 @@ import * as nodeModule from "node:module";
 // though this loader already keeps the specifier itself dynamic (see
 // loadRuntimeModule() below). Matches src/lib/machineToken.ts and
 // src/lib/db/adapters/runtimeRequire.ts's established anchor pattern.
-const runtimeRequire = nodeModule.createRequire(process.argv[1] || process.cwd());
+function resolveRuntimeRequire(): NodeRequire {
+  const candidate = process.argv[1] || process.cwd();
+  const fileCandidate =
+    candidate.endsWith(".json") ||
+    candidate.endsWith(".js") ||
+    candidate.endsWith(".cjs") ||
+    candidate.endsWith(".mjs")
+      ? candidate
+      : path.join(candidate, "package.json");
+  return nodeModule.createRequire(fileCandidate);
+}
+const runtimeRequire = resolveRuntimeRequire();
 
 function loadRuntimeModule(moduleName: string): unknown {
   // Keep the specifier dynamic. Turbopack rewrites a literal createRequire call

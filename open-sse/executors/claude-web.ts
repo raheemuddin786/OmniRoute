@@ -370,6 +370,12 @@ async function errorResponseForTransport(
     invalidateClaudeWebTurn(turn, "conversation");
     return makeErrorResponse(401, "Session expired or invalid");
   }
+  if (isClaudeWebChallenge({ ...result, bodyText })) {
+    return makeErrorResponse(403, "Claude Web returned a Cloudflare browser challenge", {
+      type: "cloudflare_challenge",
+      code: "cf_mitigated_challenge",
+    });
+  }
   if (result.status === 429) {
     const extraHeaders: Record<string, string> = {};
     let upstreamRetryAfter = normalizeForwardedRetryAfter(result.headers.get("retry-after"));
@@ -422,12 +428,6 @@ async function errorResponseForTransport(
     return makeErrorResponse(429, "Rate limited by Claude Web API", {
       extraHeaders,
       retryHint: { kind: failureKindKey },
-    });
-  }
-  if (isClaudeWebChallenge({ ...result, bodyText })) {
-    return makeErrorResponse(403, "Claude Web returned a Cloudflare browser challenge", {
-      type: "cloudflare_challenge",
-      code: "cf_mitigated_challenge",
     });
   }
   return makeErrorResponse(
