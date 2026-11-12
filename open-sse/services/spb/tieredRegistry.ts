@@ -66,9 +66,26 @@ export function selectModelTier(
     return tierList.filter(isFreeModelTarget);
   };
 
-  const rawApex = filterIfFreeOnly(customModels?.apex ?? [], "apex");
-  const rawResilient = filterIfFreeOnly(customModels?.resilient ?? [], "resilient");
-  const rawLocal = filterIfFreeOnly(customModels?.local ?? [], "local");
+  // If customModels for a tier is empty or not provided, resolve virtual/auto candidates for that tier
+  const getEffectiveTierModels = (
+    tierKey: "apex" | "resilient" | "local",
+    customList?: string[]
+  ) => {
+    const directList = filterIfFreeOnly(customList ?? [], tierKey);
+    if (directList.length > 0) return directList;
+    try {
+      const virtual = resolveVirtualTierModels(
+        `tier_${tierKey === "apex" ? "1_apex" : tierKey === "local" ? "3_local" : "2_resilient"}`
+      );
+      return filterIfFreeOnly(virtual, tierKey);
+    } catch {
+      return directList;
+    }
+  };
+
+  const rawApex = getEffectiveTierModels("apex", customModels?.apex);
+  const rawResilient = getEffectiveTierModels("resilient", customModels?.resilient);
+  const rawLocal = getEffectiveTierModels("local", customModels?.local);
 
   const models = {
     apex: prioritizeHealthyTierModels(rawApex),

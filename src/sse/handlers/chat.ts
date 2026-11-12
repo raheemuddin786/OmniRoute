@@ -1368,7 +1368,7 @@ async function handleChatImplementation(
       activeTier === "tier_1_apex" ? "apex" : activeTier === "tier_3_local" ? "local" : "resilient";
 
     const configuredTargets = tierModels[tierKey] || [];
-    const selectedTarget =
+    let selectedTarget =
       spbDecision?.selectedModel ||
       configuredTargets[0] ||
       (activeTier === "tier_1_apex"
@@ -1376,6 +1376,21 @@ async function handleChatImplementation(
         : activeTier === "tier_3_local"
           ? tierModels.resilient?.[0] || tierModels.apex?.[0]
           : tierModels.apex?.[0] || tierModels.local?.[0]);
+
+    // Fallback: If no custom model is configured in the tier, resolve candidates dynamically
+    // from free tier models or dynamic provider mapping (e.g. resolveVirtualTierModels)
+    if (!selectedTarget) {
+      try {
+        const { resolveVirtualTierModels } =
+          await import("@omniroute/open-sse/services/tierResolver");
+        const dynamicCandidates = resolveVirtualTierModels(activeTier);
+        if (dynamicCandidates.length > 0) {
+          selectedTarget = dynamicCandidates[0];
+        }
+      } catch {
+        // fail open
+      }
+    }
 
     if (!selectedTarget) {
       log.error("SPB", `SPB tier '${activeTier}' has no configured model or combo in tierModels.`);
