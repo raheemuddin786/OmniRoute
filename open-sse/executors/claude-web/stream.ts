@@ -315,24 +315,28 @@ function handleContentBlockDelta(
   if (!block) protocolFailure(state, "Content delta has no open block");
 
   const delta = requireRecord(event.delta, "delta");
-  if (delta.type === "text_delta" && block === "text") {
+  if (delta.type === "text_delta") {
+    // Normal text delta or transition recovery
     return { kind: "content", text: deltaText(delta, ["text"]) };
   }
-  if (delta.type === "thinking_delta" && block === "thinking") {
+  if (delta.type === "thinking_delta") {
     return { kind: "reasoning", text: deltaText(delta, ["thinking", "text"]) };
   }
-  if (delta.type === "thinking_summary_delta" && block === "thinking") {
+  if (delta.type === "thinking_summary_delta") {
     return { kind: "reasoning", text: thinkingSummaryText(delta) };
   }
-  if (delta.type === "input_json_delta" && block === "tool_use") {
+  if (delta.type === "input_json_delta") {
     const toolBlock = state.toolBlocks.get(index);
-    if (!toolBlock) protocolFailure(state, "input_json_delta has no tool block state");
-    if (typeof delta.partial_json === "string") {
+    if (toolBlock && typeof delta.partial_json === "string") {
       toolBlock.inputParts.push(delta.partial_json);
     }
     return null;
   }
-  return protocolFailure(state, "Content delta type does not match its block");
+  // Gracefully recover rather than throwing fatal protocolFailure if delta is text-like or unknown
+  if (typeof delta.text === "string") {
+    return { kind: "content", text: delta.text };
+  }
+  return null;
 }
 
 function handleContentBlockStop(
