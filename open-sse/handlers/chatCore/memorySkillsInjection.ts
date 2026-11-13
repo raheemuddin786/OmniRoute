@@ -66,6 +66,7 @@ export async function injectMemoryAndSkills({
   sourceFormat,
   targetFormat,
   backgroundReason,
+  projectContext,
   log,
 }: {
   body: Record<string, unknown>;
@@ -75,6 +76,7 @@ export async function injectMemoryAndSkills({
   sourceFormat: string;
   targetFormat: string;
   backgroundReason: string | null;
+  projectContext?: { projectId?: string | null; workspaceRoot?: string | null };
   log: MemorySkillsLogger;
 }): Promise<MemorySkillsInjectionResult> {
   const memorySettings = memoryOwnerId
@@ -194,7 +196,11 @@ export async function injectMemoryAndSkills({
 
       const memories = await retrieveMemories(
         memoryOwnerId,
-        toMemoryRetrievalConfig(memorySettings, { query: lastUserQuery })
+        toMemoryRetrievalConfig(memorySettings, {
+          query: lastUserQuery,
+          projectId: projectContext?.projectId,
+          workspaceRoot: projectContext?.workspaceRoot,
+        })
       );
       if (memories.length > 0) {
         // #3890: when the client uses prompt caching (cache_control breakpoints), inject

@@ -202,7 +202,13 @@ export function runMemoryExtractionGate(input: {
   pipelineSessionId: string;
   requestBody: Record<string, unknown> | null | undefined;
   responseBody: Record<string, unknown> | null | undefined;
-  extractFacts: (text: string, memoryOwnerId: string, sessionId: string) => void;
+  extractFacts: (
+    text: string,
+    memoryOwnerId: string,
+    sessionId: string,
+    projectContext?: { projectId?: string | null; workspaceRoot?: string | null }
+  ) => void;
+  projectContext?: { projectId?: string | null; workspaceRoot?: string | null };
   log?: { debug?: (tag: string, message: string) => void } | null;
 }): void {
   const {
@@ -213,6 +219,7 @@ export function runMemoryExtractionGate(input: {
     requestBody,
     responseBody,
     extractFacts,
+    projectContext,
     log,
   } = input;
   if (!memoryOwnerId) return;
@@ -237,7 +244,7 @@ export function runMemoryExtractionGate(input: {
 
   const requestMemoryText = extractMemoryTextFromRequestBody(requestBody ?? null);
   if (requestMemoryText) {
-    extractFacts(requestMemoryText, memoryOwnerId, pipelineSessionId);
+    extractFacts(requestMemoryText, memoryOwnerId, pipelineSessionId, projectContext);
   }
 
   // Both callers pass the response from before PII response sanitization (non-streaming:
@@ -246,6 +253,6 @@ export function runMemoryExtractionGate(input: {
   // and it works on the extracted text so the caller's response object stays untouched.
   const responseMemoryText = sanitizePII(extractMemoryTextFromResponse(responseBody ?? null)).text;
   if (responseMemoryText) {
-    extractFacts(responseMemoryText, memoryOwnerId, pipelineSessionId);
+    extractFacts(responseMemoryText, memoryOwnerId, pipelineSessionId, projectContext);
   }
 }

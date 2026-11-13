@@ -16,7 +16,6 @@ import { pickApiKeyForInternalUse } from "../db/apiKeys";
 import { getRuntimePorts } from "../runtime/ports";
 import {
   estimateTokens,
-  parseMetadata,
   rowToMemory,
   getRelevanceScore,
   sanitizeFts5Query,
@@ -67,10 +66,62 @@ function hasTable(tableName: string): boolean {
   return row?.name === tableName;
 }
 
+function buildProjectFilterClause(
+  tableName: string | null,
+  projectId?: string | null,
+  workspaceRoot?: string | null
+): { sql: string; params: unknown[] } {
+  if (!projectId && !workspaceRoot) return { sql: "", params: [] };
+  const col = tableName ? `${tableName}.metadata` : "metadata";
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (projectId) {
+    conditions.push(`json_extract(${col}, '$.projectId') = ?`);
+    params.push(projectId);
+  }
+  if (workspaceRoot) {
+    conditions.push(`json_extract(${col}, '$.workspaceRoot') = ?`);
+    params.push(workspaceRoot);
+  }
+
+  const matchCond = conditions.join(" OR ");
+  const sql = ` AND (
+    (json_valid(${col}) = 1 AND (${matchCond}))
+    OR (${col} IS NULL OR json_valid(${col}) = 0 OR (json_extract(${col}, '$.projectId') IS NULL AND json_extract(${col}, '$.workspaceRoot') IS NULL))
+  )`;
+  return { sql, params };
+}
+
+/**
+ * Filter memories in-memory by projectId / workspaceRoot.
+ * Matches if memory has matching projectId, matching workspaceRoot,
+ * or neither (unscoped / legacy memory).
+ */
+export function filterMemoriesByProject(
+  memories: Memory[],
+  projectId?: string | null,
+  workspaceRoot?: string | null
+): Memory[] {
+  if (!projectId && !workspaceRoot) return memories;
+  return memories.filter((m) => {
+    const meta = m.metadata || {};
+    const memPid = typeof meta.projectId === "string" ? meta.projectId : null;
+    const memRoot = typeof meta.workspaceRoot === "string" ? meta.workspaceRoot : null;
+    if (projectId && memPid && memPid === projectId) return true;
+    if (workspaceRoot && memRoot && memRoot === workspaceRoot) return true;
+    if (!memPid && !memRoot) return true;
+    return false;
+  });
+}
+
 /**
  * Fetch memories from SQLite by an array of IDs, preserving order.
  */
-function fetchMemoriesByIds(ids: string[]): Memory[] {
+function fetchMemoriesByIds(
+  ids: string[],
+  projectContext?: { projectId?: string | null; workspaceRoot?: string | null }
+): Memory[] {
   if (ids.length === 0) return [];
   const db = getDbInstance();
   const placeholders = ids.map(() => "?").join(", ");
@@ -83,7 +134,11 @@ function fetchMemoriesByIds(ids: string[]): Memory[] {
     byId.set(String(row.id), rowToMemory(row));
   }
 
-  return ids.map((id) => byId.get(id)).filter((m): m is Memory => m !== undefined);
+  const result = ids.map((id) => byId.get(id)).filter((m): m is Memory => m !== undefined);
+  if (projectContext?.projectId || projectContext?.workspaceRoot) {
+    return filterMemoriesByProject(result, projectContext.projectId, projectContext.workspaceRoot);
+  }
+  return result;
 }
 
 interface FtsColConfig {
@@ -96,6 +151,8 @@ interface FtsColConfig {
   scope?: string;
   sessionId?: string;
   retentionDays?: number;
+  projectId?: string;
+  workspaceRoot?: string;
 }
 
 /**
@@ -116,6 +173,8 @@ function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
     scope,
     sessionId,
     retentionDays,
+    projectId,
+    workspaceRoot,
   } = config;
 
   let ftsQueryStr =
@@ -129,7 +188,6 @@ function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
   if (retentionDays && retentionDays > 0) {
     ftsQueryStr += ` AND datetime(m.${createdCol}) >= datetime(?)`;
   }
-  ftsQueryStr += ` ORDER BY f.rank LIMIT 100`;
 
   const ftsParams: unknown[] = [safeQuery, apiKeyId];
   if (scope === "session" && sessionId) ftsParams.push(sessionId);
@@ -137,6 +195,14 @@ function buildFtsRows(apiKeyId: string, config: FtsColConfig): MemoryRow[] {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
     ftsParams.push(cutoff);
   }
+
+  const projFilter = buildProjectFilterClause("m", projectId, workspaceRoot);
+  if (projFilter.sql) {
+    ftsQueryStr += projFilter.sql;
+    ftsParams.push(...projFilter.params);
+  }
+
+  ftsQueryStr += ` ORDER BY f.rank LIMIT 100`;
 
   try {
     return db.prepare(ftsQueryStr).all(...ftsParams) as MemoryRow[];
@@ -347,6 +413,16 @@ async function retrieveMemoriesInternal(
     params.push(cutoff);
   }
 
+  const projFilter = buildProjectFilterClause(
+    useModernTable ? tableName : null,
+    normalizedConfig.projectId,
+    normalizedConfig.workspaceRoot
+  );
+  if (projFilter.sql) {
+    query += projFilter.sql;
+    params.push(...projFilter.params);
+  }
+
   // Load extended settings for embedding/vector-store resolution
   const settings = await getMemorySettings();
 
@@ -364,6 +440,8 @@ async function retrieveMemoriesInternal(
     scope: normalizedConfig.scope,
     sessionId: config.sessionId,
     retentionDays: normalizedConfig.retentionDays,
+    projectId: normalizedConfig.projectId,
+    workspaceRoot: normalizedConfig.workspaceRoot,
   };
 
   switch (strategy) {
@@ -384,7 +462,10 @@ async function retrieveMemoriesInternal(
               });
               if (qres.ok && qres.results && qres.results.length > 0) {
                 const hitIds = qres.results.map((r) => r.id);
-                const hitMemories = fetchMemoriesByIds(hitIds);
+                const hitMemories = fetchMemoriesByIds(hitIds, {
+                  projectId: normalizedConfig.projectId,
+                  workspaceRoot: normalizedConfig.workspaceRoot,
+                });
                 const scoreMap = new Map(qres.results.map((r) => [r.id, r.score]));
                 let qdrantItems = hitMemories.map((m) => ({
                   memory: m,
@@ -433,7 +514,10 @@ async function retrieveMemoriesInternal(
                 await vec.ensureReady(resolution);
                 const hits = await vec.searchVector(embeddingResult.vector, 100, apiKeyId);
                 const hitIds = hits.map((h) => h.memoryId);
-                const hitMemories = fetchMemoriesByIds(hitIds);
+                const hitMemories = fetchMemoriesByIds(hitIds, {
+                  projectId: normalizedConfig.projectId,
+                  workspaceRoot: normalizedConfig.workspaceRoot,
+                });
                 const scoreMap = new Map(hits.map((h) => [h.memoryId, h.score]));
 
                 let rankedItems = hitMemories.map((m) => ({
@@ -512,7 +596,10 @@ async function retrieveMemoriesInternal(
               });
               if (qres.ok && qres.results && qres.results.length > 0) {
                 const hitIds = qres.results.map((r) => r.id);
-                const hitMemories = fetchMemoriesByIds(hitIds);
+                const hitMemories = fetchMemoriesByIds(hitIds, {
+                  projectId: normalizedConfig.projectId,
+                  workspaceRoot: normalizedConfig.workspaceRoot,
+                });
                 const scoreMap = new Map(qres.results.map((r) => [r.id, r.score]));
                 let qdrantItems = hitMemories.map((m) => ({
                   memory: m,
@@ -566,7 +653,10 @@ async function retrieveMemoriesInternal(
                   apiKeyId
                 );
                 const hitIds = hybridHits.map((h) => h.memoryId);
-                const hitMemories = fetchMemoriesByIds(hitIds);
+                const hitMemories = fetchMemoriesByIds(hitIds, {
+                  projectId: normalizedConfig.projectId,
+                  workspaceRoot: normalizedConfig.workspaceRoot,
+                });
                 const scoreMap = new Map(
                   hybridHits.map((h) => [
                     h.memoryId,

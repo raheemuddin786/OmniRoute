@@ -122,6 +122,7 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     managedLease,
     memoryOwnerId,
     memorySettings,
+    projectContext,
     model,
     modelInfo,
     onRequestSuccess,
@@ -625,6 +626,7 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
       runMemoryExtractionGate({
         memoryOwnerId,
         memorySettings,
+        projectContext,
         videoBridgeObserved,
         pipelineSessionId,
         requestBody: body as Record<string, unknown>,

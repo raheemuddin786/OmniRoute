@@ -1207,6 +1207,26 @@ async function handleChatCoreInner({
     sourceFormat,
     body: body as Record<string, unknown>,
   });
+
+  // Resolve originating workspace/project context for project-isolated memory
+  let memoryProjectContext: { projectId?: string | null; workspaceRoot?: string | null } | undefined;
+  try {
+    const { resolveWorkspaceLinker } = await import("@/lib/usage/workspaceLinker");
+    const linked = resolveWorkspaceLinker({
+      headers: clientRawRequest?.headers ?? null,
+      body: body as Record<string, unknown>,
+      sessionTag: conversationId || explicitSessionIdHeader || null,
+    });
+    if (linked.projectId || linked.workspaceRoot) {
+      memoryProjectContext = {
+        projectId: linked.projectId,
+        workspaceRoot: linked.workspaceRoot,
+      };
+    }
+  } catch {
+    // Best-effort workspace resolution
+  }
+
   const injectionResult = await injectMemoryAndSkills({
     body,
     memoryOwnerId,
@@ -1215,6 +1235,7 @@ async function handleChatCoreInner({
     sourceFormat,
     targetFormat,
     backgroundReason,
+    projectContext: memoryProjectContext,
     log,
   });
   body = injectionResult.body;
@@ -3379,6 +3400,7 @@ async function handleChatCoreInner({
       markAccountSemaphoreBlocked,
       memoryOwnerId,
       memorySettings,
+      projectContext: memoryProjectContext,
       model,
       normalizeHeaders,
       normalizeUsage,
@@ -3498,6 +3520,7 @@ async function handleChatCoreInner({
     managedLease,
     memoryOwnerId,
     memorySettings,
+    projectContext: memoryProjectContext,
     model,
     onRequestSuccess,
     onStreamFailure,

@@ -42,4 +42,6 @@ export interface MemoryConfig {
   persistAcrossModels: boolean;
   retentionDays: number;
   scope: "session" | "apiKey" | "global";
+  projectId?: string;
+  workspaceRoot?: string;
 }

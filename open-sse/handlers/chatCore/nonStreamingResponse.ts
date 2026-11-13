@@ -142,6 +142,7 @@ export async function runNonStreamingResponse(deps: NonStreamingDeps) {
     markAccountSemaphoreBlocked,
     memoryOwnerId,
     memorySettings,
+    projectContext,
     model,
     normalizeHeaders,
     normalizeUsage,
@@ -761,6 +762,7 @@ export async function runNonStreamingResponse(deps: NonStreamingDeps) {
     runMemoryExtractionGate({
       memoryOwnerId,
       memorySettings,
+      projectContext,
       videoBridgeObserved,
       pipelineSessionId,
       requestBody: body as Record<string, unknown>,
