@@ -872,8 +872,14 @@ export async function processSpbOutboundZeroLoss(args: {
     }
 
     // Response failed criteria: formulate targeted re-prompt and query upstream again
-    // BUT only if we actually have text and suggestions, and never if extracted.text is empty
-    if (!extracted.text.trim() || !evalResult.suggestedReprompt) {
+    // For empty or severely truncated outputs in autonomous / tool-using sessions, supply a continuation prompt
+    const repromptText =
+      evalResult.suggestedReprompt ||
+      (!extracted.text.trim()
+        ? "Your previous response was empty or contained no user-visible output or tool execution. Please continue autonomous execution immediately and supply substantive progress or output."
+        : undefined);
+
+    if (!repromptText) {
       break;
     }
 
@@ -883,8 +889,8 @@ export async function processSpbOutboundZeroLoss(args: {
       : [];
     const repromptMessages = pruneOldToolOutputsForReprompt([
       ...currentMessages,
-      { role: "assistant", content: extracted.text },
-      { role: "user", content: evalResult.suggestedReprompt },
+      ...(extracted.text.trim() ? [{ role: "assistant", content: extracted.text }] : []),
+      { role: "user", content: repromptText },
     ]);
 
     try {
@@ -907,9 +913,9 @@ export async function processSpbOutboundZeroLoss(args: {
   // because currentResponse stream has already been consumed!
   if (lastExtracted) {
     const fallbackEval = lastEvalResult || {
-      isSatisfied: true,
-      satisfactionScore: 1.0,
-      omissions: [],
+      isSatisfied: false,
+      satisfactionScore: 0.0,
+      omissions: ["Response loop terminated prematurely before satisfying requirements."],
       oddities: [],
       repromptCount,
     };

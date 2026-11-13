@@ -98,6 +98,7 @@ export interface SpbRoutingDecision {
   enhancedMessages?: Array<{ role: string; content?: unknown }>;
   cacheControl?: { type: "ephemeral" };
   tokensSaved?: number;
+  originalPrompt?: string;
   error?: string;
 }
 
@@ -725,6 +726,7 @@ export async function processSmartProxyRouting(
       enhancedMessages,
       cacheControl: tierAssignment.cacheEnabled ? { type: "ephemeral" } : undefined,
       tokensSaved,
+      originalPrompt: intent.originalPrompt || lastUserText || undefined,
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);

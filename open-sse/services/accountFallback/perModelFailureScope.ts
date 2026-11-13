@@ -9,6 +9,7 @@
  */
 import { resolveProviderId } from "../../../src/shared/constants/providers";
 import { hasPerModelQuota } from "../accountFallback.ts";
+import { isModelScopedAccessDenial } from "./modelScopedAccessDenial.ts";
 
 // Bounded quantifiers keep this ReDoS-safe.
 const MODEL_NOT_FOUND_404_REGEX =
@@ -122,6 +123,7 @@ export function hasPerModelFailureScope(
     isModelNotFound404(status, errorText) ||
     isAnthropicModelNotFound(provider, model, status, errorText) ||
     isModelUnsupported401(status, errorText) ||
+    isModelScopedAccessDenial(provider, status ?? 0, errorText) ||
     isExplicitModelCapacityFailure(status, errorText, model)
   )
     return true;

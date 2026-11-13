@@ -430,7 +430,11 @@ async function applySpbOutboundZeroLoss(
     const { processSpbOutboundZeroLoss } =
       await import("@omniroute/open-sse/services/spb/outboundEvaluator");
     const { updateCheckpointSatisfaction } = await import("@/lib/db/spbState");
-    const lastUserPrompt = spbDecision.enhancement?.originalPrompt || "";
+    const lastUserPrompt =
+      spbDecision.originalPrompt ||
+      spbDecision.enhancement?.originalPrompt ||
+      spbDecision.intent?.originalPrompt ||
+      "";
     const preservedIntentions = spbDecision.enhancement?.preservedIntentions || [];
     const tier = spbDecision.tierAssignment?.tier || "tier_2_resilient";
     const taskPhase: TaskPhase = spbDecision.intent?.taskPhase || "CODE_GENERATION";
