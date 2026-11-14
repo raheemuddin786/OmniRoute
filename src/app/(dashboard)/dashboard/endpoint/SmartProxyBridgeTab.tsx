@@ -312,6 +312,9 @@ export function SmartProxyBridgeTab() {
 
         if (!ignore && tierRes.ok) {
           const tierData = await tierRes.json();
+          if (Array.isArray(tierData.profiles)) {
+            setAvailableProfiles(tierData.profiles);
+          }
           setSpbEnabled(Boolean(tierData.spbEnabled));
           setOnlyFreeTierModels(Boolean(tierData.onlyFreeTierModels));
           if (tierData.tierModes) {
