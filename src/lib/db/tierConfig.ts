@@ -99,3 +99,17 @@ export function listTierConfigProfiles(): string[] {
   }
   return Array.from(profiles);
 }
+
+/**
+ * Delete a named SPB profile from tier_config table.
+ * Returns true if deleted, false if default or not found.
+ */
+export function deleteTierConfigProfile(profileName: string): boolean {
+  if (!profileName || profileName === "default" || profileName === "spb") {
+    return false; // Cannot delete the default profile
+  }
+  const db = getDbInstance();
+  const key = profileName.startsWith("tier_config:") ? profileName : `tier_config:${profileName}`;
+  const res = db.prepare(`DELETE FROM ${TABLE} WHERE key = ?`).run(key);
+  return res.changes > 0;
+}

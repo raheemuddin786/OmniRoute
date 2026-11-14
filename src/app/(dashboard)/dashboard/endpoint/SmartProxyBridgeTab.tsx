@@ -531,6 +531,8 @@ export function SmartProxyBridgeTab() {
     };
   }, [onlyFreeTierModels, tierModes]);
 
+  const [isDeletingProfile, setIsDeletingProfile] = useState<boolean>(false);
+
   const handleSwitchProfile = async (profileName: string) => {
     setSelectedProfile(profileName);
     await loadData(undefined, profileName);
@@ -549,6 +551,40 @@ export function SmartProxyBridgeTab() {
     setNewProfileName("");
     setIsCreatingProfile(false);
     await loadData(undefined, trimmed);
+  };
+
+  const handleDeleteProfile = async (profileName: string) => {
+    if (profileName === "default" || profileName === "spb") return;
+    if (!window.confirm(`Are you sure you want to delete SPB profile "${profileName}"?`)) {
+      return;
+    }
+    setIsDeletingProfile(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(
+        `/api/settings/tier-config?profile=${encodeURIComponent(profileName)}`,
+        {
+          method: "DELETE",
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const nextProfiles = Array.isArray(data.profiles)
+          ? data.profiles
+          : availableProfiles.filter((p) => p !== profileName);
+        setAvailableProfiles(nextProfiles);
+        setSelectedProfile("default");
+        setStatusMessage(`SPB profile "${profileName}" deleted successfully.`);
+        await loadData(undefined, "default");
+      } else {
+        const errText = await res.text();
+        setStatusMessage(`Failed to delete profile "${profileName}": ${errText}`);
+      }
+    } catch (err) {
+      setStatusMessage(`Error deleting profile: ${String(err)}`);
+    } finally {
+      setIsDeletingProfile(false);
+    }
   };
 
   const handleSaveConfig = async () => {
@@ -669,21 +705,36 @@ export function SmartProxyBridgeTab() {
 
       {/* Profile Selector Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border bg-card p-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-foreground">Active SPB Instance Profile:</span>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-semibold text-foreground">Active SPB Instance:</span>
+          <div className="flex flex-wrap items-center gap-2">
             {availableProfiles.map((p) => (
-              <button
-                key={p}
-                onClick={() => handleSwitchProfile(p)}
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                  selectedProfile === p
-                    ? "bg-primary text-primary-foreground shadow"
-                    : "bg-muted text-muted-foreground hover:bg-muted/80"
-                }`}
-              >
-                {p === "default" ? "default (auto/spb)" : `${p} (auto/${p})`}
-              </button>
+              <div key={p} className="inline-flex items-center rounded-md border shadow-sm">
+                <button
+                  onClick={() => handleSwitchProfile(p)}
+                  className={`rounded-l-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    selectedProfile === p
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                  }`}
+                >
+                  {p === "default" ? "default (auto/spb)" : `${p} (auto/${p})`}
+                </button>
+                {p !== "default" && (
+                  <button
+                    onClick={() => handleDeleteProfile(p)}
+                    disabled={isDeletingProfile}
+                    title={`Delete instance ${p}`}
+                    className={`rounded-r-md border-l px-2 py-1.5 text-xs transition-colors ${
+                      selectedProfile === p
+                        ? "bg-primary/90 text-primary-foreground hover:bg-destructive hover:text-destructive-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground"
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-xs">close</span>
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -736,20 +787,20 @@ export function SmartProxyBridgeTab() {
             <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
               Smart Proxy Bridge Client Model Identifier
               <code className="rounded bg-indigo-500/20 px-2 py-0.5 font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
-                auto/spb
+                {selectedProfile === "default" ? "auto/spb" : `auto/${selectedProfile}`}
               </code>
             </h3>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              To utilize autonomous context-aware routing, configure your client agent (Claude Code,
-              Gemini CLI, AntiGravity, Cursor, OpenHands) to request the model identifier{" "}
-              <code className="font-mono font-semibold text-foreground">auto/spb</code> (or{" "}
+              To utilize autonomous context-aware routing with this instance, configure your client
+              agent (Claude Code, Gemini CLI, AntiGravity, Cursor, OpenHands) to request the model
+              identifier{" "}
               <code className="font-mono font-semibold text-foreground">
-                auto/smart-proxy-bridge
+                {selectedProfile === "default" ? "auto/spb" : `auto/${selectedProfile}`}
               </code>
-              ). The proxy autonomously inspects task phase, prompt complexity, agent plan mode, and
+              . The proxy autonomously inspects task phase, prompt complexity, agent plan mode, and
               tool execution status to dynamically dispatch traffic across Tier 1 (Apex Reasoning),
-              Tier 2 (Resilient Execution), and Tier 3 (Local Edge Inference) with zero client-side
-              tier parameters.
+              Tier 2 (Resilient Execution), and Tier 3 (Local Edge Inference) using this
+              instance&apos;s isolated custom tiers.
             </p>
             <div className="pt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
               <div className="flex items-center gap-1.5">

@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { loadTierConfig, saveTierConfig, listTierConfigProfiles } from "@/lib/db/tierConfig";
+import {
+  loadTierConfig,
+  saveTierConfig,
+  listTierConfigProfiles,
+  deleteTierConfigProfile,
+} from "@/lib/db/tierConfig";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { setTierConfig, setNamedTierConfig } from "@omniroute/open-sse/services/tierResolver";
+import {
+  setTierConfig,
+  setNamedTierConfig,
+  deleteNamedTierConfig,
+} from "@omniroute/open-sse/services/tierResolver";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
@@ -188,4 +197,27 @@ export async function PUT(request: Request) {
   }
 
   return NextResponse.json({ ...nextConfig, profile: targetProfile });
+}
+
+export async function DELETE(request: Request) {
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
+  const url = new URL(request.url);
+  const profile = url.searchParams.get("profile");
+
+  if (!profile || profile === "default" || profile === "spb") {
+    return NextResponse.json(buildErrorBody(400, "Cannot delete default SPB profile"), {
+      status: 400,
+    });
+  }
+
+  const success = deleteTierConfigProfile(profile);
+  deleteNamedTierConfig(profile);
+
+  return NextResponse.json({
+    success,
+    deletedProfile: profile,
+    profiles: listTierConfigProfiles(),
+  });
 }

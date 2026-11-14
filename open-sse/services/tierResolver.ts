@@ -393,6 +393,10 @@ export function setNamedTierConfig(profileName: string, config: TierConfig): voi
   namedProfileConfigs.set(profileName, config);
 }
 
+export function deleteNamedTierConfig(profileName: string): void {
+  namedProfileConfigs.delete(profileName);
+}
+
 export function clearTierCache(): void {
   tierCache.clear();
   // setTierConfig below clears the assignment cache on config edits without
