@@ -12,7 +12,8 @@ export type TaskPhase =
   | "TESTING_AND_VERIFICATION"
   | "FAST_REFACTOR"
   | "DETERMINISTIC_ROUTING"
-  | "INSPECTION_SYNTHESIS";
+  | "INSPECTION_SYNTHESIS"
+  | "IMAGE_GENERATION";
 
 export interface GuidanceContract {
   supervisorTier?: "tier_1_apex" | "tier_2_resilient" | string;
@@ -198,6 +199,9 @@ export function classifyIntent(
 
   const deterministicRegex =
     /\b(format|json|csv|yaml|markdown table|sort|deduplicate|escape|unescape|normalize)\b/i;
+
+  const imageGenerationRegex =
+    /\b(?:generate|create|render|draw|make|design)\b.*?\b(?:image|photo|picture|illustration|visual|photorealistic|portrait|artwork|graphic|poster|brochure image)\b|\b(?:realistic images?|generate images?|image generation|photo generation|text-to-image|txt2img)\b/i;
 
   // Strict execution indicators that distinguish active bug fixing / code writing from planning
   const executionFixBugRegex =
@@ -462,6 +466,9 @@ export function classifyIntent(
   } else if (hasDeterministicKeywords) {
     taskPhase = "DETERMINISTIC_ROUTING";
     complexityScore = 0.15;
+  } else if (imageGenerationRegex.test(targetText)) {
+    taskPhase = "IMAGE_GENERATION";
+    complexityScore = 0.7;
   } else if (hasCodeKeywords || requiresTools) {
     taskPhase = "CODE_GENERATION";
     complexityScore = 0.65;

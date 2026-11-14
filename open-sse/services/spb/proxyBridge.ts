@@ -390,20 +390,35 @@ export async function processSmartProxyRouting(
       normalizedGuidanceContract ||
       (existingCheckpoint?.guidanceContract as GuidanceContract | undefined);
 
+    // Root instruction preservation: extract the root task from the initial prompt or prior checkpoint
+    // to prevent intermediate tool results or short turns from overwriting the composite multi-goal instruction.
+    const rootTaskSpecification =
+      (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.taskSpecification ||
+      (intent.originalPrompt ? cleanUserInstruction(intent.originalPrompt) : "") ||
+      cleanUserInstruction(lastUserText) ||
+      "Supervised autonomous execution";
+
+    const priorInstructions =
+      (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.instructions || [];
+
     if (isStagnant) {
-      // Refresh GuidanceContract with anti-stagnation execution constraints
+      // Refresh GuidanceContract with anti-stagnation execution constraints while preserving root task
       const cleanInstruction = cleanUserInstruction(lastUserText) || "Active execution recovery";
+      const mergedInstructions = Array.from(
+        new Set([...priorInstructions, rootTaskSpecification, cleanInstruction].filter(Boolean))
+      );
       activeGuidanceContract = {
         supervisorTier: "tier_2_resilient",
-        taskSpecification: cleanInstruction,
+        taskSpecification: rootTaskSpecification,
         constraints: [
           "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections.",
           "Immediately perform code modification or test execution using available tools.",
           "Zero unverified assumptions — all code changes must be tool-verified",
           "Preserve existing architecture and contracts during modifications",
         ],
-        instructions: [cleanInstruction],
-        targetFiles: [],
+        instructions: mergedInstructions,
+        targetFiles:
+          (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.targetFiles || [],
         verificationCriteria: [
           "All test and verification suites must pass with zero errors",
           "No pending read-only inspection cycles remain",
@@ -424,17 +439,26 @@ export async function processSmartProxyRouting(
         (tierAssignment.tier === "tier_1_apex" || tierAssignment.tier === "tier_2_resilient"))
     ) {
       const cleanInstruction =
-        cleanUserInstruction(lastUserText) || "Supervised autonomous execution";
+        cleanUserInstruction(lastUserText) ||
+        rootTaskSpecification ||
+        "Supervised autonomous execution";
       const anchors = extractContextAnchors(messages);
       const isAutonomousSdlc =
         /\b(sdlc|end-to-end autonomous|full autonomous|single prompt.*full|single execution.*single prompt|autonomous-executor|requirements.*architecture.*implementation.*testing)\b/i.test(
           cleanInstruction
+        ) ||
+        /\b(sdlc|end-to-end autonomous|full autonomous|single prompt.*full|single execution.*single prompt|autonomous-executor|requirements.*architecture.*implementation.*testing)\b/i.test(
+          rootTaskSpecification
         );
+
+      const mergedInstructions = Array.from(
+        new Set([...priorInstructions, rootTaskSpecification, cleanInstruction].filter(Boolean))
+      );
 
       activeGuidanceContract = {
         supervisorTier: tierAssignment.tier,
         origin: tierAssignment.tier === "tier_1_apex" ? "supervisor" : "auto",
-        taskSpecification: cleanInstruction,
+        taskSpecification: rootTaskSpecification,
         constraints: [
           "Zero unverified assumptions",
           "Preserve existing architecture and contracts",
@@ -447,8 +471,12 @@ export async function processSmartProxyRouting(
               ]
             : []),
         ],
-        instructions: [cleanInstruction],
-        targetFiles: anchors.referencedFiles,
+        instructions: mergedInstructions,
+        targetFiles:
+          anchors.referencedFiles.length > 0
+            ? anchors.referencedFiles
+            : (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.targetFiles ||
+              [],
         verificationCriteria: [
           "All test and verification suites must pass with zero errors",
           ...(isAutonomousSdlc

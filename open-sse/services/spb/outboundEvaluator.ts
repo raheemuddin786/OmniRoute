@@ -74,7 +74,7 @@ const PLACEHOLDER_PATTERNS = [
  */
 export function evaluateResponseIntent(
   originalPrompt: string,
-  _preservedIntentions: string[],
+  preservedIntentions: string[],
   responseText: string,
   tier: ModelTier,
   taskPhase: TaskPhase,
@@ -117,6 +117,45 @@ export function evaluateResponseIntent(
   if (!responseText || responseText.trim().length < minResponseLength) {
     omissions.push("Response is empty, severely truncated, or lacks substantive content.");
     score -= 0.6;
+  }
+
+  // 1b. Multi-intention coverage verification: check that explicit sub-intentions are not skipped
+  if (Array.isArray(preservedIntentions) && preservedIntentions.length > 0) {
+    const unaddressedIntentions: string[] = [];
+
+    for (const intentItem of preservedIntentions) {
+      if (typeof intentItem !== "string" || !intentItem.trim()) continue;
+
+      // Check specific domain categories
+      if (/\btest/i.test(intentItem)) {
+        if (!/\b(test|expect|assert|it\(|describe\(|suite|spec)\b/i.test(responseText)) {
+          unaddressedIntentions.push(intentItem);
+        }
+      } else if (/\b(typescript|type|interface)\b/i.test(intentItem)) {
+        if (!/\b(interface|type|:\s*[A-Z][a-zA-Z0-9_<>]+)\b/.test(responseText)) {
+          unaddressedIntentions.push(intentItem);
+        }
+      } else if (/\b(defect|remediation|fix|bug)\b/i.test(intentItem)) {
+        if (!/\b(fix|fixed|resolve|resolved|patch|remediat|bug|error)\b/i.test(responseText)) {
+          unaddressedIntentions.push(intentItem);
+        }
+      } else if (/\b(refactor|clean)\b/i.test(intentItem)) {
+        if (!/\b(refactor|clean|modular|extract|simplif)\b/i.test(responseText)) {
+          unaddressedIntentions.push(intentItem);
+        }
+      } else if (/\b(architect|plan|structur)\b/i.test(intentItem)) {
+        if (!/\b(architect|plan|structur|design|layer|tier|component)\b/i.test(responseText)) {
+          unaddressedIntentions.push(intentItem);
+        }
+      }
+    }
+
+    if (unaddressedIntentions.length > 0) {
+      omissions.push(
+        `Response failed to address ${unaddressedIntentions.length} stated requirement(s): ${unaddressedIntentions.join("; ")}`
+      );
+      score -= Math.min(0.4, unaddressedIntentions.length * 0.15);
+    }
   }
 
   // 2. Detect lazy placeholders and code omissions

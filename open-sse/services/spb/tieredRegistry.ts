@@ -146,6 +146,29 @@ export function selectModelTier(
     };
   }
 
+  // 1b. Image Generation / Multimodal Creation: Route to apex/resilient models capable of high-fidelity visual tasks
+  if (taskPhase === "IMAGE_GENERATION") {
+    const visionCapableCandidates = [
+      ...models.apex.filter((m) =>
+        /vision|image|dall-e|flux|midjourney|ideogram|gemini|gpt-4o|claude/i.test(m)
+      ),
+      ...models.resilient.filter((m) =>
+        /vision|image|dall-e|flux|midjourney|ideogram|gemini|gpt-4o|claude/i.test(m)
+      ),
+    ];
+    const imageModels = visionCapableCandidates.length > 0 ? visionCapableCandidates : models.apex;
+    return {
+      tier: "tier_1_apex",
+      recommendedModels: imageModels,
+      maxTokens: apexMaxTokens,
+      temperature: 0.7, // Higher creative fidelity for image generation prompts
+      cacheEnabled: false,
+      reasoningEffort: "medium",
+      guidanceContract,
+      requiresGuidance: false,
+    };
+  }
+
   // 2. Tier 3: Local/edge inference, inspection synthesis, refactoring, formatting, and deterministic tasks.
   // GOVERNED TIER 3 EXECUTION: All Tier 3 execution requires architectural supervision via GuidanceContract.
   // TIER 3 STRICTNESS: Must have guidanceContract from supervisor tiers (Tier 1 or Tier 2) for ALL phases,
