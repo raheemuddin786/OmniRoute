@@ -566,13 +566,17 @@ export class ClaudeWebExecutor extends BaseExecutor {
     const auditHeaders = makeAuditHeaders();
 
     // Per-account serialization: acquire semaphore keyed on accountScope before dispatching.
-    // Use provider-level timeout (300_000ms) + 60_000ms buffer = 360_000ms.
+    // Default to 30s to fail fast and prevent thread hanging when accounts are rate limited or challenged.
     const semaphoreKey = buildAccountSemaphoreKey({
       provider: "claude-web",
       accountKey: turn.accountScope,
     });
     let releaseSemaphore: (() => void) | null = null;
-    const SEMAPHORE_TIMEOUT_MS = 360_000;
+    const envSemaphoreTimeout = Number(process.env.OMNIROUTE_CLAUDE_WEB_SEMAPHORE_TIMEOUT_MS);
+    const SEMAPHORE_TIMEOUT_MS =
+      Number.isFinite(envSemaphoreTimeout) && envSemaphoreTimeout > 0
+        ? envSemaphoreTimeout
+        : 30_000;
 
     try {
       releaseSemaphore = await acquire(semaphoreKey, {
