@@ -101,6 +101,12 @@ export function SmartProxyBridgeTab() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  // Multi-instance Named SPB state
+  const [selectedProfile, setSelectedProfile] = useState<string>("default");
+  const [availableProfiles, setAvailableProfiles] = useState<string[]>(["default"]);
+  const [newProfileName, setNewProfileName] = useState<string>("");
+  const [isCreatingProfile, setIsCreatingProfile] = useState<boolean>(false);
+
   // Advanced SPB runtime parameters
   const [spbConfig, setSpbConfig] = useState<ConcreteSpbRuntimeConfig>(DEFAULT_SPB_RUNTIME_CONFIG);
   const [retryCodesInput, setRetryCodesInput] = useState<string>(
@@ -161,115 +167,126 @@ export function SmartProxyBridgeTab() {
     }));
   };
 
-  const loadData = useCallback(async (signal?: AbortSignal) => {
-    try {
-      // 1. Fetch Tier Config
-      const tierRes = await fetch("/api/settings/tier-config", { signal });
-      if (tierRes.ok) {
-        const tierData = await tierRes.json();
-        setSpbEnabled(Boolean(tierData.spbEnabled));
-        setOnlyFreeTierModels(Boolean(tierData.onlyFreeTierModels));
-        if (tierData.tierModes) {
-          setTierModes({
-            apex: tierData.tierModes.apex ?? "both",
-            resilient: tierData.tierModes.resilient ?? "both",
-            local: tierData.tierModes.local ?? "both",
-          });
-        }
-        if (typeof tierData.cacheThreshold === "number") {
-          setCacheThreshold(tierData.cacheThreshold);
-        }
-        if (typeof tierData.fallbackTimeout === "number") {
-          setFallbackTimeout(tierData.fallbackTimeout);
-        }
-        if (tierData.tierWeights) {
-          setTierWeights({
-            apex: tierData.tierWeights.apex ?? 0.3,
-            resilient: tierData.tierWeights.resilient ?? 0.5,
-            local: tierData.tierWeights.local ?? 0.2,
-          });
-        }
-        if (tierData.tierModels) {
-          setTierModels({
-            apex: Array.isArray(tierData.tierModels.apex) ? tierData.tierModels.apex : [],
-            resilient: Array.isArray(tierData.tierModels.resilient)
-              ? tierData.tierModels.resilient
-              : [],
-            local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
-          });
-        }
-        if (tierData.tierProviders) {
-          setTierProviders({
-            apex: Array.isArray(tierData.tierProviders.apex) ? tierData.tierProviders.apex : [],
-            resilient: Array.isArray(tierData.tierProviders.resilient)
-              ? tierData.tierProviders.resilient
-              : [],
-            local: Array.isArray(tierData.tierProviders.local) ? tierData.tierProviders.local : [],
-          });
-        }
-        if (tierData.spbConfig) {
-          setSpbConfig({
-            ...DEFAULT_SPB_RUNTIME_CONFIG,
-            ...tierData.spbConfig,
-            tokenBounds: {
-              apex: {
-                ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.apex,
-                ...(tierData.spbConfig.tokenBounds?.apex || {}),
+  const loadData = useCallback(
+    async (signal?: AbortSignal, profile: string = selectedProfile) => {
+      try {
+        // 1. Fetch Tier Config for selected profile
+        const tierRes = await fetch(
+          `/api/settings/tier-config?profile=${encodeURIComponent(profile)}`,
+          { signal }
+        );
+        if (tierRes.ok) {
+          const tierData = await tierRes.json();
+          if (Array.isArray(tierData.profiles)) {
+            setAvailableProfiles(tierData.profiles);
+          }
+          setSpbEnabled(Boolean(tierData.spbEnabled));
+          setOnlyFreeTierModels(Boolean(tierData.onlyFreeTierModels));
+          if (tierData.tierModes) {
+            setTierModes({
+              apex: tierData.tierModes.apex ?? "both",
+              resilient: tierData.tierModes.resilient ?? "both",
+              local: tierData.tierModes.local ?? "both",
+            });
+          }
+          if (typeof tierData.cacheThreshold === "number") {
+            setCacheThreshold(tierData.cacheThreshold);
+          }
+          if (typeof tierData.fallbackTimeout === "number") {
+            setFallbackTimeout(tierData.fallbackTimeout);
+          }
+          if (tierData.tierWeights) {
+            setTierWeights({
+              apex: tierData.tierWeights.apex ?? 0.3,
+              resilient: tierData.tierWeights.resilient ?? 0.5,
+              local: tierData.tierWeights.local ?? 0.2,
+            });
+          }
+          if (tierData.tierModels) {
+            setTierModels({
+              apex: Array.isArray(tierData.tierModels.apex) ? tierData.tierModels.apex : [],
+              resilient: Array.isArray(tierData.tierModels.resilient)
+                ? tierData.tierModels.resilient
+                : [],
+              local: Array.isArray(tierData.tierModels.local) ? tierData.tierModels.local : [],
+            });
+          }
+          if (tierData.tierProviders) {
+            setTierProviders({
+              apex: Array.isArray(tierData.tierProviders.apex) ? tierData.tierProviders.apex : [],
+              resilient: Array.isArray(tierData.tierProviders.resilient)
+                ? tierData.tierProviders.resilient
+                : [],
+              local: Array.isArray(tierData.tierProviders.local)
+                ? tierData.tierProviders.local
+                : [],
+            });
+          }
+          if (tierData.spbConfig) {
+            setSpbConfig({
+              ...DEFAULT_SPB_RUNTIME_CONFIG,
+              ...tierData.spbConfig,
+              tokenBounds: {
+                apex: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.apex,
+                  ...(tierData.spbConfig.tokenBounds?.apex || {}),
+                },
+                resilient: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.resilient,
+                  ...(tierData.spbConfig.tokenBounds?.resilient || {}),
+                },
+                local: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.local,
+                  ...(tierData.spbConfig.tokenBounds?.local || {}),
+                },
               },
-              resilient: {
-                ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.resilient,
-                ...(tierData.spbConfig.tokenBounds?.resilient || {}),
+              tierProfiles: {
+                apex: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.apex,
+                  ...(tierData.spbConfig.tierProfiles?.apex || {}),
+                },
+                resilient: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.resilient,
+                  ...(tierData.spbConfig.tierProfiles?.resilient || {}),
+                },
+                local: {
+                  ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.local,
+                  ...(tierData.spbConfig.tierProfiles?.local || {}),
+                },
               },
-              local: {
-                ...DEFAULT_SPB_RUNTIME_CONFIG.tokenBounds.local,
-                ...(tierData.spbConfig.tokenBounds?.local || {}),
-              },
-            },
-            tierProfiles: {
-              apex: {
-                ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.apex,
-                ...(tierData.spbConfig.tierProfiles?.apex || {}),
-              },
-              resilient: {
-                ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.resilient,
-                ...(tierData.spbConfig.tierProfiles?.resilient || {}),
-              },
-              local: {
-                ...DEFAULT_SPB_RUNTIME_CONFIG.tierProfiles.local,
-                ...(tierData.spbConfig.tierProfiles?.local || {}),
-              },
-            },
-          });
-          if (Array.isArray(tierData.spbConfig.retryStatusCodes)) {
-            setRetryCodesInput(tierData.spbConfig.retryStatusCodes.join(", "));
+            });
+            if (Array.isArray(tierData.spbConfig.retryStatusCodes)) {
+              setRetryCodesInput(tierData.spbConfig.retryStatusCodes.join(", "));
+            }
           }
         }
-      }
 
-      // 2. Fetch System Health Telemetry
-      const healthRes = await fetch("/api/monitoring/health", { signal });
-      if (healthRes.ok) {
-        const healthData = await healthRes.json();
-        const telem = healthData.spbTelemetry;
-        if (telem) {
-          setStats({
-            totalRouted: telem.totalRoutes || 0,
-            activeTiers: {
-              apex: telem.tierDistribution?.tier_1_apex || 0,
-              resilient: telem.tierDistribution?.tier_2_resilient || 0,
-              local: telem.tierDistribution?.tier_3_local || 0,
-            },
-            checkpointsRestored: telem.checkpointsRestored || 0,
-            fallbacksTriggered: telem.fallbacksTriggered || 0,
-            lastRoutedAt: telem.lastRoutedAt || null,
-          });
+        // 2. Fetch System Health Telemetry
+        const healthRes = await fetch("/api/monitoring/health", { signal });
+        if (healthRes.ok) {
+          const healthData = await healthRes.json();
+          const telem = healthData.spbTelemetry;
+          if (telem) {
+            setStats({
+              totalRouted: telem.totalRoutes || 0,
+              activeTiers: {
+                apex: telem.tierDistribution?.tier_1_apex || 0,
+                resilient: telem.tierDistribution?.tier_2_resilient || 0,
+                local: telem.tierDistribution?.tier_3_local || 0,
+              },
+              checkpointsRestored: telem.checkpointsRestored || 0,
+              fallbacksTriggered: telem.fallbacksTriggered || 0,
+              lastRoutedAt: telem.lastRoutedAt || null,
+            });
+          }
         }
+      } catch (err: unknown) {
+        if (signal?.aborted) return;
+        console.error("Failed to load SPB configuration or stats", err);
       }
-    } catch (err: unknown) {
-      if (signal?.aborted) return;
-      console.error("Failed to load SPB configuration or stats", err);
-    }
-  }, []);
+    },
+    [selectedProfile]
+  );
 
   useEffect(() => {
     let ignore = false;
@@ -514,6 +531,26 @@ export function SmartProxyBridgeTab() {
     };
   }, [onlyFreeTierModels, tierModes]);
 
+  const handleSwitchProfile = async (profileName: string) => {
+    setSelectedProfile(profileName);
+    await loadData(undefined, profileName);
+  };
+
+  const handleCreateProfile = async () => {
+    const trimmed = newProfileName
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, "");
+    if (!trimmed) return;
+    if (!availableProfiles.includes(trimmed)) {
+      setAvailableProfiles((prev) => [...prev, trimmed]);
+    }
+    setSelectedProfile(trimmed);
+    setNewProfileName("");
+    setIsCreatingProfile(false);
+    await loadData(undefined, trimmed);
+  };
+
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     setStatusMessage(null);
@@ -529,25 +566,29 @@ export function SmartProxyBridgeTab() {
           parsedRetryCodes.length > 0 ? parsedRetryCodes : spbConfig.retryStatusCodes,
       };
 
-      const res = await fetch("/api/settings/tier-config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          spbEnabled,
-          onlyFreeTierModels,
-          tierModes,
-          cacheThreshold,
-          fallbackTimeout,
-          tierWeights,
-          tierModels,
-          tierProviders,
-          spbConfig: effectiveSpbConfig,
-        }),
-      });
+      const res = await fetch(
+        `/api/settings/tier-config?profile=${encodeURIComponent(selectedProfile)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            profile: selectedProfile,
+            spbEnabled,
+            onlyFreeTierModels,
+            tierModes,
+            cacheThreshold,
+            fallbackTimeout,
+            tierWeights,
+            tierModels,
+            tierProviders,
+            spbConfig: effectiveSpbConfig,
+          }),
+        }
+      );
 
       if (res.ok) {
         setSpbConfig(effectiveSpbConfig);
-        setStatusMessage("SPB parameters and target models saved successfully.");
+        setStatusMessage(`SPB configuration for profile '${selectedProfile}' saved successfully.`);
       } else {
         const errText = await res.text();
         setStatusMessage(`Failed to save configuration: ${errText}`);
@@ -625,6 +666,65 @@ export function SmartProxyBridgeTab() {
           {statusMessage}
         </div>
       )}
+
+      {/* Profile Selector Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border bg-card p-4 shadow-sm">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-foreground">Active SPB Instance Profile:</span>
+          <div className="flex items-center gap-2">
+            {availableProfiles.map((p) => (
+              <button
+                key={p}
+                onClick={() => handleSwitchProfile(p)}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  selectedProfile === p
+                    ? "bg-primary text-primary-foreground shadow"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {p === "default" ? "default (auto/spb)" : `${p} (auto/${p})`}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {isCreatingProfile ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Profile name (e.g. spb1, spb2)"
+                value={newProfileName}
+                onChange={(e) => setNewProfileName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreateProfile()}
+                className="h-8 rounded-md border bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <button
+                onClick={handleCreateProfile}
+                className="h-8 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => {
+                  setIsCreatingProfile(false);
+                  setNewProfileName("");
+                }}
+                className="h-8 rounded-md border bg-background px-2 text-xs text-muted-foreground hover:bg-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setIsCreatingProfile(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+            >
+              <span className="material-symbols-outlined text-sm">add</span>
+              New SPB Profile
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* SPB Usage & Configuration Banner */}
       <div className="rounded-lg border bg-card p-5 shadow-sm border-indigo-500/30 bg-indigo-50/50 dark:bg-indigo-950/20">

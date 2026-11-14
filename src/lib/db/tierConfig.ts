@@ -80,3 +80,22 @@ export function loadTierConfigFromDb(profileKey: string = "tier_config"): TierCo
 export function loadTierConfig(profileKey: string = "tier_config"): TierConfig {
   return loadTierConfigFromDb(profileKey) || DEFAULT_TIER_CONFIG;
 }
+
+/**
+ * List all configured SPB profile names stored in tier_config table.
+ * Returns default "default" profile plus any named profiles (e.g. "spb1", "spb2").
+ */
+export function listTierConfigProfiles(): string[] {
+  const db = getDbInstance();
+  const rows = db.prepare(`SELECT key FROM ${TABLE}`).all() as Array<{ key: string }>;
+  const profiles = new Set<string>(["default"]);
+  for (const r of rows) {
+    if (r.key === "tier_config") {
+      profiles.add("default");
+    } else if (r.key.startsWith("tier_config:")) {
+      const name = r.key.slice("tier_config:".length);
+      if (name) profiles.add(name);
+    }
+  }
+  return Array.from(profiles);
+}

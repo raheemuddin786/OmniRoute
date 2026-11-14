@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { loadTierConfig, saveTierConfig } from "@/lib/db/tierConfig";
+import { loadTierConfig, saveTierConfig, listTierConfigProfiles } from "@/lib/db/tierConfig";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { setTierConfig } from "@omniroute/open-sse/services/tierResolver";
+import { setTierConfig, setNamedTierConfig } from "@omniroute/open-sse/services/tierResolver";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { setFeatureFlagOverride } from "@/lib/db/featureFlags";
@@ -22,6 +22,7 @@ import { spbRuntimeConfigSchema } from "@omniroute/open-sse/services/tierConfig"
 
 const tierSettingsPutSchema = z
   .object({
+    profile: z.string().min(1).optional(),
     provider: z.string().min(1).optional(),
     tier: z.enum(["free", "cheap", "premium"]).nullable().optional(),
     spbEnabled: z.boolean().optional(),
@@ -85,10 +86,22 @@ const tierSettingsPutSchema = z
 export async function GET(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
-  const config = loadTierConfig();
+  const url = new URL(request.url);
+  const profile = url.searchParams.get("profile") || "default";
+  const listProfiles = url.searchParams.get("listProfiles") === "true";
+
+  if (listProfiles) {
+    const profiles = listTierConfigProfiles();
+    return NextResponse.json({ profiles });
+  }
+
+  const profileKey = profile === "default" || profile === "spb" ? "tier_config" : profile;
+  const config = loadTierConfig(profileKey);
   const spbFlagActive = isFeatureFlagEnabled("SPB_ENABLED");
   return NextResponse.json({
     ...config,
+    profile,
+    profiles: listTierConfigProfiles(),
     tierModels: config.tierModels ?? { apex: [], resilient: [], local: [] },
     tierProviders: config.tierProviders ?? { apex: [], resilient: [], local: [] },
     tierModes: config.tierModes ?? { apex: "both", resilient: "both", local: "both" },
@@ -110,6 +123,7 @@ export async function PUT(request: Request) {
   }
 
   const {
+    profile,
     provider,
     tier,
     spbEnabled,
@@ -123,7 +137,11 @@ export async function PUT(request: Request) {
     spbConfig,
     providerOverrides,
   } = parsed.data;
-  const config = loadTierConfig();
+  const url = new URL(request.url);
+  const targetProfile = profile || url.searchParams.get("profile") || "default";
+  const profileKey =
+    targetProfile === "default" || targetProfile === "spb" ? "tier_config" : targetProfile;
+  const config = loadTierConfig(profileKey);
   let nextOverrides = [...config.providerOverrides];
 
   if (providerOverrides !== undefined) {
@@ -162,8 +180,12 @@ export async function PUT(request: Request) {
     spbConfig: spbConfig !== undefined ? spbConfig : config.spbConfig,
   };
 
-  saveTierConfig(nextConfig);
-  setTierConfig(nextConfig); // bust the in-process routing cache immediately
+  saveTierConfig(nextConfig, profileKey);
+  if (profileKey === "tier_config") {
+    setTierConfig(nextConfig); // bust default in-process routing cache immediately
+  } else {
+    setNamedTierConfig(targetProfile, nextConfig);
+  }
 
-  return NextResponse.json(nextConfig);
+  return NextResponse.json({ ...nextConfig, profile: targetProfile });
 }
