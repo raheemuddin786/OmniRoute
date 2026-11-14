@@ -382,7 +382,43 @@ export function getTierConfig(profileName?: string): TierConfig {
         return { ...loaded };
       }
     } catch {
-      // Fall through to default tier config
+      // Fallback via getDbInstance
+      try {
+        const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+        const db = getDbInstance();
+        const row = db
+          .prepare("SELECT value FROM tier_config WHERE key = ?")
+          .get(`tier_config:${profileName}`) as { value: string } | undefined;
+        if (row?.value) {
+          const loaded = mergeTierConfig(JSON.parse(row.value));
+          namedProfileConfigs.set(profileName, loaded);
+          return { ...loaded };
+        }
+      } catch {
+        // Fallback via direct SQLite DatabaseSync
+        try {
+          const sqlite3 = lazyRequire("node:sqlite");
+          const path = lazyRequire("node:path");
+          const os = lazyRequire("node:os");
+          const dataDir =
+            process.env.OMNIROUTE_DATA_DIR ||
+            process.env.DATA_DIR ||
+            path.join(os.homedir(), ".omniroute");
+          const dbFile = path.join(dataDir, "storage.sqlite");
+          const db = new sqlite3.DatabaseSync(dbFile, { open: true, readOnly: true });
+          const row = db
+            .prepare("SELECT value FROM tier_config WHERE key = ?")
+            .get(`tier_config:${profileName}`) as { value: string } | undefined;
+          db.close();
+          if (row?.value) {
+            const loaded = mergeTierConfig(JSON.parse(row.value));
+            namedProfileConfigs.set(profileName, loaded);
+            return { ...loaded };
+          }
+        } catch {
+          // Fall through to default tier config
+        }
+      }
     }
   }
   ensureConfigLoaded();
@@ -415,7 +451,53 @@ export function listConfiguredSpbProfiles(): string[] {
       return cachedProfileNames;
     }
   } catch {
-    // DB not available or running in standalone unit test
+    // Try via getDbInstance fallback
+    try {
+      const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+      const db = getDbInstance();
+      const rows = db.prepare("SELECT key FROM tier_config").all() as Array<{ key: string }>;
+      const profiles = new Set<string>(["default"]);
+      for (const r of rows) {
+        if (r.key === "tier_config") {
+          profiles.add("default");
+        } else if (r.key.startsWith("tier_config:")) {
+          const name = r.key.slice("tier_config:".length);
+          if (name) profiles.add(name);
+        }
+      }
+      cachedProfileNames = Array.from(profiles);
+      lastProfileNamesFetch = now;
+      return cachedProfileNames;
+    } catch {
+      // Direct SQLite DatabaseSync fallback for standalone/bundled environments
+      try {
+        const sqlite3 = lazyRequire("node:sqlite");
+        const path = lazyRequire("node:path");
+        const os = lazyRequire("node:os");
+        const dataDir =
+          process.env.OMNIROUTE_DATA_DIR ||
+          process.env.DATA_DIR ||
+          path.join(os.homedir(), ".omniroute");
+        const dbFile = path.join(dataDir, "storage.sqlite");
+        const db = new sqlite3.DatabaseSync(dbFile, { open: true, readOnly: true });
+        const rows = db.prepare("SELECT key FROM tier_config").all() as Array<{ key: string }>;
+        db.close();
+        const profiles = new Set<string>(["default"]);
+        for (const r of rows) {
+          if (r.key === "tier_config") {
+            profiles.add("default");
+          } else if (r.key.startsWith("tier_config:")) {
+            const name = r.key.slice("tier_config:".length);
+            if (name) profiles.add(name);
+          }
+        }
+        cachedProfileNames = Array.from(profiles);
+        lastProfileNamesFetch = now;
+        return cachedProfileNames;
+      } catch {
+        // Fallback to in-memory registered configs
+      }
+    }
   }
   const set = new Set<string>(["default", ...namedProfileConfigs.keys()]);
   cachedProfileNames = Array.from(set);
