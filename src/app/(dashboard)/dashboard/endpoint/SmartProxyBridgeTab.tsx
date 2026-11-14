@@ -6,6 +6,11 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Toggle from "@/shared/components/Toggle";
+import Modal, { ConfirmModal } from "@/shared/components/Modal";
+import Input from "@/shared/components/Input";
+import Button from "@/shared/components/Button";
+import Icon from "@/shared/components/Icon";
+import { Tabs, TabsList, TabsTrigger } from "@omniroute/ui-kit/tabs";
 import TierModelSelectModal from "@/shared/components/TierModelSelectModal";
 import SmartProxyActivitySection from "./SmartProxyActivitySection";
 import type { ConcreteSpbRuntimeConfig } from "@omniroute/open-sse/services/tierTypes";
@@ -105,7 +110,11 @@ export function SmartProxyBridgeTab() {
   const [selectedProfile, setSelectedProfile] = useState<string>("default");
   const [availableProfiles, setAvailableProfiles] = useState<string[]>(["default"]);
   const [newProfileName, setNewProfileName] = useState<string>("");
-  const [isCreatingProfile, setIsCreatingProfile] = useState<boolean>(false);
+  const [createFromExisting, setCreateFromExisting] = useState<boolean>(true);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
+  const [profileToDelete, setProfileToDelete] = useState<string | null>(null);
+  const [creatingProfile, setCreatingProfile] = useState<boolean>(false);
+  const [copiedProfileId, setCopiedProfileId] = useState<boolean>(false);
 
   // Advanced SPB runtime parameters
   const [spbConfig, setSpbConfig] = useState<ConcreteSpbRuntimeConfig>(DEFAULT_SPB_RUNTIME_CONFIG);
@@ -543,21 +552,73 @@ export function SmartProxyBridgeTab() {
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9_-]/g, "");
-    if (!trimmed) return;
-    if (!availableProfiles.includes(trimmed)) {
-      setAvailableProfiles((prev) => [...prev, trimmed]);
+    if (!trimmed) {
+      setStatusMessage(
+        "Profile name is required and can only contain letters, numbers, hyphens, and underscores."
+      );
+      return;
     }
-    setSelectedProfile(trimmed);
-    setNewProfileName("");
-    setIsCreatingProfile(false);
-    await loadData(undefined, trimmed);
+    setCreatingProfile(true);
+    setStatusMessage(null);
+    try {
+      const parsedRetryCodes = retryCodesInput
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n >= 100 && n <= 599);
+
+      const effectiveSpbConfig: ConcreteSpbRuntimeConfig = {
+        ...spbConfig,
+        retryStatusCodes:
+          parsedRetryCodes.length > 0 ? parsedRetryCodes : spbConfig.retryStatusCodes,
+      };
+
+      const res = await fetch(`/api/settings/tier-config?profile=${encodeURIComponent(trimmed)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile: trimmed,
+          spbEnabled,
+          onlyFreeTierModels: createFromExisting ? onlyFreeTierModels : true,
+          tierModes: createFromExisting
+            ? tierModes
+            : { apex: "both", resilient: "both", local: "both" },
+          cacheThreshold,
+          fallbackTimeout,
+          tierWeights: createFromExisting ? tierWeights : { apex: 0.3, resilient: 0.5, local: 0.2 },
+          tierModels: createFromExisting ? tierModels : { apex: [], resilient: [], local: [] },
+          tierProviders: createFromExisting
+            ? tierProviders
+            : { apex: [], resilient: [], local: [] },
+          spbConfig: effectiveSpbConfig,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const nextProfiles = Array.isArray(data.profiles)
+          ? data.profiles
+          : availableProfiles.includes(trimmed)
+            ? availableProfiles
+            : [...availableProfiles, trimmed];
+        setAvailableProfiles(nextProfiles);
+        setSelectedProfile(trimmed);
+        setNewProfileName("");
+        setIsCreateModalOpen(false);
+        setStatusMessage(`SPB profile "${trimmed}" created and configured successfully.`);
+        await loadData(undefined, trimmed);
+      } else {
+        const errText = await res.text();
+        setStatusMessage(`Failed to create profile "${trimmed}": ${errText}`);
+      }
+    } catch (err) {
+      setStatusMessage(`Error creating profile: ${String(err)}`);
+    } finally {
+      setCreatingProfile(false);
+    }
   };
 
   const handleDeleteProfile = async (profileName: string) => {
     if (profileName === "default" || profileName === "spb") return;
-    if (!window.confirm(`Are you sure you want to delete SPB profile "${profileName}"?`)) {
-      return;
-    }
     setIsDeletingProfile(true);
     setStatusMessage(null);
     try {
@@ -574,6 +635,7 @@ export function SmartProxyBridgeTab() {
           : availableProfiles.filter((p) => p !== profileName);
         setAvailableProfiles(nextProfiles);
         setSelectedProfile("default");
+        setProfileToDelete(null);
         setStatusMessage(`SPB profile "${profileName}" deleted successfully.`);
         await loadData(undefined, "default");
       } else {
@@ -703,77 +765,69 @@ export function SmartProxyBridgeTab() {
         </div>
       )}
 
-      {/* Profile Selector Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border bg-card p-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm font-semibold text-foreground">Active SPB Instance:</span>
-          <div className="flex flex-wrap items-center gap-2">
-            {availableProfiles.map((p) => (
-              <div key={p} className="inline-flex items-center rounded-md border shadow-sm">
-                <button
-                  onClick={() => handleSwitchProfile(p)}
-                  className={`rounded-l-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                    selectedProfile === p
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/80"
-                  }`}
-                >
-                  {p === "default" ? "default (auto/spb)" : `${p} (auto/${p})`}
-                </button>
-                {p !== "default" && (
-                  <button
-                    onClick={() => handleDeleteProfile(p)}
-                    disabled={isDeletingProfile}
-                    title={`Delete instance ${p}`}
-                    className={`rounded-r-md border-l px-2 py-1.5 text-xs transition-colors ${
-                      selectedProfile === p
-                        ? "bg-primary/90 text-primary-foreground hover:bg-destructive hover:text-destructive-foreground"
-                        : "bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground"
-                    }`}
-                  >
-                    <span className="material-symbols-outlined text-xs">close</span>
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
+      {/* Profile Navigation Tabs */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b pb-4">
+        <div className="flex items-center gap-2 overflow-x-auto">
+          <Tabs
+            variant="capsule"
+            value={selectedProfile}
+            onValueChange={(val) => void handleSwitchProfile(val)}
+            className="w-auto"
+          >
+            <TabsList aria-label="Smart Proxy Bridge Instances" className="p-1">
+              {availableProfiles.map((p) => {
+                const isSelected = selectedProfile === p;
+                const isDefault = p === "default" || p === "spb";
+                return (
+                  <div key={p} className="relative inline-flex items-center group">
+                    <TabsTrigger
+                      value={p}
+                      aria-controls={undefined}
+                      className={`gap-2 pr-2 text-xs font-medium transition-all ${
+                        isSelected
+                          ? "bg-primary text-primary-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Icon name="alt_route" size={15} />
+                      <span>{isDefault ? "Default Bridge (auto/spb)" : `${p} (auto/${p})`}</span>
+                      {!isDefault && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setProfileToDelete(p);
+                          }}
+                          className={`ml-1 rounded p-0.5 transition-colors ${
+                            isSelected
+                              ? "text-primary-foreground/70 hover:bg-primary-foreground/20 hover:text-primary-foreground"
+                              : "text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          }`}
+                          title={`Delete ${p} profile`}
+                        >
+                          <Icon name="close" size={14} />
+                        </button>
+                      )}
+                    </TabsTrigger>
+                  </div>
+                );
+              })}
+            </TabsList>
+          </Tabs>
         </div>
-        <div className="flex items-center gap-2">
-          {isCreatingProfile ? (
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="Profile name (e.g. spb1, spb2)"
-                value={newProfileName}
-                onChange={(e) => setNewProfileName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleCreateProfile()}
-                className="h-8 rounded-md border bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              <button
-                onClick={handleCreateProfile}
-                className="h-8 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-              >
-                Save
-              </button>
-              <button
-                onClick={() => {
-                  setIsCreatingProfile(false);
-                  setNewProfileName("");
-                }}
-                className="h-8 rounded-md border bg-background px-2 text-xs text-muted-foreground hover:bg-muted"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setIsCreatingProfile(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
-            >
-              <span className="material-symbols-outlined text-sm">add</span>
-              New SPB Profile
-            </button>
-          )}
+
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            icon="add"
+            onClick={() => {
+              setNewProfileName("");
+              setIsCreateModalOpen(true);
+            }}
+          >
+            New Bridge Instance
+          </Button>
         </div>
       </div>
 
@@ -784,12 +838,35 @@ export function SmartProxyBridgeTab() {
             <span className="material-symbols-outlined text-2xl">alt_route</span>
           </div>
           <div className="space-y-1.5 flex-1">
-            <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-              Smart Proxy Bridge Client Model Identifier
-              <code className="rounded bg-indigo-500/20 px-2 py-0.5 font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
-                {selectedProfile === "default" ? "auto/spb" : `auto/${selectedProfile}`}
-              </code>
-            </h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                <span>Active Smart Proxy Bridge Instance:</span>
+                <span className="font-semibold text-primary underline underline-offset-4">
+                  {selectedProfile === "default" ? "default" : selectedProfile}
+                </span>
+                <code className="rounded bg-indigo-500/20 px-2 py-0.5 font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
+                  {selectedProfile === "default" ? "auto/spb" : `auto/${selectedProfile}`}
+                </code>
+              </h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={copiedProfileId ? "check" : "content_copy"}
+                onClick={async () => {
+                  const id = selectedProfile === "default" ? "auto/spb" : `auto/${selectedProfile}`;
+                  try {
+                    await navigator.clipboard.writeText(id);
+                    setCopiedProfileId(true);
+                    setTimeout(() => setCopiedProfileId(false), 2000);
+                  } catch {
+                    // Clipboard fallback
+                  }
+                }}
+                className="text-xs"
+              >
+                {copiedProfileId ? "Copied" : "Copy Model ID"}
+              </Button>
+            </div>
             <p className="text-sm text-muted-foreground leading-relaxed">
               To utilize autonomous context-aware routing with this instance, configure your client
               agent (Claude Code, Gemini CLI, AntiGravity, Cursor, OpenHands) to request the model
@@ -2152,6 +2229,105 @@ export function SmartProxyBridgeTab() {
         tierDescription={tierModalConfig.tierDescription}
         selectedModels={tierModels[tierModalConfig.tier]}
         onSave={handleSaveTierModels}
+      />
+
+      {/* Create SPB Profile Modal */}
+      <Modal
+        isOpen={isCreateModalOpen}
+        onClose={() => {
+          if (!creatingProfile) {
+            setIsCreateModalOpen(false);
+            setNewProfileName("");
+          }
+        }}
+        title="Add Smart Proxy Bridge Instance"
+        footer={
+          <div className="flex items-center justify-end gap-2 w-full">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsCreateModalOpen(false);
+                setNewProfileName("");
+              }}
+              disabled={creatingProfile}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleCreateProfile}
+              loading={creatingProfile}
+              disabled={!newProfileName.trim()}
+              icon="add"
+            >
+              Create Instance
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Create an isolated Smart Proxy Bridge instance with its own custom tiers, model
+            selections, intent parameters, and prompt cache settings.
+          </p>
+
+          <Input
+            label="Instance Identifier"
+            placeholder="e.g. spb2, mobile, coding-agent"
+            value={newProfileName}
+            onChange={(e) => setNewProfileName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newProfileName.trim()) {
+                e.preventDefault();
+                void handleCreateProfile();
+              }
+            }}
+            hint={
+              newProfileName.trim()
+                ? `Clients will request: auto/${newProfileName
+                    .trim()
+                    .toLowerCase()
+                    .replace(/[^a-z0-9_-]/g, "")}`
+                : "Only lowercase letters, numbers, hyphens, and underscores."
+            }
+            autoFocus
+          />
+
+          <div className="rounded-lg border bg-muted/40 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-foreground">
+                Clone settings from current instance ({selectedProfile})
+              </span>
+              <Toggle
+                checked={createFromExisting}
+                onChange={setCreateFromExisting}
+                ariaLabel="Clone settings from current profile"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {createFromExisting
+                ? `The new bridge will initialize with all Tier models, providers, and parameters from "${selectedProfile}".`
+                : "The new bridge will initialize with clean default system parameters."}
+            </p>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(profileToDelete)}
+        onClose={() => setProfileToDelete(null)}
+        onConfirm={async () => {
+          if (profileToDelete) {
+            await handleDeleteProfile(profileToDelete);
+          }
+        }}
+        title={`Delete SPB Instance "${profileToDelete}"`}
+        message={`Are you sure you want to permanently delete the Smart Proxy Bridge instance "${profileToDelete}"? Requests directed to "auto/${profileToDelete}" will immediately fall back to the default bridge.`}
+        confirmText="Delete Instance"
+        cancelText="Cancel"
+        variant="danger"
+        loading={isDeletingProfile}
       />
     </div>
   );
