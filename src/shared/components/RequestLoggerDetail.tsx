@@ -965,9 +965,16 @@ export default function RequestLoggerDetail({
                   {t("combo")}
                 </div>
                 {detail?.comboName || log.comboName ? (
-                  <span className="inline-block px-2.5 py-1 rounded-full text-[10px] font-bold bg-chart-3/20 text-chart-3 border border-chart-3/30">
-                    {detail?.comboName || log.comboName}
-                  </span>
+                  (detail?.comboName || log.comboName)?.startsWith("SPB:") ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-primary/20 text-primary border border-primary/30">
+                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                      {detail?.comboName || log.comboName}
+                    </span>
+                  ) : (
+                    <span className="inline-block px-2.5 py-1 rounded-full text-[10px] font-bold bg-chart-3/20 text-chart-3 border border-chart-3/30">
+                      {detail?.comboName || log.comboName}
+                    </span>
+                  )
                 ) : (
                   <div className="text-sm text-text-muted">{"\u2014"}</div>
                 )}

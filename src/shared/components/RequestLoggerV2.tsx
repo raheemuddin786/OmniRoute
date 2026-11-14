@@ -1630,9 +1630,16 @@ const RequestLoggerV2 = forwardRef<RequestLoggerV2Handle, RequestLoggerV2Initial
                           {isActive ? (
                             <span className="text-[10px] text-text-muted">—</span>
                           ) : log.comboName ? (
-                            <span className="inline-block rounded-full border border-chart-3/40 bg-chart-3/20 px-2 py-0.5 text-[9px] font-bold text-chart-3">
-                              {log.comboName}
-                            </span>
+                            log.comboName.startsWith("SPB:") ? (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/20 px-2 py-0.5 text-[9px] font-bold text-primary">
+                                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                                {log.comboName}
+                              </span>
+                            ) : (
+                              <span className="inline-block rounded-full border border-chart-3/40 bg-chart-3/20 px-2 py-0.5 text-[9px] font-bold text-chart-3">
+                                {log.comboName}
+                              </span>
+                            )
                           ) : (
                             <span className="text-[10px] text-text-muted">—</span>
                           )}

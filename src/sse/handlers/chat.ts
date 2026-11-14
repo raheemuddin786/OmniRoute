@@ -1346,6 +1346,7 @@ async function handleChatImplementation(
   // T05 — Task-Aware Smart Routing
   // Detect the semantic task type and optionally route to the optimal model
   let resolvedModelStr = modelStr;
+  let spbComboLabel: string | null = null;
 
   // SPB-IR Dynamic Dispatch & Incompatible Modality Shield
   const isSpbModel =
@@ -1367,6 +1368,7 @@ async function handleChatImplementation(
     const currentTierConfig = getTierConfig(spbProfileName);
     const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
     let activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
+    spbComboLabel = `SPB:${spbProfileName || "default"} [${activeTier}]`;
 
     // Guard: Tier 3 models require a guidanceContract from Tier 1/Tier 2
     // to ensure supervised execution of modifications. Without guidance,
@@ -1451,7 +1453,9 @@ async function handleChatImplementation(
   }
 
   let _taskRouteInfo: { taskType: string; wasRouted: boolean } | null = null;
-  if (getTaskRoutingConfig().enabled) {
+  // If SPB has dynamically dispatched this request to an intelligent tier target,
+  // do not let generic task-aware routing clobber the SPB tier decision.
+  if (getTaskRoutingConfig().enabled && !isSpbActive) {
     telemetry.startPhase("task-route");
     const tr = applyTaskAwareRouting(modelStr, body);
     if (tr.wasRouted) {
@@ -1712,7 +1716,7 @@ async function handleChatImplementation(
           m,
           clientRawRequest,
           request,
-          combo.name,
+          spbComboLabel || combo.name,
           apiKeyInfo,
           telemetry,
           {
@@ -2067,7 +2071,7 @@ async function handleChatImplementation(
     resolvedModelStr,
     clientRawRequest,
     request,
-    null,
+    spbComboLabel,
     apiKeyInfo,
     telemetry,
     {
@@ -2112,7 +2116,7 @@ async function handleChatImplementation(
           altModel,
           clientRawRequest,
           request,
-          null,
+          spbComboLabel,
           apiKeyInfo,
           telemetry,
           {
@@ -2474,7 +2478,7 @@ async function handleSingleModelChat(
           m,
           clientRawRequest,
           request,
-          redirectCombo.name ?? modelStr,
+          (comboName || redirectCombo.name) ?? modelStr,
           apiKeyInfo,
           telemetry,
           {

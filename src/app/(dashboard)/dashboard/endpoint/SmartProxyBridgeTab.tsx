@@ -107,7 +107,16 @@ export function SmartProxyBridgeTab() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   // Multi-instance Named SPB state
-  const [selectedProfile, setSelectedProfile] = useState<string>("default");
+  const [selectedProfile, setSelectedProfile] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return localStorage.getItem("omniroute_spb_active_profile") || "default";
+      } catch {
+        return "default";
+      }
+    }
+    return "default";
+  });
   const [availableProfiles, setAvailableProfiles] = useState<string[]>(["default"]);
   const [newProfileName, setNewProfileName] = useState<string>("");
   const [createFromExisting, setCreateFromExisting] = useState<boolean>(true);
@@ -271,9 +280,10 @@ export function SmartProxyBridgeTab() {
         }
 
         // 2. Fetch System Health Telemetry scoped to active SPB profile
+        const targetProfile = profile || selectedProfile;
         const healthUrl =
-          selectedProfile && selectedProfile !== "all"
-            ? `/api/monitoring/health?spbProfile=${encodeURIComponent(selectedProfile)}`
+          targetProfile && targetProfile !== "all"
+            ? `/api/monitoring/health?spbProfile=${encodeURIComponent(targetProfile)}`
             : "/api/monitoring/health";
         const healthRes = await fetch(healthUrl, { signal });
         if (healthRes.ok) {
@@ -307,9 +317,18 @@ export function SmartProxyBridgeTab() {
 
     const runFetch = async () => {
       try {
+        const initialProfile =
+          typeof window !== "undefined"
+            ? localStorage.getItem("omniroute_spb_active_profile") || "default"
+            : "default";
+
         const [tierRes, healthRes, combosRes, provRes] = await Promise.all([
-          fetch("/api/settings/tier-config", { signal: controller.signal }),
-          fetch("/api/monitoring/health", { signal: controller.signal }),
+          fetch(`/api/settings/tier-config?profile=${encodeURIComponent(initialProfile)}`, {
+            signal: controller.signal,
+          }),
+          fetch(`/api/monitoring/health?spbProfile=${encodeURIComponent(initialProfile)}`, {
+            signal: controller.signal,
+          }),
           fetch("/api/combos", { signal: controller.signal }).catch(() => null),
           fetch("/api/providers", { signal: controller.signal }).catch(() => null),
         ]);
@@ -551,6 +570,13 @@ export function SmartProxyBridgeTab() {
 
   const handleSwitchProfile = async (profileName: string) => {
     setSelectedProfile(profileName);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("omniroute_spb_active_profile", profileName);
+      } catch {
+        // ignore localStorage errors
+      }
+    }
     await loadData(undefined, profileName);
   };
 
@@ -715,7 +741,7 @@ export function SmartProxyBridgeTab() {
   };
 
   const cacheHitRate =
-    stats.totalRouted > 0 ? Math.round((stats.checkpointsRestored / stats.totalRouted) * 100) : 100;
+    stats.totalRouted > 0 ? Math.round((stats.checkpointsRestored / stats.totalRouted) * 100) : 0;
 
   const totalTierSum =
     stats.activeTiers.apex + stats.activeTiers.resilient + stats.activeTiers.local || 1;
