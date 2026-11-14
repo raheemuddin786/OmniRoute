@@ -270,8 +270,12 @@ export function SmartProxyBridgeTab() {
           }
         }
 
-        // 2. Fetch System Health Telemetry
-        const healthRes = await fetch("/api/monitoring/health", { signal });
+        // 2. Fetch System Health Telemetry scoped to active SPB profile
+        const healthUrl =
+          selectedProfile && selectedProfile !== "all"
+            ? `/api/monitoring/health?spbProfile=${encodeURIComponent(selectedProfile)}`
+            : "/api/monitoring/health";
+        const healthRes = await fetch(healthUrl, { signal });
         if (healthRes.ok) {
           const healthData = await healthRes.json();
           const telem = healthData.spbTelemetry;

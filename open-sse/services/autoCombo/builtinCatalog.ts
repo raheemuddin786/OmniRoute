@@ -5,6 +5,7 @@ import { VALID_VARIANTS } from "./autoPrefix";
 import type { AutoComboSpec, PreparedVirtualAutoComboInputs } from "./virtualFactory";
 import { parseAutoSuffix, type AutoCategory, type AutoTier } from "./suffixComposition";
 import { isValidModelFamily, AUTO_FAMILY_IDS, type ModelFamily } from "./modelFamily";
+import { isSpbProfileTarget } from "../tierResolver";
 
 export { AUTO_FAMILY_IDS };
 
@@ -95,10 +96,11 @@ export function resolveAutoVariant(modelStr: string, suffix: string): ResolvedAu
   if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, modelStr)) {
     return { recognized: true, variant: AUTO_TEMPLATE_VARIANTS[modelStr] };
   }
-  // Dynamic named SPB instances: auto/spb1, auto/spb2, auto/spb:<name>, etc.
+  // Dynamic named SPB instances: auto/spb1, auto/spb2, auto/spb:<name>, auto/<name>, etc.
   if (
     /^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
-    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr)
+    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+    isSpbProfileTarget(modelStr)
   ) {
     return { recognized: true, variant: undefined };
   }

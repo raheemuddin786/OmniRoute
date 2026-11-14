@@ -29,6 +29,7 @@ export interface SpbTelemetryRecord {
   timestamp: number;
   stagnationDetected?: boolean;
   stagnationRecovered?: boolean;
+  spbProfile?: string;
 }
 
 export interface SpbTelemetrySummary {
@@ -324,6 +325,18 @@ export function initSpbStateTable(): void {
     } catch {
       // Column already exists
     }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN spb_profile TEXT DEFAULT 'default';");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_spb_telemetry_profile ON spb_telemetry_audit(spb_profile);"
+      );
+    } catch {
+      // Index already exists
+    }
 
     _tablesInitialized = true;
   } catch (err) {
@@ -537,12 +550,13 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
   try {
     initSpbStateTable();
     const db = getDbInstance();
+    const profile = record.spbProfile || "default";
     db.prepare(
       `
       INSERT INTO spb_telemetry_audit
       (session_id, task_phase, model_tier, checkpoint_restored, fallback_triggered, status_code, latency_ms, timestamp,
-       stagnation_detected, stagnation_recovered)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       stagnation_detected, stagnation_recovered, spb_profile)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       record.sessionId,
@@ -554,14 +568,15 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       record.latencyMs,
       record.timestamp,
       record.stagnationDetected ? 1 : 0,
-      record.stagnationRecovered ? 1 : 0
+      record.stagnationRecovered ? 1 : 0,
+      profile
     );
   } catch (err) {
     console.error("[SPB State] Failed to record telemetry:", err);
   }
 }
 
-export function getSpbTelemetrySummary(): SpbTelemetrySummary {
+export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySummary {
   const defaultSummary: SpbTelemetrySummary = {
     totalRoutes: 0,
     checkpointsRestored: 0,
@@ -575,6 +590,16 @@ export function getSpbTelemetrySummary(): SpbTelemetrySummary {
     initSpbStateTable();
     const db = getDbInstance();
 
+    const normalizedProfile =
+      profileFilter && profileFilter !== "all"
+        ? profileFilter === "spb"
+          ? "default"
+          : profileFilter
+        : undefined;
+
+    const whereClause = normalizedProfile ? "WHERE spb_profile = ?" : "";
+    const params = normalizedProfile ? [normalizedProfile] : [];
+
     // Consolidate scalar aggregates into a single query to avoid multiple round-trips.
     const summaryRow = db
       .prepare(
@@ -583,9 +608,9 @@ export function getSpbTelemetrySummary(): SpbTelemetrySummary {
            MAX(timestamp) AS max_time,
            SUM(checkpoint_restored) AS checkpoints_restored,
            SUM(fallback_triggered) AS fallbacks_triggered
-         FROM spb_telemetry_audit`
+         FROM spb_telemetry_audit ${whereClause}`
       )
-      .get() as
+      .get(...params) as
       | {
           total_routes: number;
           max_time: number | null;
@@ -597,12 +622,16 @@ export function getSpbTelemetrySummary(): SpbTelemetrySummary {
     if (!summaryRow || summaryRow.total_routes === 0) return defaultSummary;
 
     const phaseRows = db
-      .prepare(`SELECT task_phase, COUNT(*) AS count FROM spb_telemetry_audit GROUP BY task_phase`)
-      .all() as Array<{ task_phase: string; count: number }>;
+      .prepare(
+        `SELECT task_phase, COUNT(*) AS count FROM spb_telemetry_audit ${whereClause} GROUP BY task_phase`
+      )
+      .all(...params) as Array<{ task_phase: string; count: number }>;
 
     const tierRows = db
-      .prepare(`SELECT model_tier, COUNT(*) AS count FROM spb_telemetry_audit GROUP BY model_tier`)
-      .all() as Array<{ model_tier: string; count: number }>;
+      .prepare(
+        `SELECT model_tier, COUNT(*) AS count FROM spb_telemetry_audit ${whereClause} GROUP BY model_tier`
+      )
+      .all(...params) as Array<{ model_tier: string; count: number }>;
 
     const phaseDistribution: Record<string, number> = {};
     for (const r of phaseRows) phaseDistribution[r.task_phase] = r.count;

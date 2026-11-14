@@ -86,6 +86,7 @@ export interface SpbRoutingContext {
   sessionId?: string;
   messages: Array<{ role: string; content?: string }>;
   tools?: unknown[];
+  spbProfile?: string;
 }
 
 export interface SpbRoutingDecision {
@@ -604,6 +605,7 @@ export async function processSmartProxyRouting(
         timestamp: Date.now(),
         stagnationDetected,
         stagnationRecovered,
+        spbProfile: context.spbProfile || "default",
       });
       console.log(
         `[SPB Bridge Execution] Session: ${sessionId} | Turn: ${intent.isToolResultTurn ? "tool_result" : "human_prompt"} | Phase: ${intent.taskPhase} | Tier: ${tierAssignment.tier} | Stagnation: ${stagnationRecovered ? "recovered" : stagnationDetected ? "detected" : "none"} | Contract: ${activeGuidanceContract ? "present" : "none"}`

@@ -397,6 +397,93 @@ export function deleteNamedTierConfig(profileName: string): void {
   namedProfileConfigs.delete(profileName);
 }
 
+let cachedProfileNames: string[] = ["default"];
+let lastProfileNamesFetch = 0;
+const PROFILE_NAMES_TTL_MS = 2000;
+
+export function listConfiguredSpbProfiles(): string[] {
+  const now = Date.now();
+  if (now - lastProfileNamesFetch < PROFILE_NAMES_TTL_MS && cachedProfileNames.length > 0) {
+    return cachedProfileNames;
+  }
+  try {
+    const { listTierConfigProfiles } = lazyRequire("../../src/lib/db/tierConfig");
+    const profiles = listTierConfigProfiles();
+    if (Array.isArray(profiles) && profiles.length > 0) {
+      cachedProfileNames = profiles;
+      lastProfileNamesFetch = now;
+      return cachedProfileNames;
+    }
+  } catch {
+    // DB not available or running in standalone unit test
+  }
+  const set = new Set<string>(["default", ...namedProfileConfigs.keys()]);
+  cachedProfileNames = Array.from(set);
+  lastProfileNamesFetch = now;
+  return cachedProfileNames;
+}
+
+/**
+ * Checks whether an incoming model string matches any configured SPB instance
+ * (e.g. "auto/spb", "auto/spb1", "auto/spb:ag-spb3", "auto/ag-spb3", "spb", "spb1", "ag-spb3").
+ */
+export function isSpbProfileTarget(modelStr: string): boolean {
+  if (!modelStr || typeof modelStr !== "string") return false;
+  const s = modelStr.trim();
+  if (s === "auto/spb" || s === "auto/smart-proxy-bridge" || s === "spb") return true;
+  if (/^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(s) || /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(s)) {
+    return true;
+  }
+  const profiles = listConfiguredSpbProfiles();
+  const lower = s.toLowerCase();
+  for (const p of profiles) {
+    if (p === "default") continue;
+    const pLower = p.toLowerCase();
+    if (lower === `auto/${pLower}` || lower === `auto/spb:${pLower}` || lower === pLower) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Extracts the SPB profile name from a target model string.
+ * Returns undefined for the default profile ("default" / "spb"), or the profile name string.
+ */
+export function extractSpbProfileName(modelStr: string): string | undefined {
+  if (!modelStr || typeof modelStr !== "string") return undefined;
+  const s = modelStr.trim();
+  if (
+    s === "auto/spb" ||
+    s === "auto/smart-proxy-bridge" ||
+    s === "spb" ||
+    s === "auto" ||
+    s === "default"
+  ) {
+    return undefined;
+  }
+  const matchNamed = s.match(/^(?:auto\/)?spb(?::([a-zA-Z0-9_-]+)|(\d+))$/i);
+  if (matchNamed) {
+    return matchNamed[1] || `spb${matchNamed[2]}`;
+  }
+  const profiles = listConfiguredSpbProfiles();
+  const lower = s.toLowerCase();
+  for (const p of profiles) {
+    if (p === "default") continue;
+    const pLower = p.toLowerCase();
+    if (lower === `auto/${pLower}` || lower === `auto/spb:${pLower}` || lower === pLower) {
+      return p;
+    }
+  }
+  if (s.startsWith("auto/")) {
+    const candidate = s.slice(5);
+    for (const p of profiles) {
+      if (p.toLowerCase() === candidate.toLowerCase()) return p;
+    }
+  }
+  return undefined;
+}
+
 export function clearTierCache(): void {
   tierCache.clear();
   // setTierConfig below clears the assignment cache on config edits without

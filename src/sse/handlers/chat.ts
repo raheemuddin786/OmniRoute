@@ -1,5 +1,10 @@
 import { intersectAllowedConnectionIds } from "./chat/connectionConstraints.ts";
-import { getTierConfig, resolveVirtualTierModels } from "@omniroute/open-sse/services/tierResolver";
+import {
+  getTierConfig,
+  resolveVirtualTierModels,
+  isSpbProfileTarget,
+  extractSpbProfileName,
+} from "@omniroute/open-sse/services/tierResolver";
 import { hasQoderCallerTools } from "@omniroute/open-sse/services/qoderCapabilities";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import { randomUUID } from "crypto";
@@ -893,7 +898,8 @@ async function handleChatImplementation(
     modelStr.startsWith("tier_");
   const isNamedSpb =
     /^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
-    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr);
+    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+    isSpbProfileTarget(modelStr);
   const isSpbTarget =
     modelStr === "auto/spb" ||
     modelStr === "auto/smart-proxy-bridge" ||
@@ -906,9 +912,10 @@ async function handleChatImplementation(
         modelStr === "auto/spb" ||
         isNamedSpb ||
         modelStr === "auto/smart-proxy-bridge"));
+  const spbProfileName = extractSpbProfileName(modelStr);
   const isSpbActive =
     Boolean(isSpbTarget) &&
-    (getTierConfig().spbEnabled !== false || isFeatureFlagEnabled("SPB_ENABLED"));
+    (getTierConfig(spbProfileName).spbEnabled !== false || isFeatureFlagEnabled("SPB_ENABLED"));
 
   // Branch forking headers
   const forkFromHeader = request.headers.get("x-omniroute-fork-from")?.trim() || null;
@@ -973,6 +980,7 @@ async function handleChatImplementation(
         sessionId: effectiveSessionId,
         messages: body.messages,
         tools: body.tools,
+        spbProfile: spbProfileName || "default",
       });
       log.info(
         "SPB",
@@ -1348,11 +1356,13 @@ async function handleChatImplementation(
     (isSpbActive && (resolvedModelStr === "auto" || resolvedModelStr === "default"));
 
   if (isSpbActive && isSpbModel) {
-    // Resolve named profile if applicable (e.g. auto/spb1 -> spb1, auto/spb:fast -> fast)
-    let spbProfileName: string | undefined;
-    const matchNamed = resolvedModelStr.match(/^(?:auto\/)?spb(?::([a-zA-Z0-9_-]+)|(\d+))$/i);
-    if (matchNamed) {
-      spbProfileName = matchNamed[1] || `spb${matchNamed[2]}`;
+    // Resolve named profile if applicable (e.g. auto/spb1 -> spb1, auto/ag-spb3 -> ag-spb3)
+    let spbProfileName = extractSpbProfileName(resolvedModelStr);
+    if (!spbProfileName) {
+      const matchNamed = resolvedModelStr.match(/^(?:auto\/)?spb(?::([a-zA-Z0-9_-]+)|(\d+))$/i);
+      if (matchNamed) {
+        spbProfileName = matchNamed[1] || `spb${matchNamed[2]}`;
+      }
     }
     const currentTierConfig = getTierConfig(spbProfileName);
     const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
