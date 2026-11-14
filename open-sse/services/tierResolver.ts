@@ -368,9 +368,29 @@ export function setTierConfig(config?: Partial<TierConfig> | null): void {
   tierCache.clear();
 }
 
-export function getTierConfig(): TierConfig {
+const namedProfileConfigs = new Map<string, TierConfig>();
+
+export function getTierConfig(profileName?: string): TierConfig {
+  if (profileName && profileName !== "default" && profileName !== "spb") {
+    const cached = namedProfileConfigs.get(profileName);
+    if (cached) return { ...cached };
+    try {
+      const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
+      const loaded = loadTierConfig(profileName);
+      if (loaded) {
+        namedProfileConfigs.set(profileName, loaded);
+        return { ...loaded };
+      }
+    } catch {
+      // Fall through to default tier config
+    }
+  }
   ensureConfigLoaded();
   return { ...currentConfig };
+}
+
+export function setNamedTierConfig(profileName: string, config: TierConfig): void {
+  namedProfileConfigs.set(profileName, config);
 }
 
 export function clearTierCache(): void {
@@ -412,10 +432,11 @@ export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
     lower.includes("tier-2") ||
     lower.includes("tier_2") ||
     lower === "auto/spb" ||
+    lower.startsWith("auto/spb") ||
+    lower.startsWith("spb") ||
     lower === "auto/smart-proxy-bridge" ||
     lower === "auto" ||
-    lower === "default" ||
-    lower === "spb"
+    lower === "default"
   ) {
     tierKey = "resilient";
   } else if (

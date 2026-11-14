@@ -891,15 +891,20 @@ async function handleChatImplementation(
     modelStr.startsWith("resilient/") ||
     modelStr.startsWith("spb-") ||
     modelStr.startsWith("tier_");
+  const isNamedSpb =
+    /^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr);
   const isSpbTarget =
     modelStr === "auto/spb" ||
     modelStr === "auto/smart-proxy-bridge" ||
+    isNamedSpb ||
     isVirtualTierModel ||
     ((strategyHeader === "smart-proxy-bridge" || strategyHeader === "spb") &&
       (!modelStr ||
         modelStr === "auto" ||
         modelStr === "default" ||
         modelStr === "auto/spb" ||
+        isNamedSpb ||
         modelStr === "auto/smart-proxy-bridge"));
   const isSpbActive =
     Boolean(isSpbTarget) &&
@@ -1338,11 +1343,18 @@ async function handleChatImplementation(
   const isSpbModel =
     resolvedModelStr === "auto/spb" ||
     resolvedModelStr === "auto/smart-proxy-bridge" ||
+    isNamedSpb ||
     isVirtualTierModel ||
     (isSpbActive && (resolvedModelStr === "auto" || resolvedModelStr === "default"));
 
   if (isSpbActive && isSpbModel) {
-    const currentTierConfig = getTierConfig();
+    // Resolve named profile if applicable (e.g. auto/spb1 -> spb1, auto/spb:fast -> fast)
+    let spbProfileName: string | undefined;
+    const matchNamed = resolvedModelStr.match(/^(?:auto\/)?spb(?::([a-zA-Z0-9_-]+)|(\d+))$/i);
+    if (matchNamed) {
+      spbProfileName = matchNamed[1] || `spb${matchNamed[2]}`;
+    }
+    const currentTierConfig = getTierConfig(spbProfileName);
     const tierModels = currentTierConfig?.tierModels ?? { apex: [], resilient: [], local: [] };
     let activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
 

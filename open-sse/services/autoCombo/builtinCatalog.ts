@@ -95,6 +95,13 @@ export function resolveAutoVariant(modelStr: string, suffix: string): ResolvedAu
   if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, modelStr)) {
     return { recognized: true, variant: AUTO_TEMPLATE_VARIANTS[modelStr] };
   }
+  // Dynamic named SPB instances: auto/spb1, auto/spb2, auto/spb:<name>, etc.
+  if (
+    /^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr)
+  ) {
+    return { recognized: true, variant: undefined };
+  }
   if (VALID_AUTO_VARIANTS.has(suffix as AutoVariant)) {
     return { recognized: true, variant: suffix as AutoVariant };
   }
