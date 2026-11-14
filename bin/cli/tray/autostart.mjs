@@ -146,8 +146,8 @@ export function buildLinuxSystemdUnitContent(cliPath) {
     "WatchdogSec=180",
     "TimeoutStartSec=300",
     `ExecStart=${buildServeExecLine(cliPath, { tray: false })}`,
-    "Restart=on-failure",
-    "RestartSec=5",
+    "Restart=always",
+    "RestartSec=2",
     `Environment="PATH=${pathEnv}"`,
   ];
   if (existsSync(envFile)) lines.push(`EnvironmentFile=-${envFile}`);
@@ -338,7 +338,10 @@ export function buildMacPlistContent(cliPath, { tray = true } = {}) {
     <string>--no-open</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><false/>
+  <key>KeepAlive</key><dict>
+    <key>Crashed</key><true/>
+    <key>SuccessfulExit</key><false/>
+  </dict>
 </dict></plist>`;
 }
 

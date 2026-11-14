@@ -129,7 +129,7 @@ test("systemd branch writes Type=notify sd_notify directives (headless, stubs su
     assert.match(unit, /NotifyAccess=all/);
     assert.match(unit, /WatchdogSec=180/);
     assert.match(unit, /TimeoutStartSec=300/);
-    assert.match(unit, /Restart=on-failure/);
+    assert.match(unit, /Restart=always/);
   } finally {
     for (const key of envKeys) {
       if (savedEnv[key] === undefined) delete process.env[key];
