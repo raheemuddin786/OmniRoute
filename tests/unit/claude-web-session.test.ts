@@ -300,4 +300,36 @@ describe("Claude Web conversation sessions", () => {
     assert.ok(turn.payload.prompt.includes("result: action completed"));
     assert.equal(turn.operation, "completion");
   });
+
+  it("handles image or tool_result tool outputs without throwing empty message error", () => {
+    const turn = prepareClaudeWebTurn(
+      input({
+        messages: [
+          { role: "user", content: "please read image" },
+          { role: "assistant", content: "reading..." },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_read_img_123",
+                content: [
+                  {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: "image/png",
+                      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+    );
+    assert.ok(turn.payload.prompt.includes("[Image]"));
+    assert.equal(turn.operation, "completion");
+  });
 });

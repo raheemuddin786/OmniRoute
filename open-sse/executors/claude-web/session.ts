@@ -103,7 +103,14 @@ function normalizeContent(content: unknown): string {
     if (content && typeof content === "object") {
       const record = content as Record<string, unknown>;
       if (typeof record.text === "string") return record.text;
-      if ("content" in record) return normalizeContent(record.content);
+      if (record.type === "image" || record.type === "image_url" || record.type === "input_image") {
+        return "[Image]";
+      }
+      if ("content" in record) {
+        const nested = normalizeContent(record.content);
+        if (nested.trim()) return nested;
+        if (record.type === "tool_result") return "[Tool Result]";
+      }
     }
     return "";
   }
@@ -114,7 +121,14 @@ function normalizeContent(content: unknown): string {
       if (!part || typeof part !== "object" || Array.isArray(part)) return "";
       const record = part as Record<string, unknown>;
       if (typeof record.text === "string") return record.text;
-      if ("content" in record) return normalizeContent(record.content);
+      if (record.type === "image" || record.type === "image_url" || record.type === "input_image") {
+        return "[Image]";
+      }
+      if ("content" in record) {
+        const nested = normalizeContent(record.content);
+        if (nested.trim()) return nested;
+        if (record.type === "tool_result") return "[Tool Result]";
+      }
       return "";
     })
     .filter(Boolean)

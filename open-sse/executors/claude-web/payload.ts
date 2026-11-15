@@ -260,7 +260,16 @@ export function resolveClaudeWebReasoningEffort(
 
 function contentPartText(part: unknown): string {
   if (!isRecord(part)) return "";
-  return typeof part.text === "string" ? part.text : "";
+  if (typeof part.text === "string") return part.text;
+  if (part.type === "image" || part.type === "image_url" || part.type === "input_image") {
+    return "[Image]";
+  }
+  if ("content" in part) {
+    const nested = messageText(part.content);
+    if (nested.trim()) return nested;
+    if (part.type === "tool_result") return "[Tool Result]";
+  }
+  return "";
 }
 
 function messageText(content: unknown): string {
