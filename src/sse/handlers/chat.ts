@@ -1394,27 +1394,49 @@ async function handleChatImplementation(
     // Preserves combo identity, auto-combo multi-factor scoring, weights, and nested branches.
     const tierKey =
       activeTier === "tier_1_apex" ? "apex" : activeTier === "tier_3_local" ? "local" : "resilient";
+    const tierMode = currentTierConfig?.tierModes?.[tierKey] ?? "both";
 
     const configuredTargets = tierModels[tierKey] || [];
-    let selectedTarget =
-      spbDecision?.selectedModel ||
-      configuredTargets[0] ||
-      (activeTier === "tier_1_apex"
-        ? tierModels.resilient?.[0] || tierModels.local?.[0]
-        : activeTier === "tier_3_local"
-          ? tierModels.resilient?.[0] || tierModels.apex?.[0]
-          : tierModels.apex?.[0] || tierModels.local?.[0]);
+    let selectedTarget: string | null = null;
 
-    // Fallback: If no custom model is configured in the tier, resolve candidates dynamically
-    // from free tier models or dynamic provider mapping (e.g. resolveVirtualTierModels)
-    if (!selectedTarget) {
-      try {
-        const dynamicCandidates = resolveVirtualTierModels(activeTier);
-        if (dynamicCandidates.length > 0) {
-          selectedTarget = dynamicCandidates[0];
+    if (tierMode === "user") {
+      // In user mode: strictly select from the user-configured models for this tier.
+      // Truthful reporting: do NOT cross-fallback to other tiers or auto-discovered free models.
+      if (spbDecision?.selectedModel && configuredTargets.includes(spbDecision.selectedModel)) {
+        selectedTarget = spbDecision.selectedModel;
+      } else if (configuredTargets.length > 0) {
+        selectedTarget = configuredTargets[0];
+      } else {
+        log.error(
+          "SPB",
+          `SPB tier '${activeTier}' has mode 'user' but no models configured for profile '${spbProfileName || "default"}'.`
+        );
+        return errorResponse(
+          503,
+          `SPB tier '${activeTier}' is set to user mode but has no models configured for profile '${spbProfileName || "default"}'. Please configure models in the Admin UI.`
+        );
+      }
+    } else {
+      selectedTarget =
+        spbDecision?.selectedModel ||
+        configuredTargets[0] ||
+        (activeTier === "tier_1_apex"
+          ? tierModels.resilient?.[0] || tierModels.local?.[0]
+          : activeTier === "tier_3_local"
+            ? tierModels.resilient?.[0] || tierModels.apex?.[0]
+            : tierModels.apex?.[0] || tierModels.local?.[0]);
+
+      // Fallback: If no custom model is configured in the tier, resolve candidates dynamically
+      // from free tier models or dynamic provider mapping (e.g. resolveVirtualTierModels)
+      if (!selectedTarget) {
+        try {
+          const dynamicCandidates = resolveVirtualTierModels(activeTier);
+          if (dynamicCandidates.length > 0) {
+            selectedTarget = dynamicCandidates[0];
+          }
+        } catch {
+          // fail open
         }
-      } catch {
-        // fail open
       }
     }
 
@@ -2099,9 +2121,24 @@ async function handleChatImplementation(
   if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
     // 1. If SPB is active and recommended alternative tier models, attempt fallback across remaining models
     if (isSpbActive && spbDecision?.tierAssignment?.recommendedModels?.length) {
-      const candidates = spbDecision.tierAssignment.recommendedModels.filter(
+      const activeTierKey =
+        spbDecision.tierAssignment.tier === "tier_1_apex"
+          ? "apex"
+          : spbDecision.tierAssignment.tier === "tier_3_local"
+            ? "local"
+            : "resilient";
+      const activeTierMode = currentTierConfig?.tierModes?.[activeTierKey] ?? "both";
+      const userModelsForTier = currentTierConfig?.tierModels?.[activeTierKey] || [];
+
+      let rawCandidates = spbDecision.tierAssignment.recommendedModels.filter(
         (m: string) => m !== resolvedModelStr
       );
+      if (activeTierMode === "user") {
+        // Truthful reporting: in user mode, fallback ONLY to other user-configured models for this tier
+        rawCandidates = rawCandidates.filter((m: string) => userModelsForTier.includes(m));
+      }
+
+      const candidates = rawCandidates;
       for (const altModel of candidates) {
         if (request?.signal?.aborted || clientRawRequest?.signal?.aborted) {
           log.info("SPB_FALLBACK", "Client disconnected (499) — stopping SPB fallback loop");

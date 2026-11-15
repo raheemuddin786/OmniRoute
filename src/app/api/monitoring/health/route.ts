@@ -96,24 +96,24 @@ function startHealthPayloadRefresh(): Promise<unknown> {
 // an additive `deepHealth` key on the full view only, served from its own
 // 30s cache and refreshed off the request path (same SWR motif as above).
 function withDeepHealth(payload: unknown, wantDeep: boolean, spbProfile?: string | null): unknown {
+  const result =
+    payload && typeof payload === "object" ? { ...(payload as Record<string, unknown>) } : {};
   // Inject live SPB telemetry data when SPB is enabled
-  if (payload && typeof payload === "object") {
-    const isSpbActive = isFeatureFlagEnabled("SPB_ENABLED") || process.env.SPB_ENABLED === "true";
-    if (isSpbActive) {
-      const summary = getSpbTelemetrySummary(spbProfile || undefined);
-      (payload as Record<string, unknown>).spbTelemetry = {
-        totalRoutes: summary.totalRoutes,
-        checkpointsRestored: summary.checkpointsRestored,
-        fallbacksTriggered: summary.fallbacksTriggered,
-        phaseDistribution: summary.phaseDistribution,
-        tierDistribution: summary.tierDistribution,
-        lastRoutedAt: summary.lastRoutedAt,
-      };
-    }
+  const isSpbActive = isFeatureFlagEnabled("SPB_ENABLED") || process.env.SPB_ENABLED === "true";
+  if (isSpbActive) {
+    const summary = getSpbTelemetrySummary(spbProfile || undefined);
+    result.spbTelemetry = {
+      totalRoutes: summary.totalRoutes,
+      checkpointsRestored: summary.checkpointsRestored,
+      fallbacksTriggered: summary.fallbacksTriggered,
+      phaseDistribution: summary.phaseDistribution,
+      tierDistribution: summary.tierDistribution,
+      lastRoutedAt: summary.lastRoutedAt,
+    };
   }
 
-  if (!wantDeep || !deepHealthVerdictCache) return payload;
-  return { ...(payload as Record<string, unknown>), deepHealth: deepHealthVerdictCache.verdict };
+  if (!wantDeep || !deepHealthVerdictCache) return result;
+  return { ...result, deepHealth: deepHealthVerdictCache.verdict };
 }
 
 function refreshDeepHealthVerdict(): void {

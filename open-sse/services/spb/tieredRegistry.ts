@@ -55,12 +55,17 @@ export function selectModelTier(
   customModels?: TierModelsConfig,
   _requiresTools?: boolean,
   isToolResultTurn?: boolean,
-  guidanceContract?: GuidanceContract
+  guidanceContract?: GuidanceContract,
+  profileName?: string
 ): TierAssignment {
-  const currentConfig = getTierConfig();
+  const currentConfig = getTierConfig(profileName);
   const onlyFree = currentConfig?.onlyFreeTierModels === true;
 
   const filterIfFreeOnly = (tierList: string[], tierKey: "apex" | "resilient" | "local") => {
+    // When tierMode is explicitly "user", do not filter out user-configured models
+    if (currentConfig?.tierModes?.[tierKey] === "user") {
+      return tierList;
+    }
     const isFreeTier = onlyFree || currentConfig?.tierModes?.[tierKey] === "free";
     if (!isFreeTier) return tierList;
     return tierList.filter(isFreeModelTarget);
@@ -71,6 +76,11 @@ export function selectModelTier(
     tierKey: "apex" | "resilient" | "local",
     customList?: string[]
   ) => {
+    const isUserMode = currentConfig?.tierModes?.[tierKey] === "user";
+    if (isUserMode) {
+      // In user mode, strictly return user-configured models. Never fall back to virtual/free models.
+      return customList ?? [];
+    }
     const directList = filterIfFreeOnly(customList ?? [], tierKey);
     if (directList.length > 0) return directList;
     try {

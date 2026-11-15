@@ -558,6 +558,12 @@ export function resolveTierCandidateModels(
     .filter((m) => m.tier === tierKey)
     .map((m) => `${m.provider}/${m.model}`);
 
+  if (tierMode === "user") {
+    // When tierMode is "user", strictly adhere to user-configured models only.
+    // User-configured models take precedence and must NEVER be filtered out or fall back to free models.
+    return effectiveConfiguredModels;
+  }
+
   // When onlyFreeTierModels is enabled, user-configured models MUST be strictly filtered
   // so paid models are NEVER included.
   const safeConfiguredModels = onlyFreeTierModels
@@ -568,10 +574,6 @@ export function resolveTierCandidateModels(
     if (tierMode === "free") {
       return freeModels.length > 0 ? freeModels : safeConfiguredModels;
     }
-    // onlyFreeTierModels active with tierMode "user" or "both"
-    if (tierMode === "user") {
-      return safeConfiguredModels.length > 0 ? safeConfiguredModels : freeModels;
-    }
     // tierMode === "both" with onlyFreeTierModels
     const combinedFree = [...safeConfiguredModels];
     for (const fm of freeModels) {
@@ -580,10 +582,6 @@ export function resolveTierCandidateModels(
       }
     }
     return combinedFree;
-  }
-
-  if (tierMode === "user") {
-    return effectiveConfiguredModels.length > 0 ? effectiveConfiguredModels : freeModels;
   }
 
   // Mode "both": Union of user configured models + free auto-discovered models

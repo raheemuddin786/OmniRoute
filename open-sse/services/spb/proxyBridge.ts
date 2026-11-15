@@ -297,14 +297,15 @@ export async function processSmartProxyRouting(
 
     // Pass isToolResultTurn AND guidanceContract to enforce supervision
     // Tier 3 will require a guidanceContract for all phases
-    const tierConfig = getTierConfig();
+    const tierConfig = getTierConfig(context.spbProfile);
     let tierAssignment = selectModelTier(
       intent.taskPhase,
       intent.complexityScore,
       tierConfig?.tierModels,
       intent.requiresTools,
       intent.isToolResultTurn,
-      intent.guidanceContract
+      intent.guidanceContract,
+      context.spbProfile
     );
 
     // If stagnation recovery specified an escalation tier, enforce it immediately
@@ -772,11 +773,15 @@ export async function processSmartProxyRouting(
       promptAnchorHash: "sha256:spb_fallback_" + Date.now(),
     };
 
-    const tierConfig = getTierConfig();
+    const tierConfig = getTierConfig(context?.spbProfile);
     const fallbackTier = selectModelTier(
       fallbackIntent.taskPhase,
       fallbackIntent.complexityScore,
-      tierConfig?.tierModels
+      tierConfig?.tierModels,
+      undefined,
+      undefined,
+      undefined,
+      context?.spbProfile
     );
     const fallbackModel =
       fallbackTier.recommendedModels && fallbackTier.recommendedModels.length > 0

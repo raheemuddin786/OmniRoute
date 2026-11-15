@@ -25,6 +25,7 @@ test("virtual tiers and resilient/spb model prefixes pass through alias resolver
 test("resolveVirtualTierModels resolves virtual tier identifiers and filters self-referential virtual models", async () => {
   // Configure tier models containing both real models and virtual identifiers
   setTierConfig({
+    tierModes: { apex: "user", resilient: "user", local: "user" },
     tierModels: {
       apex: ["claude-opus-5", "apex/claude-sonnet-5.5"],
       resilient: ["resilient/spb-tier-2", "antigravity-tier2-resilient-execution", "spb-tier-2"],
@@ -82,6 +83,7 @@ test("resolveVirtualTierModels expands database combo models configured in tierM
 
   // Configure tierModels to use the combo name
   setTierConfig({
+    tierModes: { apex: "user", resilient: "user", local: "user" },
     tierModels: {
       apex: ["apex/spb-tier-1"],
       resilient: ["antigravity-tier2-resilient-execution"],
