@@ -804,6 +804,114 @@ export async function expandLedgerWithApex(
 // 2. Classify Follow-Up Messages
 // ============================================================================
 
+/**
+ * Determines whether any active (open or done) item still depends on a child
+ * whose parent item has been skipped.
+ * Only re-parent if another open/done item depends on it; otherwise returns null.
+ */
+function doesActiveItemDependOnChild(
+  child: IntentLedgerItem,
+  skippedParent: IntentLedgerItem,
+  activeItems: IntentLedgerItem[]
+): IntentLedgerItem | null {
+  if (activeItems.length === 0) return null;
+
+  const childText = `${child.text} ${child.reason || ""} ${child.acceptance || ""}`.toLowerCase();
+  const parentText = `${skippedParent.text} ${skippedParent.acceptance || ""}`.toLowerCase();
+
+  const stopWords = new Set([
+    "endpoint",
+    "component",
+    "service",
+    "module",
+    "layer",
+    "feature",
+    "user",
+    "create",
+    "update",
+    "delete",
+    "post",
+    "with",
+    "from",
+    "that",
+    "this",
+    "need",
+    "needs",
+    "have",
+    "item",
+    "returns",
+    "validates",
+    "input",
+    "output",
+    "payload",
+    "schema",
+  ]);
+
+  const parentKeywords = parentText
+    .split(/[^a-z0-9_-]+/)
+    .filter((w) => w.length >= 4 && !stopWords.has(w));
+
+  const matchesParentExclusive = parentKeywords.some((kw) => childText.includes(kw));
+
+  // If the child explicitly targets the skipped parent's distinctive concept (e.g. "signup validation" referencing "signup")
+  // and no active item shares that distinctive concept, the child is exclusive to the skipped parent.
+  if (matchesParentExclusive) {
+    const activeSharingParentConcept = activeItems.find((active) => {
+      const activeText =
+        `${active.text} ${active.reason || ""} ${active.acceptance || ""}`.toLowerCase();
+      return parentKeywords.some((kw) => activeText.includes(kw));
+    });
+    if (!activeSharingParentConcept) {
+      // Child is exclusive to the skipped parent -> cannot be re-parented to unrelated active items
+      return null;
+    }
+  }
+
+  for (const active of activeItems) {
+    const activeText =
+      `${active.text} ${active.reason || ""} ${active.acceptance || ""}`.toLowerCase();
+    const activeKeywords = activeText
+      .split(/[^a-z0-9_-]+/)
+      .filter((w) => w.length >= 4 && !stopWords.has(w));
+
+    // 1. Direct explicit reference
+    if (
+      childText.includes(active.id.toLowerCase()) ||
+      activeText.includes(child.id.toLowerCase())
+    ) {
+      return active;
+    }
+
+    // 2. Shared infrastructure / utilities (auth, crypto, jwt, db, common, utils, etc.)
+    const isSharedInfrastructure =
+      /\b(?:util|utility|utilities|helper|helpers|common|shared|lib|crypto|auth|jwt|token|session|database|db|migration|model|schema|client|middleware|config)\b/i.test(
+        childText
+      );
+
+    const isAuthShared =
+      /\b(?:auth|login|signin|jwt|session|token|password|crypto)\b/i.test(childText) &&
+      /\b(?:auth|login|signin|jwt|session|token|password|crypto)\b/i.test(activeText);
+
+    if (isSharedInfrastructure || isAuthShared) {
+      return active;
+    }
+
+    // 3. Keyword overlap between child and active item
+    const matchesActive = activeKeywords.some((kw) => childText.includes(kw));
+    if (matchesActive) {
+      return active;
+    }
+
+    // 4. File overlap
+    if (child.targetFiles?.length && active.targetFiles?.length) {
+      const hasOverlap = child.targetFiles.some((f) => active.targetFiles?.includes(f));
+      if (hasOverlap) return active;
+    }
+  }
+
+  return null;
+}
+
 export async function classifyFollowUp(
   existingContract: GuidanceContract,
   newMessage: string,
@@ -936,14 +1044,13 @@ export async function classifyFollowUp(
         }
       }
 
-      // If any existing items were omitted by the model in parsed.intents, retain them
       for (const [_, existing] of existingMap) {
         reconciled.push(existing);
       }
 
-      // Task 1: Re-parenting check when an item is skipped
-      // Do not auto-skip its required-implied children if any open or done item still depends on them.
-      // Re-parent them instead.
+      // Re-parenting check when an item is skipped:
+      // Only re-parent a child of a skipped item if another open or done item still depends on it;
+      // otherwise skip it too.
       const skippedItemIds = new Set(
         reconciled.filter((it) => it.status === "skipped").map((it) => it.id)
       );
@@ -952,30 +1059,34 @@ export async function classifyFollowUp(
         (it) => it.kind === "explicit" && it.status !== "skipped"
       );
 
-      if (activeExplicitItems.length > 0) {
-        for (const item of reconciled) {
-          // If this child had a parent that is now skipped
-          if (item.parentId && skippedItemIds.has(item.parentId)) {
-            const skippedParent = reconciled.find((p) => p.id === item.parentId);
-            const activeParent =
-              activeExplicitItems.find((p) => p.layer === item.layer) || activeExplicitItems[0];
+      for (const item of reconciled) {
+        // If this child had a parent that is now skipped
+        if (item.parentId && skippedItemIds.has(item.parentId)) {
+          const skippedParent = reconciled.find((p) => p.id === item.parentId);
+          const dependentActiveItem = skippedParent
+            ? doesActiveItemDependOnChild(item, skippedParent, activeExplicitItems)
+            : null;
 
-            item.parentId = activeParent.id;
+          if (dependentActiveItem) {
+            item.parentId = dependentActiveItem.id;
             item.reason = item.reason
-              ? `${item.reason} (re-parented from ${skippedParent?.id || "skipped item"} to ${activeParent.id})`
-              : `Required for ${activeParent.text}`;
+              ? `${item.reason} (re-parented from ${skippedParent?.id || "skipped item"} to ${dependentActiveItem.id})`
+              : `Required for ${dependentActiveItem.text}`;
 
-            // If the child was marked skipped purely because its parent was skipped, un-skip it
             if (item.status === "skipped") {
               item.status = "open";
             }
+          } else {
+            item.status = "skipped";
+            item.reason = item.reason
+              ? `${item.reason} (skipped: exclusive dependency of skipped parent ${skippedParent?.id || ""})`
+              : `Skipped because parent ${skippedParent?.id || ""} was skipped`;
           }
         }
       }
 
-      // Task 2: Schema validation on reconciled items
-      // Ensure all items, especially newly added or updated items, pass schema validation
-      // (explicit items need promptRef, required-implied need parentId and reason)
+      // Schema validation on reconciled items:
+      // Ensure all items pass schema validation (explicit items need promptRef, required-implied need parentId and reason)
       for (const item of reconciled) {
         if (item.kind === "explicit") {
           if (!item.promptRef || item.promptRef.trim() === "") {
@@ -1232,13 +1343,15 @@ export async function judgeCompletion(
       timestamp: Date.now(),
     });
 
+    const openItems = parsed.items.filter((it) => it.status !== "done" && it.status !== "skipped");
+
     try {
       recordSpbTelemetry({
         sessionId: options?.sessionId || "spb_judge_session",
         taskPhase: options?.taskPhase || "TESTING_AND_VERIFICATION",
         modelTier: options?.modelTier || "tier_1_apex",
         checkpointRestored: false,
-        fallbackTriggered: !parsed.isSatisfied,
+        fallbackTriggered: false, // Normal judge evaluation is NOT a system fallback
         retryCount,
         statusCode: 200,
         latencyMs: Date.now() - startTime,
@@ -1252,10 +1365,11 @@ export async function judgeCompletion(
           outOfScopeFiles: parsed.outOfScopeFiles,
         }),
         repromptText: parsed.reprompt || "",
-        fallbackReason: parsed.isSatisfied
-          ? undefined
-          : parsed.reprompt
-            ? parsed.reprompt.slice(0, 100)
+        fallbackReason: undefined,
+        openItemsCount: openItems.length,
+        openItemsSummary:
+          openItems.length > 0
+            ? openItems.map((i) => `${i.id}: ${i.status}`).join(", ")
             : undefined,
       });
     } catch {

@@ -1051,7 +1051,7 @@ test("SPB Apex Ledger: judgeCompletion strips internal labels from reprompts", a
   assert.ok(res.reprompt.includes("Complete the implementation"));
 });
 
-test("SPB Apex Ledger: classifyFollowUp re-parents required-implied children when parent is skipped", async () => {
+test("SPB Apex Ledger: classifyFollowUp re-parents shared child (auth utilities) and skips exclusive child (signup validation)", async () => {
   const existingContract: GuidanceContract = {
     intents: [
       {
@@ -1080,6 +1080,16 @@ test("SPB Apex Ledger: classifyFollowUp re-parents required-implied children whe
         acceptance: "Exports hashPassword and generateToken",
         status: "open",
       },
+      {
+        id: "I4",
+        text: "signup validation",
+        kind: "required-implied",
+        parentId: "I2", // Initially parented to signup
+        reason: "Validates signup payload schema",
+        layer: "api",
+        acceptance: "Rejects invalid email and weak password",
+        status: "open",
+      },
     ],
     strictCompletion: true,
   };
@@ -1091,8 +1101,9 @@ test("SPB Apex Ledger: classifyFollowUp re-parents required-implied children whe
       intents: [
         { id: "I1", status: "done" },
         { id: "I2", status: "skipped" },
-        // Model attempts to mark I3 skipped because I2 was skipped
+        // Model attempts to mark children skipped or omitted
         { id: "I3", status: "skipped", parentId: "I2" },
+        { id: "I4", status: "open", parentId: "I2" },
       ],
     });
   };
@@ -1103,17 +1114,23 @@ test("SPB Apex Ledger: classifyFollowUp re-parents required-implied children whe
   const i1 = result.ledger.find((i) => i.id === "I1");
   const i2 = result.ledger.find((i) => i.id === "I2");
   const i3 = result.ledger.find((i) => i.id === "I3");
+  const i4 = result.ledger.find((i) => i.id === "I4");
 
   assert.equal(i1?.status, "done", "Done item I1 must stay done");
   assert.equal(i2?.status, "skipped", "Signup item I2 must be skipped");
-  assert.notEqual(i3?.status, "skipped", "Required-implied child I3 must NOT be skipped");
-  assert.equal(i3?.status, "open", "Required-implied child I3 must be re-opened");
+
+  // Shared child I3 (auth utilities) must be re-opened and re-parented to active explicit item I1
+  assert.notEqual(i3?.status, "skipped", "Shared child I3 must NOT be skipped");
+  assert.equal(i3?.status, "open", "Shared child I3 must be re-opened");
   assert.equal(
     i3?.parentId,
     "I1",
-    "Required-implied child I3 must be re-parented to active explicit item I1"
+    "Shared child I3 must be re-parented to active explicit item I1"
   );
   assert.ok(i3?.reason?.includes("re-parented"), "Reason must record re-parenting");
+
+  // Exclusive child I4 (signup validation) must be skipped because parent is skipped and no active item depends on it
+  assert.equal(i4?.status, "skipped", "Skipped-only child I4 (signup validation) must be skipped");
 });
 
 test("SPB Apex Ledger: items added by follow-up reconciliation satisfy schema validation with promptRef", async () => {

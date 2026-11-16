@@ -470,8 +470,10 @@ async function applySpbOutboundZeroLoss(
     );
 
     // If caller requested streaming and strict completion is NOT active (or no active ledger),
-    // bypass outbound buffering to preserve immediate time-to-first-token (TTFT) streaming.
-    if (body?.stream && (!isStrict || !hasActiveLedger)) {
+    // bypass outbound buffering to preserve immediate time-to-first-token (TTFT) streaming,
+    // unless running in apex_shadow mode which evaluates the judge asynchronously in the background.
+    const ledgerMode = activeProfileConfig?.spbConfig?.intentLedgerMode ?? "off";
+    if (body?.stream && (!isStrict || !hasActiveLedger) && ledgerMode !== "apex_shadow") {
       return withSpbHeaders(response, spbDecision);
     }
 

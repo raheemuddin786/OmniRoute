@@ -1548,7 +1548,10 @@ export async function processSpbOutboundZeroLoss(args: {
     const mode = tierCfg?.spbConfig?.intentLedgerMode ?? "off";
     let ledgerEval: LedgerEvaluationResult | undefined;
     if (!extracted.hasToolCalls && activeContract?.intents?.length) {
-      if ((mode === "apex_guided" || mode === "apex_shadow") && isStrict) {
+      if (
+        mode === "apex_shadow" ||
+        ((mode === "apex_guided" || mode === "heuristic") && isStrict)
+      ) {
         const cwd = resolveDiffCwd();
         const currentSnapshot = snapshotWorkingTreeDirtyFiles(cwd);
         const baselineHashes = activeContract.baselineFileHashes || {};
@@ -1628,13 +1631,16 @@ export async function processSpbOutboundZeroLoss(args: {
 
         if (mode === "apex_shadow") {
           // Shadow mode: log decisions to telemetry with full ledger and judge verdict, inject nothing, never reprompt
+          const openItems = judgeResult.items.filter(
+            (it) => it.status !== "done" && it.status !== "skipped"
+          );
           try {
             recordSpbTelemetry({
               sessionId: args.sessionId,
               taskPhase: args.taskPhase,
               modelTier: args.tier,
               checkpointRestored: false,
-              fallbackTriggered: !judgeResult.isSatisfied,
+              fallbackTriggered: false, // Normal judge evaluation is NOT a system fallback
               statusCode: 200,
               latencyMs: judgeLatencyMs,
               timestamp: Date.now(),
@@ -1647,11 +1653,12 @@ export async function processSpbOutboundZeroLoss(args: {
                 outOfScopeFiles: judgeResult.outOfScopeFiles,
               }),
               repromptText: judgeResult.reprompt || "",
-              fallbackReason: judgeResult.isSatisfied
-                ? undefined
-                : judgeResult.reprompt
-                  ? judgeResult.reprompt.slice(0, 100)
-                  : "Open items remaining in shadow evaluation",
+              fallbackReason: undefined,
+              openItemsCount: openItems.length,
+              openItemsSummary:
+                openItems.length > 0
+                  ? openItems.map((i) => `${i.id}: ${i.status}`).join(", ")
+                  : undefined,
             });
           } catch {
             // Ignore

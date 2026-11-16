@@ -1730,7 +1730,9 @@ export function SmartProxyBridgeTab() {
                             />
                           </label>
                           <span className="text-[11px] text-muted-foreground block mt-1">
-                            Block final response until all required ledger items pass with evidence
+                            Block final response until all required ledger items pass with evidence.
+                            Note: Apex Shadow evaluates judge in background without needing strict
+                            completion.
                           </span>
                         </div>
 

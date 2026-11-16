@@ -32,6 +32,8 @@ export interface SpbTelemetryRecord {
   spbProfile?: string;
   retryCount?: number;
   fallbackReason?: string;
+  openItemsCount?: number;
+  openItemsSummary?: string;
   intentLedger?: string;
   judgeDecision?: string;
   repromptText?: string;
@@ -79,6 +81,8 @@ export interface SpbActivityRecord {
   spbProfile?: string;
   retryCount?: number;
   fallbackReason?: string;
+  openItemsCount?: number;
+  openItemsSummary?: string;
   intentLedger?: string;
   judgeDecision?: string;
   repromptText?: string;
@@ -378,6 +382,16 @@ export function initSpbStateTable(): void {
       // Column already exists
     }
     try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN open_items_count INTEGER DEFAULT 0;");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN open_items_summary TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_spb_telemetry_profile ON spb_telemetry_audit(spb_profile);"
       );
@@ -594,6 +608,52 @@ export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
   }
 }
 
+export const SPB_TELEMETRY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+export const MAX_TELEMETRY_JSON_BYTES = 20 * 1024; // 20 KB cap
+
+/**
+ * Strips secret-file references (.env, keys, tokens) and caps JSON at 20 KB with a truncation marker.
+ */
+export function sanitizeAndCapTelemetryJson(
+  raw: string | undefined | null,
+  maxBytes: number = MAX_TELEMETRY_JSON_BYTES
+): string | null {
+  if (!raw) return null;
+  // 1. Redact any diffs or references targeting .env, secrets, tokens, credentials
+  let cleaned = raw
+    .replace(
+      /(?:---|\+\+\+)\s+[^\n]*\.(?:env|secret|pem|key)[^\n]*/gi,
+      "--- [REDACTED_SECRET_FILE]"
+    )
+    .replace(
+      /"targetFiles"\s*:\s*\[[^\]]*\.(?:env|secret|pem|key)[^\]]*\]/gi,
+      '"targetFiles": ["[REDACTED_SECRET_FILE]"]'
+    )
+    .replace(
+      /(?:bearer\s+[a-zA-Z0-9_\-\.]{20,}|password\s*[:=]\s*["'][^"']+["'])/gi,
+      "[REDACTED_CREDENTIAL]"
+    );
+
+  // 2. Cap at 20 KB
+  if (Buffer.byteLength(cleaned, "utf8") > maxBytes) {
+    cleaned = cleaned.slice(0, maxBytes - 36) + '... [TRUNCATED_20KB_CAP]"}';
+  }
+  return cleaned;
+}
+
+export function pruneStaleTelemetry(maxAgeMs: number = SPB_TELEMETRY_RETENTION_MS): number {
+  try {
+    initSpbStateTable();
+    const db = getDbInstance();
+    const threshold = Date.now() - maxAgeMs;
+    const result = db.prepare("DELETE FROM spb_telemetry_audit WHERE timestamp < ?").run(threshold);
+    return result.changes;
+  } catch (err) {
+    console.error("[SPB State] Failed to prune stale telemetry:", err);
+    return 0;
+  }
+}
+
 export function pruneStaleCheckpoints(maxAgeMs: number = 24 * 60 * 60 * 1000): number {
   try {
     initSpbStateTable();
@@ -610,6 +670,9 @@ export function pruneStaleCheckpoints(maxAgeMs: number = 24 * 60 * 60 * 1000): n
       }
     }
 
+    // Also enforce 14-day telemetry retention
+    pruneStaleTelemetry(SPB_TELEMETRY_RETENTION_MS);
+
     return result.changes;
   } catch (err) {
     console.error("[SPB State] Failed to prune stale checkpoints:", err);
@@ -622,13 +685,22 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
     initSpbStateTable();
     const db = getDbInstance();
     const profile = record.spbProfile || "default";
+
+    // Enforce 14-day retention lazily on write (5% probability)
+    if (Math.random() < 0.05) {
+      pruneStaleTelemetry(SPB_TELEMETRY_RETENTION_MS);
+    }
+
+    const cappedLedger = sanitizeAndCapTelemetryJson(record.intentLedger);
+    const cappedDecision = sanitizeAndCapTelemetryJson(record.judgeDecision);
+
     db.prepare(
       `
       INSERT INTO spb_telemetry_audit
       (session_id, task_phase, model_tier, checkpoint_restored, fallback_triggered, status_code, latency_ms, timestamp,
        stagnation_detected, stagnation_recovered, spb_profile, retry_count, fallback_reason,
-       intent_ledger, judge_decision, reprompt_text, operation)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       intent_ledger, judge_decision, reprompt_text, operation, open_items_count, open_items_summary)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       record.sessionId,
@@ -644,10 +716,12 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       profile,
       record.retryCount ?? 0,
       record.fallbackReason || null,
-      record.intentLedger || null,
-      record.judgeDecision || null,
+      cappedLedger,
+      cappedDecision,
       record.repromptText || null,
-      record.operation || "routing"
+      record.operation || "routing",
+      record.openItemsCount ?? 0,
+      record.openItemsSummary || null
     );
   } catch (err) {
     console.error("[SPB State] Failed to record telemetry:", err);
@@ -1341,6 +1415,8 @@ export function getSpbActivityRecords(options: SpbActivityFilterOptions = {}): {
            a.judge_decision,
            a.reprompt_text,
            a.operation,
+           a.open_items_count,
+           a.open_items_summary,
            e.satisfaction_score,
            e.reprompt_count
          FROM spb_telemetry_audit a
@@ -1378,6 +1454,8 @@ export function getSpbActivityRecords(options: SpbActivityFilterOptions = {}): {
       spbProfile: r.spb_profile ? String(r.spb_profile) : undefined,
       retryCount: Number(r.retry_count ?? 0),
       fallbackReason: r.fallback_reason ? String(r.fallback_reason) : undefined,
+      openItemsCount: Number(r.open_items_count ?? 0),
+      openItemsSummary: r.open_items_summary ? String(r.open_items_summary) : undefined,
       intentLedger: r.intent_ledger ? String(r.intent_ledger) : undefined,
       judgeDecision: r.judge_decision ? String(r.judge_decision) : undefined,
       repromptText: r.reprompt_text ? String(r.reprompt_text) : undefined,
