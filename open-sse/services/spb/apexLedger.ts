@@ -328,6 +328,7 @@ export async function expandLedgerWithApex(
     maxItems?: number;
     promptAnchorHash?: string;
     tier?: string;
+    skipCache?: boolean;
     onTelemetry?: (record: ApexTelemetryRecord) => void;
   }
 ): Promise<{
@@ -354,34 +355,36 @@ export async function expandLedgerWithApex(
 
   const cacheKey = `spb_apex_ledger_${APEX_LEDGER_PROMPT_VERSION}_${modelTier}_${anchorHash}_${contextDigest}`;
 
-  try {
-    const cached = getLearnedOptimization(cacheKey);
-    const isFresh = cached?.createdAt && Date.now() - cached.createdAt < APEX_LEDGER_CACHE_TTL_MS;
-    if (cached?.enhancementTemplate && isFresh) {
-      const parsed = JSON.parse(cached.enhancementTemplate);
-      const validated = ApexLedgerExpansionSchema.safeParse(parsed);
-      if (validated.success) {
-        options?.onTelemetry?.({
-          operation: "expand",
-          latencyMs: Date.now() - startTime,
-          fallbackUsed: false,
-          ledgerItemCount: validated.data.intents.length,
-          timestamp: Date.now(),
-        });
-        // Expansion result ONLY is restored. Live statuses are always initialized fresh to 'open'.
-        return {
-          isActionable: validated.data.isActionable,
-          intents: validated.data.intents.map((it) => ({
-            ...it,
-            status: "open" as IntentStatus,
-          })),
-          nonGoals: validated.data.nonGoals,
-          contextSource: context.contextSource,
-        };
+  if (!options?.skipCache) {
+    try {
+      const cached = getLearnedOptimization(cacheKey);
+      const isFresh = cached?.createdAt && Date.now() - cached.createdAt < APEX_LEDGER_CACHE_TTL_MS;
+      if (cached?.enhancementTemplate && isFresh) {
+        const parsed = JSON.parse(cached.enhancementTemplate);
+        const validated = ApexLedgerExpansionSchema.safeParse(parsed);
+        if (validated.success) {
+          options?.onTelemetry?.({
+            operation: "expand",
+            latencyMs: Date.now() - startTime,
+            fallbackUsed: false,
+            ledgerItemCount: validated.data.intents.length,
+            timestamp: Date.now(),
+          });
+          // Expansion result ONLY is restored. Live statuses are always initialized fresh to 'open'.
+          return {
+            isActionable: validated.data.isActionable,
+            intents: validated.data.intents.map((it) => ({
+              ...it,
+              status: "open" as IntentStatus,
+            })),
+            nonGoals: validated.data.nonGoals,
+            contextSource: context.contextSource,
+          };
+        }
       }
+    } catch {
+      // Non-blocking cache lookup
     }
-  } catch {
-    // Non-blocking cache lookup
   }
 
   const systemPrompt =
@@ -647,6 +650,8 @@ export async function judgeCompletion(
     timeoutMs?: number;
     sessionId?: string;
     profile?: string;
+    taskPhase?: string;
+    modelTier?: string;
     onTelemetry?: (record: ApexTelemetryRecord) => void;
   }
 ): Promise<JudgeCompletionResult> {
@@ -686,7 +691,7 @@ export async function judgeCompletion(
     `proves that the agent completed each item in the Intent Ledger.\n\n` +
     `RULES:\n` +
     `1. Mechanical Evidence Only: An item can be marked "done" ONLY if supported by git diff delta, modified file hashes, or zero-exit-code test execution. NEVER mark an item "done" based solely on claims in the assistant's final text.\n` +
-    `2. Test Items: Test items require evidence of test execution with exit code 0 or targeted test file modifications accompanied by test commands.\n` +
+    `2. Test Items: Test items require evidence of test execution with exit code 0 or targeted test file modifications accompanied by test commands. If testCommands reports a non-zero exit code (e.g. exitCode != 0) or is missing, the test item MUST remain 'open' or 'blocked' even if the assistant text claims the tests passed. Assistant text claims alone never override tool-reported test results.\n` +
     `3. Scope Fence (Requirement A): Identify any modified files in the git diff that do NOT serve any item in the ledger as "outOfScopeFiles".\n` +
     `4. Shared Workspace (Requirement H): ${evidence.sharedWorkspace ? "NOTE: Workspace is shared across sessions or worktrees. Attribute changes carefully." : "Single session workspace."}\n` +
     `5. Reprompt: If any required item is not done or if out-of-scope files exist, write a concise, targeted reprompt listing missing items and instructing the agent to revert out-of-scope files.\n\n` +
@@ -754,6 +759,22 @@ export async function judgeCompletion(
       timestamp: Date.now(),
     });
 
+    try {
+      recordSpbTelemetry({
+        sessionId: options?.sessionId || "spb_judge_session",
+        taskPhase: options?.taskPhase || "TESTING_AND_VERIFICATION",
+        modelTier: options?.modelTier || "tier_1_apex",
+        checkpointRestored: false,
+        fallbackTriggered: false,
+        statusCode: 200,
+        latencyMs: Date.now() - startTime,
+        timestamp: Date.now(),
+        spbProfile: options?.profile || "default",
+      });
+    } catch {
+      // Non-blocking telemetry
+    }
+
     return parsed;
   } catch (err) {
     // Failure policy (Requirement C): log to telemetry and never block the user
@@ -765,8 +786,8 @@ export async function judgeCompletion(
     try {
       recordSpbTelemetry({
         sessionId: options?.sessionId || "spb_judge_session",
-        taskPhase: "TESTING_AND_VERIFICATION",
-        modelTier: "tier_1_apex",
+        taskPhase: options?.taskPhase || "TESTING_AND_VERIFICATION",
+        modelTier: options?.modelTier || "tier_1_apex",
         checkpointRestored: false,
         fallbackTriggered: true,
         statusCode: 200,
@@ -797,6 +818,180 @@ export async function judgeCompletion(
       isSatisfied: true,
     };
   }
+}
+
+/**
+ * Extracts mechanical tool execution evidence (test commands, read files, written files)
+ * directly from structured tool_result / tool messages.
+ * NEVER extracts exit codes or modifications from assistant prose.
+ */
+export function extractToolEvidenceFromMessages(messages: unknown[]): {
+  executedTestCommands: Array<{ command: string; exitCode: number }>;
+  observedReadFiles: string[];
+  observedWrittenFiles: string[];
+} {
+  const executedTestCommands: Array<{ command: string; exitCode: number }> = [];
+  const observedReadFiles = new Set<string>();
+  const observedWrittenFiles = new Set<string>();
+
+  if (!Array.isArray(messages)) {
+    return {
+      executedTestCommands,
+      observedReadFiles: [],
+      observedWrittenFiles: [],
+    };
+  }
+
+  const toolCallsMap = new Map<string, { name: string; input: Record<string, unknown> }>();
+
+  // 1. Index tool calls from assistant messages
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const m = msg as Record<string, unknown>;
+
+    // Anthropic style tool_use blocks
+    if (m.role === "assistant" && Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block && typeof block === "object") {
+          const b = block as Record<string, unknown>;
+          if (b.type === "tool_use" && typeof b.id === "string" && typeof b.name === "string") {
+            const input = (
+              typeof b.input === "object" && b.input !== null ? b.input : {}
+            ) as Record<string, unknown>;
+            toolCallsMap.set(b.id, { name: b.name, input });
+
+            const targetPath = String(
+              input.Path || input.path || input.file_path || input.filepath || ""
+            );
+            if (targetPath) {
+              if (
+                /^(?:write_file|edit_file|file_write|save_file|create_file|apply_diff|patch)$/i.test(
+                  b.name
+                )
+              ) {
+                observedWrittenFiles.add(targetPath);
+              } else if (/^(?:read_file|read|read_resource|view_file|grep|glob)$/i.test(b.name)) {
+                observedReadFiles.add(targetPath);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // OpenAI style tool_calls array
+    if (m.role === "assistant" && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        if (tc && typeof tc === "object") {
+          const callObj = tc as Record<string, unknown>;
+          const fn = (
+            typeof callObj.function === "object" && callObj.function !== null
+              ? callObj.function
+              : {}
+          ) as Record<string, unknown>;
+          const id = typeof callObj.id === "string" ? callObj.id : "";
+          const name = typeof fn.name === "string" ? fn.name : "";
+          let input: Record<string, unknown> = {};
+          if (typeof fn.arguments === "string") {
+            try {
+              input = JSON.parse(fn.arguments);
+            } catch {
+              // ignore
+            }
+          } else if (typeof fn.arguments === "object" && fn.arguments !== null) {
+            input = fn.arguments as Record<string, unknown>;
+          }
+          if (id && name) {
+            toolCallsMap.set(id, { name, input });
+            const targetPath = String(
+              input.Path || input.path || input.file_path || input.filepath || ""
+            );
+            if (targetPath) {
+              if (
+                /^(?:write_file|edit_file|file_write|save_file|create_file|apply_diff|patch)$/i.test(
+                  name
+                )
+              ) {
+                observedWrittenFiles.add(targetPath);
+              } else if (/^(?:read_file|read|read_resource|view_file|grep|glob)$/i.test(name)) {
+                observedReadFiles.add(targetPath);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Extract verified exit codes strictly from tool_result messages
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const m = msg as Record<string, unknown>;
+
+    // Anthropic style tool_result in role "user"
+    if (m.role === "user" && Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block && typeof block === "object") {
+          const b = block as Record<string, unknown>;
+          if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
+            const toolCall = toolCallsMap.get(b.tool_use_id);
+            if (toolCall) {
+              const cmd = String(
+                toolCall.input.CommandLine || toolCall.input.command || toolCall.input.cmd || ""
+              );
+              if (
+                /\b(?:test|vitest|jest|mocha|pytest|cargo test|go test|npm test|node --test)\b/i.test(
+                  cmd
+                )
+              ) {
+                const isError = Boolean(b.is_error);
+                const resultText =
+                  typeof b.content === "string" ? b.content : JSON.stringify(b.content || "");
+                let exitCode = isError ? 1 : 0;
+                const matchCode = resultText.match(/(?:exited with code|exit code:?)\s*(\d+)/i);
+                if (matchCode) {
+                  exitCode = parseInt(matchCode[1], 10);
+                } else if (/\b(?:FAIL|FAILED|ERRORS?|ERR!|error:)\b/i.test(resultText)) {
+                  exitCode = 1;
+                }
+                executedTestCommands.push({ command: cmd, exitCode });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // OpenAI style role "tool"
+    if (m.role === "tool" && typeof m.tool_call_id === "string") {
+      const toolCall = toolCallsMap.get(m.tool_call_id);
+      if (toolCall) {
+        const cmd = String(
+          toolCall.input.CommandLine || toolCall.input.command || toolCall.input.cmd || ""
+        );
+        if (
+          /\b(?:test|vitest|jest|mocha|pytest|cargo test|go test|npm test|node --test)\b/i.test(cmd)
+        ) {
+          const resultText =
+            typeof m.content === "string" ? m.content : JSON.stringify(m.content || "");
+          let exitCode = 0;
+          const matchCode = resultText.match(/(?:exited with code|exit code:?)\s*(\d+)/i);
+          if (matchCode) {
+            exitCode = parseInt(matchCode[1], 10);
+          } else if (/\b(?:FAIL|FAILED|ERRORS?|ERR!|error:)\b/i.test(resultText)) {
+            exitCode = 1;
+          }
+          executedTestCommands.push({ command: cmd, exitCode });
+        }
+      }
+    }
+  }
+
+  return {
+    executedTestCommands,
+    observedReadFiles: Array.from(observedReadFiles),
+    observedWrittenFiles: Array.from(observedWrittenFiles),
+  };
 }
 
 // ============================================================================

@@ -36,6 +36,8 @@ export interface SpbTelemetrySummary {
   totalRoutes: number;
   checkpointsRestored: number;
   fallbacksTriggered: number;
+  failOpenCount?: number;
+  failOpensPerProfile?: Record<string, number>;
   phaseDistribution: Record<string, number>;
   tierDistribution: Record<string, number>;
   lastRoutedAt: string | null;
@@ -663,10 +665,22 @@ export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySumm
     const tierDistribution: Record<string, number> = {};
     for (const r of tierRows) tierDistribution[r.model_tier] = r.count;
 
+    const failOpenRows = db
+      .prepare(
+        `SELECT spb_profile, SUM(fallback_triggered) AS fail_opens FROM spb_telemetry_audit GROUP BY spb_profile`
+      )
+      .all() as Array<{ spb_profile: string; fail_opens: number }>;
+    const failOpensPerProfile: Record<string, number> = {};
+    for (const r of failOpenRows) {
+      failOpensPerProfile[r.spb_profile || "default"] = r.fail_opens || 0;
+    }
+
     return {
       totalRoutes: summaryRow.total_routes,
       checkpointsRestored: summaryRow.checkpoints_restored || 0,
       fallbacksTriggered: summaryRow.fallbacks_triggered || 0,
+      failOpenCount: summaryRow.fallbacks_triggered || 0,
+      failOpensPerProfile,
       phaseDistribution,
       tierDistribution,
       lastRoutedAt: summaryRow.max_time ? new Date(summaryRow.max_time).toISOString() : null,

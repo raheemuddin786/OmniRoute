@@ -25,7 +25,12 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { getTierConfig } from "../tierResolver.ts";
-import { judgeCompletion, type MechanicalEvidence, type ModelDispatchFn } from "./apexLedger.ts";
+import {
+  judgeCompletion,
+  extractToolEvidenceFromMessages,
+  type MechanicalEvidence,
+  type ModelDispatchFn,
+} from "./apexLedger.ts";
 import { snapshotWorkingTreeDirtyFiles } from "./proxyBridge.ts";
 
 /**
@@ -1554,13 +1559,30 @@ export async function processSpbOutboundZeroLoss(args: {
           files: diffFiles,
           hashes: currentSnapshot.hashes,
         };
+
+        const toolEvidence = extractToolEvidenceFromMessages(args.body?.messages as unknown[]);
+        const combinedTestCommands = [
+          ...((activeContract.executedTestCommands as Array<{
+            command: string;
+            exitCode: number;
+          }>) || []),
+          ...toolEvidence.executedTestCommands,
+        ];
+        const combinedReadFiles = Array.from(
+          new Set([...(activeContract.observedReadFiles || []), ...toolEvidence.observedReadFiles])
+        );
+        const combinedWrittenFiles = Array.from(
+          new Set([
+            ...(activeContract.observedWrittenFiles || []),
+            ...toolEvidence.observedWrittenFiles,
+          ])
+        );
+
         const mechanicalEvidence: MechanicalEvidence = {
           diffDelta,
-          testCommands:
-            (activeContract.executedTestCommands as Array<{ command: string; exitCode: number }>) ||
-            [],
-          observedReadFiles: activeContract.observedReadFiles || [],
-          observedWrittenFiles: activeContract.observedWrittenFiles || [],
+          testCommands: combinedTestCommands,
+          observedReadFiles: combinedReadFiles,
+          observedWrittenFiles: combinedWrittenFiles,
           diffVisible: Boolean(args.workspaceRoot && fs.existsSync(args.workspaceRoot)),
           sharedWorkspace: Boolean(activeContract.sharedWorkspace),
         };
@@ -1582,6 +1604,8 @@ export async function processSpbOutboundZeroLoss(args: {
           {
             sessionId: args.sessionId,
             profile: args.spbProfile,
+            taskPhase: args.taskPhase,
+            modelTier: args.tier,
           }
         );
 
