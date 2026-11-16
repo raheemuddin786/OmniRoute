@@ -14,8 +14,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { GuidanceContract, IntentLedgerItem, IntentStatus } from "./intentAnalyzer.ts";
-import { getLearnedOptimization, saveLearnedOptimization } from "../../../src/lib/db/spbState.ts";
+import {
+  getLearnedOptimization,
+  saveLearnedOptimization,
+  recordSpbTelemetry,
+} from "../../../src/lib/db/spbState.ts";
 import { decomposeRequestIntoLedger } from "./contextPartition.ts";
+
+export const APEX_LEDGER_PROMPT_VERSION = "v1";
+export const APEX_LEDGER_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // ============================================================================
 // Types and Schemas
@@ -320,6 +327,7 @@ export async function expandLedgerWithApex(
   options?: {
     maxItems?: number;
     promptAnchorHash?: string;
+    tier?: string;
     onTelemetry?: (record: ApexTelemetryRecord) => void;
   }
 ): Promise<{
@@ -330,6 +338,7 @@ export async function expandLedgerWithApex(
 }> {
   const startTime = Date.now();
   const maxItems = options?.maxItems ?? 8;
+  const modelTier = options?.tier || "tier_1_apex";
   const anchorHash =
     options?.promptAnchorHash ||
     crypto.createHash("sha256").update(prompt).digest("hex").slice(0, 16);
@@ -343,11 +352,12 @@ export async function expandLedgerWithApex(
     .digest("hex")
     .slice(0, 12);
 
-  const cacheKey = `spb_apex_ledger_${anchorHash}_${contextDigest}`;
+  const cacheKey = `spb_apex_ledger_${APEX_LEDGER_PROMPT_VERSION}_${modelTier}_${anchorHash}_${contextDigest}`;
 
   try {
     const cached = getLearnedOptimization(cacheKey);
-    if (cached?.enhancementTemplate) {
+    const isFresh = cached?.createdAt && Date.now() - cached.createdAt < APEX_LEDGER_CACHE_TTL_MS;
+    if (cached?.enhancementTemplate && isFresh) {
       const parsed = JSON.parse(cached.enhancementTemplate);
       const validated = ApexLedgerExpansionSchema.safeParse(parsed);
       if (validated.success) {
@@ -358,6 +368,7 @@ export async function expandLedgerWithApex(
           ledgerItemCount: validated.data.intents.length,
           timestamp: Date.now(),
         });
+        // Expansion result ONLY is restored. Live statuses are always initialized fresh to 'open'.
         return {
           isActionable: validated.data.isActionable,
           intents: validated.data.intents.map((it) => ({
@@ -633,10 +644,14 @@ export async function judgeCompletion(
   finalText: string,
   dispatchFn: ModelDispatchFn,
   options?: {
+    timeoutMs?: number;
+    sessionId?: string;
+    profile?: string;
     onTelemetry?: (record: ApexTelemetryRecord) => void;
   }
 ): Promise<JudgeCompletionResult> {
   const startTime = Date.now();
+  const timeoutMs = options?.timeoutMs ?? 8000;
 
   // If remote proxy where git diff delta is physically invisible, fail gracefully to done_unverified
   if (!evidence.diffVisible) {
@@ -706,13 +721,26 @@ export async function judgeCompletion(
     `ASSISTANT FINAL TEXT:\n${finalText.slice(0, 3000)}`;
 
   try {
-    const raw = await dispatchFn({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0,
-      response_format: { type: "json_object" },
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutTimer = setTimeout(
+        () => reject(new Error(`Judge evaluation timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+    });
+
+    const raw = await Promise.race([
+      dispatchFn({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+      timeoutPromise,
+    ]).finally(() => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
     });
 
     const parsed = cleanAndParseJson(raw, JudgeCompletionSchema);
@@ -728,11 +756,28 @@ export async function judgeCompletion(
 
     return parsed;
   } catch (err) {
-    // Failure policy (Requirement C): never block the user on judge failure
+    // Failure policy (Requirement C): log to telemetry and never block the user
     console.warn(
       "[SPB ApexLedger] Judge completion failed or timed out, failing open to done_unverified:",
       err
     );
+
+    try {
+      recordSpbTelemetry({
+        sessionId: options?.sessionId || "spb_judge_session",
+        taskPhase: "TESTING_AND_VERIFICATION",
+        modelTier: "tier_1_apex",
+        checkpointRestored: false,
+        fallbackTriggered: true,
+        statusCode: 200,
+        latencyMs: Date.now() - startTime,
+        timestamp: Date.now(),
+        spbProfile: options?.profile || "default",
+      });
+    } catch {
+      // Non-blocking telemetry
+    }
+
     options?.onTelemetry?.({
       operation: "judge",
       latencyMs: Date.now() - startTime,
