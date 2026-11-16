@@ -10,11 +10,19 @@
  * 5. Integrates with SQLite persistence and adaptive self-learning to record satisfaction scores and learned heuristics.
  */
 
-import { TaskPhase } from "./intentAnalyzer.ts";
+import { TaskPhase, type IntentLedgerItem, type GuidanceContract } from "./intentAnalyzer.ts";
 import { ModelTier } from "./tieredRegistry.ts";
-import { recordIntentEvaluation, saveLearnedOptimization } from "../../../src/lib/db/spbState.ts";
+import {
+  recordIntentEvaluation,
+  saveLearnedOptimization,
+  getCheckpoint,
+  updateGuidanceContract,
+} from "../../../src/lib/db/spbState.ts";
 import { computePatternHash } from "./inboundIntelligence.ts";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import { getTierConfig } from "../tierResolver.ts";
 
 /**
@@ -30,7 +38,7 @@ export const SPB_REVIEWER_DISCREPANCY_MARKER =
  * Prefers the explicit cwd; falls back to detecting an OmniRoute worktree via
  * UPSTREAM_CWD env var; finally falls back to process.cwd().
  */
-function resolveDiffCwd(explicitCwd?: string): string {
+export function resolveDiffCwd(explicitCwd?: string): string {
   if (explicitCwd && explicitCwd.trim()) return explicitCwd.trim();
   const envCwd = process.env.UPSTREAM_CWD;
   if (envCwd && envCwd.trim()) return envCwd.trim();
@@ -58,6 +66,7 @@ export interface ExtractedResponseContent {
   rawChunks: Uint8Array[];
   jsonBody?: Record<string, unknown>;
   hasToolCalls: boolean;
+  observedToolCalls?: Array<{ name: string; args: string }>;
 }
 
 const PLACEHOLDER_PATTERNS = [
@@ -435,7 +444,7 @@ export function verifyCodeDiffAgainstConclusion(
       encoding: "utf8",
       timeout: diffTimeoutMs,
     });
-    const statusProc = spawnSync("git", ["status", "--porcelain"], {
+    const statusProc = spawnSync("git", ["status", "--porcelain=v1", "-uall"], {
       cwd,
       encoding: "utf8",
       timeout: diffTimeoutMs,
@@ -545,6 +554,7 @@ export async function extractResponseContent(
       const json = (await clone.json()) as Record<string, unknown>;
       let text = "";
       let hasToolCalls = false;
+      const observedToolCalls: Array<{ name: string; args: string }> = [];
       const choices = json?.choices as Array<Record<string, unknown>> | undefined;
       const firstChoiceMsg = choices?.[0]?.message as Record<string, unknown> | undefined;
       if (typeof firstChoiceMsg?.content === "string") {
@@ -570,6 +580,15 @@ export async function extractResponseContent(
           if (fn && (fn.arguments === "" || fn.arguments === undefined)) {
             fn.arguments = "{}";
           }
+          if (fn?.name) {
+            observedToolCalls.push({
+              name: String(fn.name),
+              args:
+                typeof fn.arguments === "string"
+                  ? fn.arguments
+                  : JSON.stringify(fn.arguments || {}),
+            });
+          }
         }
       }
       if (choices?.[0]?.finish_reason === "tool_calls") {
@@ -579,7 +598,10 @@ export async function extractResponseContent(
         for (const c of json.content as Array<Record<string, unknown>>) {
           if (c && typeof c === "object" && (c.type === "tool_use" || c.type === "tool_call")) {
             hasToolCalls = true;
-            break;
+            observedToolCalls.push({
+              name: typeof c.name === "string" ? c.name : "",
+              args: typeof c.input === "string" ? c.input : JSON.stringify(c.input || {}),
+            });
           }
         }
       }
@@ -594,20 +616,38 @@ export async function extractResponseContent(
           for (const p of parts) {
             if (p && typeof p === "object" && p.functionCall) {
               hasToolCalls = true;
-              break;
+              const fc = p.functionCall as Record<string, unknown>;
+              observedToolCalls.push({
+                name: typeof fc.name === "string" ? fc.name : "",
+                args: typeof fc.args === "string" ? fc.args : JSON.stringify(fc.args || {}),
+              });
             }
           }
         }
       }
 
-      return { text, isStream: false, rawChunks: [], jsonBody: json, hasToolCalls };
+      return {
+        text,
+        isStream: false,
+        rawChunks: [],
+        jsonBody: json,
+        hasToolCalls,
+        observedToolCalls,
+      };
     } catch {
-      return { text: "", isStream: false, rawChunks: [], hasToolCalls: false };
+      return {
+        text: "",
+        isStream: false,
+        rawChunks: [],
+        hasToolCalls: false,
+        observedToolCalls: [],
+      };
     }
   }
 
   // Streaming extraction: consume and buffer stream chunks
   const rawChunks: Uint8Array[] = [];
+  const observedToolCalls: Array<{ name: string; args: string }> = [];
   let accumulatedText = "";
   let hasToolCalls = false;
   const decoder = new TextDecoder();
@@ -649,6 +689,16 @@ export async function extractResponseContent(
                 parsed.choices?.[0]?.finish_reason === "tool_calls"
               ) {
                 hasToolCalls = true;
+                if (Array.isArray(parsed.choices?.[0]?.delta?.tool_calls)) {
+                  for (const tc of parsed.choices[0].delta.tool_calls) {
+                    if (tc.function?.name || tc.function?.arguments) {
+                      observedToolCalls.push({
+                        name: tc.function.name || "",
+                        args: tc.function.arguments || "",
+                      });
+                    }
+                  }
+                }
               }
               // Anthropic tool_use
               else if (
@@ -658,10 +708,21 @@ export async function extractResponseContent(
                 parsed.type === "tool_use"
               ) {
                 hasToolCalls = true;
+                if (parsed.content_block?.name) {
+                  observedToolCalls.push({
+                    name: parsed.content_block.name,
+                    args: JSON.stringify(parsed.content_block.input || {}),
+                  });
+                }
               }
               // Gemini functionCall
               else if (parsed.candidates?.[0]?.content?.parts?.[0]?.functionCall) {
                 hasToolCalls = true;
+                const fc = parsed.candidates[0].content.parts[0].functionCall;
+                observedToolCalls.push({
+                  name: fc.name || "",
+                  args: JSON.stringify(fc.args || {}),
+                });
               }
             } catch {
               // Non-JSON frame
@@ -696,6 +757,7 @@ export async function extractResponseContent(
     isStream: true,
     rawChunks,
     hasToolCalls,
+    observedToolCalls,
   };
 }
 
@@ -730,12 +792,16 @@ export function reconstructStreamResponse(
   rawChunks: Uint8Array[],
   originalResponse: Response,
   evalResult: ResponseEvaluationResult,
-  repromptCount: number
+  repromptCount: number,
+  ledgerSummary?: string
 ): Response {
   const headers = new Headers(originalResponse.headers);
   headers.set("X-OmniRoute-SPB-Satisfaction", evalResult.satisfactionScore.toFixed(2));
   headers.set("X-OmniRoute-SPB-Reprompt-Count", String(repromptCount));
   headers.set("X-OmniRoute-SPB-ZeroLoss", evalResult.isSatisfied ? "verified" : "partial");
+  if (ledgerSummary) {
+    headers.set("X-OmniRoute-SPB-Ledger-Summary", "included");
+  }
   if (evalResult.reviewerReport) {
     headers.set(
       "X-OmniRoute-Reviewer-Status",
@@ -751,8 +817,50 @@ export function reconstructStreamResponse(
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      let isAnthropic = false;
+      let hasDoneMarker = false;
+
       for (const chunk of rawChunks) {
+        const text = decoder.decode(chunk, { stream: true });
+        if (text.includes("event: content_block_delta") || text.includes("message_delta")) {
+          isAnthropic = true;
+        }
+        if (text.includes("data: [DONE]")) {
+          hasDoneMarker = true;
+          // Strip [DONE] from this chunk to enqueue summary before it
+          const stripped = text.replace(/data:\s*\[DONE\]\s*\n*/g, "");
+          if (stripped.trim()) {
+            controller.enqueue(encoder.encode(stripped));
+          }
+          continue;
+        }
         controller.enqueue(chunk);
+      }
+
+      if (ledgerSummary) {
+        if (isAnthropic) {
+          const escaped = ledgerSummary
+            .replace(/\\/g, "\\\\")
+            .replace(/\n/g, "\\n")
+            .replace(/"/g, '\\"');
+          const anthropicEvent =
+            `event: content_block_delta\n` +
+            `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\\n\\n${escaped}"}}\n\n`;
+          controller.enqueue(encoder.encode(anthropicEvent));
+        } else {
+          const escaped = ledgerSummary
+            .replace(/\\/g, "\\\\")
+            .replace(/\n/g, "\\n")
+            .replace(/"/g, '\\"');
+          const openAiEvent = `data: {"choices":[{"delta":{"content":"\\n\\n${escaped}"}}]}\n\n`;
+          controller.enqueue(encoder.encode(openAiEvent));
+        }
+      }
+
+      if (hasDoneMarker) {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       }
       // Header-only reviewer signaling — do NOT append the discrepancy notice into assistant
       // stream content, otherwise the agent's next turn reads its own warning as assistant output
@@ -766,6 +874,554 @@ export function reconstructStreamResponse(
     statusText: originalResponse.statusText,
     headers,
   });
+}
+
+/**
+ * Observes mutating and execution tool calls across turns, updating the Intent Ledger
+ * in SQLite checkpoint and enforcing the Scope Fence.
+ */
+export function observeToolCallsOnLedger(
+  sessionId: string,
+  extracted: ExtractedResponseContent
+): { updatedCount: number; violations: string[] } {
+  try {
+    const checkpoint = getCheckpoint(sessionId);
+    const contract = checkpoint?.guidanceContract as GuidanceContract | undefined;
+    if (!contract || !Array.isArray(contract.intents) || contract.intents.length === 0) {
+      return { updatedCount: 0, violations: [] };
+    }
+
+    const observed = extracted.observedToolCalls || [];
+    let updatedCount = 0;
+    const violations: string[] = [];
+
+    // Parse gap declarations from intermediate turn text (e.g. "[I1: exists]" or "[I2: missing]")
+    if (extracted.text) {
+      for (const item of contract.intents) {
+        if (item.status === "done" || item.status === "blocked") continue;
+        const gapMatch = extracted.text.match(
+          new RegExp(`(?:\\[?${item.id}\\]?|${item.id})\\s*[:=-]\\s*(exists|partial|missing)`, "i")
+        );
+        if (gapMatch) {
+          const declaredGap = gapMatch[1].toLowerCase();
+          item.gap = declaredGap as "exists" | "partial" | "missing";
+          if (declaredGap === "exists") {
+            const lineText =
+              gapMatch[0] +
+              (extracted.text.slice(gapMatch.index! + gapMatch[0].length).split("\n")[0] || "");
+            const citedInLine = (
+              lineText.match(/(?:[\w\-\.\/]+\.(?:ts|tsx|js|jsx|json|sql|md|py|go|rs))/gi) || []
+            ).map((f) => f.replace(/^(\.\/|\/)/, ""));
+            const candidateFiles = Array.from(
+              new Set([...(item.targetFiles || []), ...citedInLine])
+            );
+
+            const readFiles = contract.observedReadFiles || [];
+            // Strictly require that the cited file was read in this session
+            const hasCitedRead =
+              candidateFiles.length > 0 &&
+              readFiles.some((rf) =>
+                candidateFiles.some((tf) => rf.endsWith(tf) || tf.endsWith(rf) || rf === tf)
+              );
+
+            if (hasCitedRead) {
+              item.status = "done_unverified";
+              item.evidence = `Verified existing via gap inspection of ${candidateFiles.join(", ")}`;
+              updatedCount++;
+            }
+          } else if (declaredGap === "missing") {
+            if (item.status !== "open") {
+              item.status = "open";
+              updatedCount++;
+            }
+          }
+        }
+      }
+    }
+
+    for (const tc of observed) {
+      const toolName = tc.name || "";
+      const argsStr = tc.args || "";
+
+      let touchedPath: string | undefined;
+      let isTestCommand = false;
+      let isShellMutation = false;
+      let shellMutationDesc: string | undefined;
+
+      // Extract file path safely from JSON or regex
+      let cmd: string | undefined;
+      try {
+        const parsedArgs = typeof argsStr === "string" ? JSON.parse(argsStr) : argsStr;
+        if (parsedArgs && typeof parsedArgs === "object") {
+          touchedPath =
+            parsedArgs.file_path ||
+            parsedArgs.filePath ||
+            parsedArgs.path ||
+            parsedArgs.filename ||
+            parsedArgs.target;
+          cmd = parsedArgs.command || parsedArgs.cmd || parsedArgs.CommandLine;
+        }
+      } catch {
+        const pathMatch = argsStr.match(
+          /"(?:path|file_path|filePath|filename|file|target)"\s*:\s*"([^"]+)"/i
+        );
+        if (pathMatch) {
+          touchedPath = pathMatch[1].trim();
+        }
+        const cmdMatch = argsStr.match(/"(?:command|cmd|CommandLine)"\s*:\s*"([^"]+)"/i);
+        if (cmdMatch) {
+          cmd = cmdMatch[1].trim();
+        }
+      }
+
+      // Check command
+      if (cmd) {
+        const trimmedCmd = cmd.trim();
+        const isStrictTestRunner =
+          /\b(?:npm\s+test|npm\s+run\s+test|npx\s+(?:jest|vitest|mocha)|pytest|cargo\s+test|go\s+test)\b/i.test(
+            trimmedCmd
+          );
+        if (isStrictTestRunner) {
+          isTestCommand = true;
+        }
+
+        // Check for shell mutation commands (redirection, sed -i, tee, cat >, touch, cp)
+        // Redirection must NOT be preceded by &, =, <, or - (e.g. 2>&1, =>, <=, ->)
+        const redirMatch = trimmedCmd.match(
+          /(?:^|[^&=<-])(?:\s+)(?:>>|>)\s*([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/
+        );
+        const sedMatch = trimmedCmd.match(
+          /\bsed\s+(?:-[a-zA-Z0-9_]+\s+)*-i(?:\s*['"]\s*['"]|\s+['"][^'"]*['"]|\b)\s*.*?([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/
+        );
+        const teeMatch = trimmedCmd.match(/\btee\s+(?:-a\s+)?([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/);
+        const catMatch = trimmedCmd.match(
+          /\bcat\s+(?:<<\s*['"]?[A-Z0-9_]+['"]?\s*)?>\s*([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/
+        );
+        const touchMatch = trimmedCmd.match(/\btouch\s+([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/);
+        const cpMatch = trimmedCmd.match(
+          /\bcp\s+(?:-[a-zA-Z]+\s+)*[^\s]+\s+([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/
+        );
+
+        const candidateCmdFile =
+          redirMatch?.[1] ||
+          sedMatch?.[1] ||
+          teeMatch?.[1] ||
+          catMatch?.[1] ||
+          touchMatch?.[1] ||
+          cpMatch?.[1];
+
+        if (candidateCmdFile) {
+          const lower = candidateCmdFile.toLowerCase();
+          const cwd = resolveDiffCwd();
+          const resolved = path.isAbsolute(candidateCmdFile)
+            ? candidateCmdFile
+            : path.resolve(cwd, candidateCmdFile);
+          const isDevOrTmp =
+            lower.startsWith("/dev/") ||
+            lower.includes("/dev/null") ||
+            lower.startsWith("/tmp/") ||
+            /(?:^|\/)tmp(?:$|\/)/i.test(candidateCmdFile);
+          const isInsideWorkspace = resolved.startsWith(cwd);
+          const hasProjectExt =
+            /\.(?:ts|tsx|js|jsx|json|sql|prisma|html|css|py|go|rs|md|ya?ml|env)$/i.test(
+              candidateCmdFile
+            );
+
+          if (!isDevOrTmp && isInsideWorkspace && hasProjectExt) {
+            isShellMutation = true;
+            touchedPath = candidateCmdFile;
+            shellMutationDesc = `shell command '${trimmedCmd.slice(0, 40)}'`;
+          }
+        } else if (
+          /\b(?:prisma\s+migrate|drizzle-kit|typeorm\s+migration|knex\s+migrate)\b/i.test(
+            trimmedCmd
+          )
+        ) {
+          isShellMutation = true;
+          shellMutationDesc = `database migration tool`;
+        }
+      }
+
+      const isReadTool =
+        /^(?:Read|read_file|Grep|grep|Glob|glob|cat|view_file|list_directory|ls)$/i.test(toolName);
+      const isMutatingTool =
+        (/^(?:Edit|Write|create_file|edit_file|write_file|apply_diff|str_replace_editor|patch_file)$/i.test(
+          toolName
+        ) &&
+          !isReadTool) ||
+        isShellMutation;
+
+      if (touchedPath) {
+        if (isReadTool) {
+          contract.observedReadFiles = Array.from(
+            new Set([...(contract.observedReadFiles || []), touchedPath])
+          );
+        } else if (isMutatingTool) {
+          let matched = false;
+          // 1. Try targetFiles exact match first
+          for (const item of contract.intents) {
+            const files = item.targetFiles || [];
+            if (files.some((f) => touchedPath!.endsWith(f) || f.endsWith(touchedPath!))) {
+              matched = true;
+              if (item.status === "open") {
+                item.status = "in_progress";
+                item.evidence = `Touched ${touchedPath} via ${shellMutationDesc || toolName}`;
+                updatedCount++;
+              }
+              break;
+            }
+          }
+
+          // 2. If no targetFiles match, match the first open item in that layer
+          if (!matched) {
+            for (const item of contract.intents) {
+              const matchesLayer =
+                (item.layer === "api" && /(?:api|route|server|controller)/i.test(touchedPath!)) ||
+                (item.layer === "ui" && /(?:components?|pages?|views?|ui)/i.test(touchedPath!)) ||
+                (item.layer === "data" &&
+                  /(?:db|migrations?|schema|models?|sql)/i.test(touchedPath!)) ||
+                (item.layer === "test" && /(?:tests?|specs?|__tests?__)/i.test(touchedPath!));
+
+              if (matchesLayer && item.status === "open") {
+                matched = true;
+                item.status = "in_progress";
+                item.evidence = `Touched ${touchedPath} via ${shellMutationDesc || toolName}`;
+                updatedCount++;
+                break; // Attribute to single best item only!
+              }
+            }
+          }
+
+          // Scope fence check (exempt .github/ while excluding .git/ internal)
+          const isGitInternal = /(?:^|\/)\.git(?:\/|$)/.test(touchedPath);
+          if (
+            !matched &&
+            !touchedPath.includes("tmp") &&
+            !isGitInternal &&
+            !touchedPath.includes("node_modules")
+          ) {
+            violations.push(touchedPath);
+          }
+        }
+      }
+
+      if (!touchedPath && isShellMutation && shellMutationDesc?.includes("migration")) {
+        for (const item of contract.intents) {
+          if (item.layer === "data" && item.status === "open") {
+            item.status = "in_progress";
+            item.evidence = "Executed database migration tool";
+            updatedCount++;
+            break;
+          }
+        }
+      }
+
+      if (isTestCommand) {
+        for (const item of contract.intents) {
+          if (item.layer === "test" && item.status === "open") {
+            item.status = "in_progress";
+            item.evidence = "Executed test command";
+            updatedCount++;
+            break; // Attribute to first open test item only!
+          }
+        }
+      }
+    }
+
+    if (violations.length > 0) {
+      contract.outOfScopeViolations = Array.from(
+        new Set([...(contract.outOfScopeViolations || []), ...violations])
+      );
+    }
+
+    if (updatedCount > 0 || violations.length > 0) {
+      updateGuidanceContract(sessionId, contract);
+    }
+
+    return { updatedCount, violations };
+  } catch (err) {
+    console.warn("[SPB Outbound] Error observing tool calls on ledger:", err);
+    return { updatedCount: 0, violations: [] };
+  }
+}
+
+export interface LedgerEvaluationResult {
+  isSatisfied: boolean;
+  openItems: IntentLedgerItem[];
+  doneItems: IntentLedgerItem[];
+  suggestedReprompt?: string;
+  isBlocked?: boolean;
+}
+
+export function buildLedgerSummaryReport(intents: IntentLedgerItem[]): string {
+  const lines = ["[SPB Intent Ledger Summary]"];
+  for (const item of intents) {
+    const statusDesc =
+      item.status === "done"
+        ? "Completed"
+        : item.status === "done_unverified"
+          ? "Completed (unverified / remote client)"
+          : item.status === "blocked"
+            ? `Blocked / Incomplete: ${item.evidence || "No progress"}`
+            : `Incomplete (${item.status})`;
+    lines.push(
+      `- [${item.id}] (${item.layer.toUpperCase()}) [${item.kind}]: ${item.text} -> ${statusDesc}`
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Evaluates completion of each Intent Ledger item against code diffs and execution evidence.
+ * Blocks final turn completion until all required items are fulfilled.
+ */
+export function evaluateLedgerCompletion(
+  sessionId: string,
+  conclusionText: string,
+  diffReview: CodeDiffReviewResult | null,
+  strictCompletion: boolean = true
+): LedgerEvaluationResult {
+  const checkpoint = getCheckpoint(sessionId);
+  const contract = checkpoint?.guidanceContract as GuidanceContract | undefined;
+  if (!contract || !Array.isArray(contract.intents) || contract.intents.length === 0) {
+    return { isSatisfied: true, openItems: [], doneItems: [] };
+  }
+
+  // Filter out pre-existing dirty files recorded at session start, unless content hash changed
+  const baselineFiles = contract.baselineModifiedFiles || [];
+  const baselineHashes = contract.baselineFileHashes || {};
+  const baselineStats = contract.baselineFileStats || {};
+  const cwd = resolveDiffCwd();
+
+  const newlyModifiedFiles: string[] = [];
+  for (const f of diffReview?.actualModifiedFiles || []) {
+    if (!baselineFiles.includes(f)) {
+      newlyModifiedFiles.push(f);
+    } else {
+      const baseHash = baselineHashes[f];
+      const baseStat = baselineStats[f];
+      if (baseHash) {
+        try {
+          const abs = path.isAbsolute(f) ? f : path.resolve(cwd, f);
+          if (fs.existsSync(abs)) {
+            const st = fs.statSync(abs);
+            if (st.isFile()) {
+              // Fast path: if size and mtime are unchanged, file wasn't written to!
+              if (baseStat && st.size === baseStat.size && st.mtimeMs <= baseStat.mtime) {
+                continue;
+              }
+              let currentHash = "";
+              if (st.size <= 2 * 1024 * 1024) {
+                currentHash = crypto
+                  .createHash("sha256")
+                  .update(fs.readFileSync(abs))
+                  .digest("hex");
+              } else {
+                const fd = fs.openSync(abs, "r");
+                const buf = Buffer.alloc(64 * 1024);
+                const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+                fs.closeSync(fd);
+                currentHash = crypto
+                  .createHash("sha256")
+                  .update(`${st.size}:${st.mtimeMs}:`)
+                  .update(buf.subarray(0, bytesRead))
+                  .digest("hex");
+              }
+              if (currentHash !== baseHash) {
+                // File was dirty at session start, but modified further during this session!
+                newlyModifiedFiles.push(f);
+              }
+            }
+          }
+        } catch {
+          // Non-blocking fallback
+        }
+      }
+    }
+  }
+
+  const consumedFiles = new Set<string>();
+
+  for (const item of contract.intents) {
+    if (item.status === "done" || item.status === "blocked") continue;
+
+    // 0. Parse gap declarations from the agent (e.g. "[I1: exists]" or "I1: exists")
+    const gapMatch = conclusionText.match(
+      new RegExp(`(?:\\[?${item.id}\\]?|${item.id})\\s*[:=-]\\s*(exists|partial|missing)`, "i")
+    );
+    if (gapMatch) {
+      const declaredGap = gapMatch[1].toLowerCase();
+      item.gap = declaredGap as "exists" | "partial" | "missing";
+      if (declaredGap === "exists") {
+        const lineText =
+          gapMatch[0] +
+          (conclusionText.slice(gapMatch.index! + gapMatch[0].length).split("\n")[0] || "");
+        const citedInLine = (
+          lineText.match(/(?:[\w\-\.\/]+\.(?:ts|tsx|js|jsx|json|sql|md|py|go|rs))/gi) || []
+        ).map((f) => f.replace(/^(\.\/|\/)/, ""));
+        const candidateFiles = Array.from(new Set([...(item.targetFiles || []), ...citedInLine]));
+
+        const readFiles = contract.observedReadFiles || [];
+        // Strictly require that the cited file was read in this session
+        const hasCitedRead =
+          candidateFiles.length > 0 &&
+          readFiles.some((rf) =>
+            candidateFiles.some((tf) => rf.endsWith(tf) || tf.endsWith(rf) || rf === tf)
+          );
+
+        if (hasCitedRead) {
+          item.status = "done_unverified";
+          item.evidence = `Verified existing via gap inspection of ${candidateFiles.join(", ")}`;
+          continue;
+        }
+      }
+      if (declaredGap === "missing") {
+        item.status = "open";
+        continue;
+      }
+    }
+
+    // 1. Evidence via physical git diff of NEWLY modified files
+    if (newlyModifiedFiles.length > 0) {
+      const unconsumed = newlyModifiedFiles.filter((f) => !consumedFiles.has(f));
+      // Try targetFiles first
+      const targetMatch = unconsumed.find((mf) =>
+        (item.targetFiles || []).some((tf) => mf.endsWith(tf) || tf.endsWith(mf))
+      );
+      if (targetMatch) {
+        if (item.layer === "test") {
+          const requiresExecution =
+            Boolean(contract.requireTestPassBeforeDone) ||
+            item.acceptance?.toLowerCase().includes("pass") ||
+            item.acceptance?.toLowerCase().includes("execute");
+          const hasExecutedTest =
+            Boolean(contract.testExecutionPassed) ||
+            Boolean(item.evidence?.includes("Executed test command"));
+
+          if (requiresExecution && !hasExecutedTest) {
+            item.status = "in_progress";
+            item.evidence = `Modified test file in git diff: ${targetMatch}. Pending test execution.`;
+            consumedFiles.add(targetMatch);
+            continue;
+          }
+        }
+        item.status = "done";
+        item.evidence = `Verified newly modified file in git diff: ${targetMatch}`;
+        consumedFiles.add(targetMatch);
+        continue;
+      }
+
+      // Try layer match, attributing to this single item only
+      const layerMatch = unconsumed.find((f) => {
+        if (item.layer === "api") return /(?:api|route|server|controller)/i.test(f);
+        if (item.layer === "ui") return /(?:components?|pages?|views?|ui)/i.test(f);
+        if (item.layer === "data") return /(?:db|migrations?|schema|models?|sql)/i.test(f);
+        if (item.layer === "test") return /(?:tests?|specs?|__tests?__)/i.test(f);
+        return false;
+      });
+
+      if (layerMatch) {
+        if (item.layer === "test") {
+          const requiresExecution =
+            Boolean(contract.requireTestPassBeforeDone) ||
+            item.acceptance?.toLowerCase().includes("pass") ||
+            item.acceptance?.toLowerCase().includes("execute");
+          const hasExecutedTest =
+            Boolean(contract.testExecutionPassed) ||
+            Boolean(item.evidence?.includes("Executed test command"));
+
+          if (requiresExecution && !hasExecutedTest) {
+            item.status = "in_progress";
+            item.evidence = `Modified test file in git diff: ${layerMatch}. Pending test execution.`;
+            consumedFiles.add(layerMatch);
+            continue;
+          }
+        }
+        item.status = "done";
+        item.evidence = `Verified newly modified layer file in git diff: ${layerMatch}`;
+        consumedFiles.add(layerMatch);
+        continue;
+      }
+    }
+
+    // 2. Remote proxy environment fallback: if git diff is unavailable or 0 newly modified files,
+    // but a mutating tool execution was explicitly observed on this item, promote in_progress to done_unverified
+    if (
+      newlyModifiedFiles.length === 0 &&
+      item.status === "in_progress" &&
+      item.evidence?.startsWith("Touched")
+    ) {
+      item.status = "done_unverified";
+      item.evidence += " (verified via mutating tool execution; remote proxy mode)";
+      continue;
+    }
+
+    // Notice: bare conclusion-text claims are explicitly NOT accepted as evidence of completion.
+  }
+
+  const openRequired = contract.intents.filter(
+    (it) =>
+      (it.kind === "explicit" || it.kind === "required-implied") &&
+      it.status !== "done" &&
+      it.status !== "done_unverified" &&
+      it.status !== "blocked"
+  );
+  const doneItems = contract.intents.filter(
+    (it) => it.status === "done" || it.status === "done_unverified"
+  );
+
+  let isBlocked = false;
+  let suggestedReprompt: string | undefined;
+
+  if (openRequired.length > 0 && strictCompletion) {
+    const currentStateDigest = openRequired.map((i) => `${i.id}:${i.status}`).join("|");
+    const priorDigest = contract.lastStateDigest;
+    let consecutiveNoChange = contract.consecutiveNoChangeReprompts || 0;
+
+    if (priorDigest === currentStateDigest) {
+      consecutiveNoChange++;
+    } else {
+      consecutiveNoChange = 0;
+    }
+
+    contract.lastStateDigest = currentStateDigest;
+    contract.consecutiveNoChangeReprompts = consecutiveNoChange;
+
+    if (consecutiveNoChange >= 2) {
+      isBlocked = true;
+      for (const item of openRequired) {
+        item.status = "blocked";
+        item.evidence = "No progress detected across consecutive re-prompts";
+      }
+    } else {
+      suggestedReprompt =
+        `[SPB Completion Gate: Unfulfilled Objectives]\n` +
+        `The task cannot be marked complete because the following required checklist items remain unfinished:\n` +
+        openRequired
+          .map(
+            (it) =>
+              `- [${it.id}] (${it.layer.toUpperCase()}) [${it.kind}]: ${it.text}\n  Acceptance criteria: ${it.acceptance}`
+          )
+          .join("\n") +
+        `\nPlease execute the necessary operations using your tools (Edit/Write/Bash) to complete and verify these items before concluding.`;
+    }
+  }
+
+  try {
+    updateGuidanceContract(sessionId, contract);
+  } catch (err) {
+    console.warn("[SPB Outbound] Checkpoint save error during ledger eval:", err);
+  }
+
+  const isSatisfied = openRequired.length === 0 || !strictCompletion || isBlocked;
+
+  return {
+    isSatisfied,
+    openItems: openRequired,
+    doneItems,
+    suggestedReprompt,
+    isBlocked,
+  };
 }
 
 /**
@@ -783,8 +1439,9 @@ export async function processSpbOutboundZeroLoss(args: {
   sessionId: string;
   maxReprompts?: number;
   workspaceRoot?: string | null;
+  spbProfile?: string;
 }): Promise<Response> {
-  const maxReprompts = args.maxReprompts ?? 2;
+  const configuredMaxReprompts = args.maxReprompts ?? 2;
   let currentResponse = args.initialResponse;
   let repromptCount = 0;
 
@@ -797,9 +1454,22 @@ export async function processSpbOutboundZeroLoss(args: {
   let lastExtracted: ExtractedResponseContent | undefined;
   let lastEvalResult: ResponseEvaluationResult | undefined;
 
-  while (repromptCount <= maxReprompts) {
+  // Scale max reprompts with open items count while capping at profile maxReprompts
+  const initialCheckpoint = getCheckpoint(args.sessionId);
+  const initialContract = initialCheckpoint?.guidanceContract as GuidanceContract | undefined;
+  const initialOpenCount =
+    initialContract?.intents?.filter((i) => i.status === "open" || i.status === "in_progress")
+      .length || 0;
+  const effectiveMaxReprompts = Math.min(configuredMaxReprompts, Math.max(1, initialOpenCount + 1));
+
+  while (repromptCount <= effectiveMaxReprompts) {
     const extracted = await extractResponseContent(currentResponse);
     lastExtracted = extracted;
+
+    // Observe tool calls on active ledger
+    if (extracted.hasToolCalls) {
+      observeToolCallsOnLedger(args.sessionId, extracted);
+    }
 
     // If the model produced tool calls, mark satisfied immediately; otherwise evaluate whether it stalled
     const evalResult = evaluateResponseIntent(
@@ -823,15 +1493,13 @@ export async function processSpbOutboundZeroLoss(args: {
       args.taskPhase === "FAST_REFACTOR";
 
     let reviewerDiscrepancyDetected = false;
+    let diffReview: CodeDiffReviewResult | null = null;
 
     const isNonModificationPhase =
       args.taskPhase === "ARCHITECTURAL_PLANNING" ||
       args.taskPhase === "INSPECTION_SYNTHESIS" ||
       args.taskPhase === "DETERMINISTIC_ROUTING";
 
-    // Only run reviewer verification when the task phase expects code modification AND the
-    // conclusion explicitly claims completed edits. Planning, analysis, audit, and inspection
-    // phases must never trigger a discrepancy loop merely because no code diff exists yet.
     const claimsEditsInText =
       /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed)|(?:resolved|fixed|implemented|updated|verified)\s*&\s*verified|tests?\s*(?:passed|verified)|deployed?\s*(?:successfully|cleanly))\b/i.test(
         extracted.text.trim()
@@ -844,10 +1512,7 @@ export async function processSpbOutboundZeroLoss(args: {
       extracted.text.trim() &&
       claimsEditsInText
     ) {
-      const diffReview = verifyCodeDiffAgainstConclusion(
-        extracted.text,
-        args.workspaceRoot ?? undefined
-      );
+      diffReview = verifyCodeDiffAgainstConclusion(extracted.text, args.workspaceRoot ?? undefined);
       if (!diffReview.passed && diffReview.report) {
         reviewerDiscrepancyDetected = true;
         evalResult.isSatisfied = false;
@@ -864,12 +1529,51 @@ export async function processSpbOutboundZeroLoss(args: {
       }
     }
 
+    // Ledger completion evaluation scoped to active SPB profile
+    const tierCfg = getTierConfig(args.spbProfile);
+    const activeContract = getCheckpoint(args.sessionId)?.guidanceContract as
+      GuidanceContract | undefined;
+    const isStrict = Boolean(
+      activeContract?.strictCompletion ?? tierCfg?.spbConfig?.strictCompletion ?? false
+    );
+
+    let ledgerEval: LedgerEvaluationResult | undefined;
+    if (!extracted.hasToolCalls && isStrict && activeContract?.intents?.length) {
+      ledgerEval = evaluateLedgerCompletion(args.sessionId, extracted.text, diffReview, isStrict);
+      if (!ledgerEval.isSatisfied && ledgerEval.suggestedReprompt) {
+        evalResult.isSatisfied = false;
+        evalResult.suggestedReprompt = ledgerEval.suggestedReprompt;
+        evalResult.satisfactionScore = Math.max(
+          0.2,
+          ledgerEval.doneItems.length /
+            Math.max(1, ledgerEval.doneItems.length + ledgerEval.openItems.length)
+        );
+      }
+    }
+
     console.log(
       `[SPB Outbound ZeroLoss] Session ${args.sessionId} | Phase: ${args.taskPhase} | Tier: ${args.tier} | Satisfaction: ${evalResult.satisfactionScore.toFixed(2)} | Satisfied: ${evalResult.isSatisfied} | Omissions: ${evalResult.omissions.length} | ReviewerDiscrepancy: ${reviewerDiscrepancyDetected} | RepromptCount: ${repromptCount}`
     );
 
     // If response satisfies 100% of intention criteria, max iterations reached, or tool call generated
-    if (evalResult.isSatisfied || repromptCount >= maxReprompts || extracted.hasToolCalls) {
+    if (
+      evalResult.isSatisfied ||
+      repromptCount >= effectiveMaxReprompts ||
+      extracted.hasToolCalls
+    ) {
+      // Build completion summary report if concluding turn and exhausted or blocked
+      let ledgerSummary: string | undefined;
+      const isExhaustedOrBlocked =
+        !extracted.hasToolCalls &&
+        (repromptCount >= effectiveMaxReprompts || Boolean(ledgerEval?.isBlocked));
+      if (isExhaustedOrBlocked) {
+        const finalContract = getCheckpoint(args.sessionId)?.guidanceContract as
+          GuidanceContract | undefined;
+        if (finalContract?.intents?.length) {
+          ledgerSummary = buildLedgerSummaryReport(finalContract.intents);
+        }
+      }
+
       try {
         recordIntentEvaluation({
           sessionId: args.sessionId,
@@ -891,17 +1595,29 @@ export async function processSpbOutboundZeroLoss(args: {
           extracted.rawChunks,
           currentResponse,
           evalResult,
-          repromptCount
+          repromptCount,
+          ledgerSummary
         );
       } else {
         const headers = new Headers(currentResponse.headers);
         headers.set("X-OmniRoute-SPB-Satisfaction", evalResult.satisfactionScore.toFixed(2));
         headers.set("X-OmniRoute-SPB-Reprompt-Count", String(repromptCount));
         headers.set("X-OmniRoute-SPB-ZeroLoss", evalResult.isSatisfied ? "verified" : "partial");
+        if (ledgerSummary) {
+          headers.set("X-OmniRoute-SPB-Ledger-Summary", "included");
+        }
         headers.set(
           "X-OmniRoute-Reviewer-Status",
           evalResult.reviewerReport ? "reviewed-with-corrections" : "verified"
         );
+        if (ledgerSummary && extracted.jsonBody) {
+          const choices = (extracted.jsonBody as Record<string, unknown>).choices as
+            Array<Record<string, unknown>> | undefined;
+          const msg = choices?.[0]?.message as Record<string, unknown> | undefined;
+          if (msg && typeof msg.content === "string") {
+            msg.content += "\n\n" + ledgerSummary;
+          }
+        }
         return new Response(JSON.stringify(extracted.jsonBody || {}), {
           status: currentResponse.status,
           statusText: currentResponse.statusText,

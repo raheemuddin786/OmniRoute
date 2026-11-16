@@ -54,6 +54,21 @@ export const spbRuntimeConfigSchema = z
     retryStatusCodes: z
       .array(z.number().int())
       .default(DEFAULT_SPB_RUNTIME_CONFIG.retryStatusCodes),
+    strictCompletion: z.boolean().default(DEFAULT_SPB_RUNTIME_CONFIG.strictCompletion),
+    intentLedgerMode: z
+      .enum(["off", "heuristic", "apex_guided"])
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.intentLedgerMode),
+    maxLedgerItems: z
+      .number()
+      .int()
+      .min(1)
+      .max(30)
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.maxLedgerItems),
+    maxReprompts: z.number().int().min(0).max(10).default(DEFAULT_SPB_RUNTIME_CONFIG.maxReprompts),
+    requireGitDiffEvidence: z.boolean().default(DEFAULT_SPB_RUNTIME_CONFIG.requireGitDiffEvidence),
+    requireTestPassBeforeDone: z
+      .boolean()
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.requireTestPassBeforeDone),
     tokenBounds: z
       .object({
         apex: z

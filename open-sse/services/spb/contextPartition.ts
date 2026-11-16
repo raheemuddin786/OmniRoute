@@ -8,6 +8,8 @@ import crypto from "node:crypto";
 import { classifyPromptIntent, type IntentType } from "../intentClassifier.ts";
 import type { TaskType, FitnessTier } from "../../../src/domain/pipeline.ts";
 import type { FusionTuning } from "../fusion.ts";
+import type { IntentLedgerItem, IntentLayer, GuidanceContract } from "./intentAnalyzer.ts";
+import { getLearnedOptimization, saveLearnedOptimization } from "../../../src/lib/db/spbState.ts";
 
 export interface FusionConfig {
   panelModels?: string[];
@@ -472,4 +474,408 @@ function resolveModelForTier(
  */
 async function computeHash(content: string): Promise<string> {
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/**
+ * Extracts explicit and implied intent checklist items into a structured ledger.
+ * Gates multi-turn execution against dropped requirements and prevents arbitrary actions.
+ */
+export function decomposeRequestIntoLedger(
+  prompt: string,
+  maxItems: number = 8
+): IntentLedgerItem[] {
+  if (!prompt || typeof prompt !== "string") return [];
+  const text = prompt.trim();
+  if (text.length < 5) return [];
+
+  // Skip ledger creation for purely informational questions, explanations, or advisory inquiries
+  // Questions starting with "how do i", "how can i", "how to", "why does", "what is" are advisory inquiries
+  // unless they explicitly instruct direct execution (e.g. "and then fix", "please implement", "go ahead and create")
+  const isAdvisoryInquiry =
+    /^(?:how\s+(?:do|can|would|should)\s+i|how\s+to|why\s+(?:is|does|did|would)|what\s+(?:is|are|does)|can\s+you\s+explain|tell\s+me\s+about|explain\s+how)\b/i.test(
+      text
+    ) &&
+    !/\b(?:and\s+(?:then\s+)?(?:fix|build|implement|create|update|apply)|please\s+(?:fix|implement|build|create|update)|go\s+ahead\s+and|apply\s+(?:the\s+)?fix)\b/i.test(
+      text
+    );
+  if (isAdvisoryInquiry) return [];
+
+  const items: IntentLedgerItem[] = [];
+
+  // 1. Extract explicit candidate segments:
+  // Check for numbered items (e.g. "1. fix API route", "2) add DB migration")
+  const numberedMatches = Array.from(
+    text.matchAll(/(?:^|\n|\s)(?:\d+[\.)]|[-*•])\s+([^\n]+)/g)
+  ).map((m) => m[1].trim());
+
+  let explicitSegments: string[] = [];
+  if (numberedMatches.length >= 2) {
+    explicitSegments = numberedMatches;
+  } else {
+    // Split by comma, "and", "then", or semicolon if clauses contain action verbs
+    const actionVerbRegex =
+      /\b(fix|add|create|implement|update|refactor|test|write|modify|migrate|build|setup|delete|remove)\b/i;
+    const rawClauses = text
+      .split(/(?:\r?\n|;|\band\s+then\b|\bthen\b|,\s*and\b|\band\b)/i)
+      .map((c) => c.trim())
+      .filter((c) => c.length > 3 && actionVerbRegex.test(c));
+
+    if (rawClauses.length >= 2) {
+      explicitSegments = rawClauses;
+    } else {
+      // Single composite or standalone request
+      explicitSegments = [text];
+    }
+  }
+
+  // Deduplicate and cap explicit segments
+  explicitSegments = Array.from(new Set(explicitSegments)).slice(0, maxItems);
+
+  // Helper to detect layer from text
+  const detectLayer = (str: string): IntentLayer => {
+    const s = str.toLowerCase();
+    if (/\b(test|spec|assert|coverage|verify|unit\s*test|integration\s*test)\b/i.test(s))
+      return "test";
+    if (/\b(migration|schema|table|db|database|sqlite|postgres|sql|prisma|model)\b/i.test(s))
+      return "data";
+    if (/\b(form|page|view|screen|button|css|frontend|modal|component|ui|input|dialog)\b/i.test(s))
+      return "ui";
+    if (/\b(route|endpoint|handler|controller|api|server|rest|webhook|middleware)\b/i.test(s))
+      return "api";
+    if (/\b(env|config|docker|package\.json|tsconfig|setting)\b/i.test(s)) return "config";
+    if (/\b(doc|docs|readme|documentation|comment)\b/i.test(s)) return "docs";
+    return "api";
+  };
+
+  // Helper to extract file references
+  const extractFiles = (str: string): string[] => {
+    const matches = str.match(
+      /(?:src\/|[a-zA-Z0-9_\-\.\/]+\/)?([a-zA-Z0-9_\-]+\.(?:ts|tsx|js|jsx|json|sql|md|css|html|yml|yaml|env))/gi
+    );
+    return matches ? Array.from(new Set(matches)) : [];
+  };
+
+  // Helper to generate acceptance criteria
+  const getAcceptance = (layer: IntentLayer, _desc?: string): string => {
+    switch (layer) {
+      case "test":
+        return "Targeted test suite executes and passes with zero failures";
+      case "data":
+        return "Database migration/schema is idempotent, syntactically valid, and preserved";
+      case "ui":
+        return "UI component renders correctly with zero runtime console/hydration errors";
+      case "api":
+        return "Endpoint/service handles payload and validates response correctly";
+      case "config":
+        return "Configuration file is valid and loads successfully";
+      case "docs":
+        return "Documentation accurately reflects implementation details";
+    }
+  };
+
+  // 2. Build explicit ledger items
+  for (let i = 0; i < explicitSegments.length; i++) {
+    if (items.length >= maxItems) break;
+    const seg = explicitSegments[i];
+    const layer = detectLayer(seg);
+    const files = extractFiles(seg);
+    const id = `I${items.length + 1}`;
+
+    items.push({
+      id,
+      text: seg.replace(/^[-*•\d\.\)]+\s*/, "").trim(),
+      kind: "explicit",
+      layer,
+      gap: "missing",
+      targetFiles: files.length > 0 ? files : undefined,
+      acceptance: getAcceptance(layer, seg),
+      status: "open",
+    });
+  }
+
+  // 3. Infer required-implied items (unspoken requirements)
+  // E.g. If user modifies UI form or adds API route, they need tests and validation.
+  const hasTestItem = items.some((it) => it.layer === "test");
+  const hasUiItem = items.find((it) => it.layer === "ui");
+  const hasApiItem = items.find((it) => it.layer === "api");
+  const hasDataItem = items.find((it) => it.layer === "data");
+
+  // If UI form added without API/backend mentioned, infer backend route/validation
+  if (hasUiItem && !hasApiItem && items.length < maxItems) {
+    items.push({
+      id: `I${items.length + 1}`,
+      parentId: hasUiItem.id,
+      text: `Backend route and validation for ${hasUiItem.text.slice(0, 50)}`,
+      kind: "required-implied",
+      layer: "api",
+      gap: "missing",
+      acceptance: "Backend validates inputs and persists submitted data without error",
+      status: "open",
+    });
+  }
+
+  // If Data/Migration added without API model alignment, infer model update
+  if (hasDataItem && !hasApiItem && items.length < maxItems) {
+    items.push({
+      id: `I${items.length + 1}`,
+      parentId: hasDataItem.id,
+      text: `Model and typing alignment for ${hasDataItem.text.slice(0, 50)}`,
+      kind: "required-implied",
+      layer: "api",
+      gap: "missing",
+      acceptance: "Domain models and types align with updated schema",
+      status: "open",
+    });
+  }
+
+  // If code modifications are requested (API, UI, Data) but no test item exists, infer automated test as optional
+  // (Prevents over-expansion and unnecessary actions when the user did not ask for new tests)
+  if (!hasTestItem && (hasApiItem || hasUiItem || hasDataItem) && items.length < maxItems) {
+    const parent = hasApiItem || hasUiItem || hasDataItem;
+    items.push({
+      id: `I${items.length + 1}`,
+      parentId: parent?.id,
+      text: `Unit/integration tests verifying ${parent ? parent.text.slice(0, 50) : "implementation"}`,
+      kind: "optional",
+      layer: "test",
+      gap: "missing",
+      acceptance: "Automated test suite executes and passes with zero regressions",
+      status: "open",
+    });
+  }
+
+  return items;
+}
+
+export type SessionLifecycleAction = "continuation" | "amendment" | "new_task";
+
+export interface LifecycleResolution {
+  action: SessionLifecycleAction;
+  contract: GuidanceContract;
+  directive?: string;
+}
+
+/**
+ * Evaluates follow-up user messages within an active session against the existing Intent Ledger.
+ * Disambiguates continuation (resuming in-flight work), amendment (modifying requirements),
+ * and new tasks (initiating fresh objectives with archival of prior state).
+ */
+export function resolveSessionLifecycle(
+  existingContract: GuidanceContract,
+  newUserPrompt: string,
+  maxItems: number = 8
+): LifecycleResolution {
+  const text = newUserPrompt.trim();
+  const existingIntents = existingContract.intents || [];
+  const allResolved =
+    existingIntents.length > 0 &&
+    existingIntents.every(
+      (it) => it.status === "done" || it.status === "done_unverified" || it.status === "skipped"
+    );
+
+  // 1. Continuation: resuming unfulfilled work
+  const isContinuation =
+    /^(?:continue|proceed|keep\s+going|resume|finish(?:\s+the\s+rest|\s+up)?|go\s+ahead|what(?:'s|\s+is)\s+left)\b/i.test(
+      text
+    ) ||
+    (/\b(?:continue|proceed|keep\s+going)\b/i.test(text) && text.length < 50);
+
+  if (isContinuation && !allResolved) {
+    for (const item of existingIntents) {
+      if (item.status === "blocked") {
+        item.status = "open";
+        item.evidence = "Re-opened by user continuation directive";
+      }
+    }
+    existingContract.consecutiveNoChangeReprompts = 0;
+    return {
+      action: "continuation",
+      contract: existingContract,
+      directive:
+        "[SPB Continuation Directive: The user instructed you to continue. " +
+        "Focus strictly on fulfilling the remaining open checklist items.]",
+    };
+  }
+
+  // 2. Amendment: modifying in-flight specifications
+  const isAmendment =
+    /\b(?:actually|instead(?:\s+of)?|don't\s+do|skip|cancel|nevermind|also\s+add|one\s+more\s+thing)\b/i.test(
+      text
+    );
+
+  if (isAmendment && !allResolved) {
+    const skipMatch = text.match(
+      /\b(?:skip|cancel|don't\s+(?:add|do|build|create))\s+([a-zA-Z0-9_\-]+(?:\s+[a-zA-Z0-9_\-]+){0,3}?)(?:\s+(?:and|also|instead)|,|\.|$)/i
+    );
+    if (skipMatch) {
+      const targetPhrase = skipMatch[1].toLowerCase().trim();
+      for (const item of existingIntents) {
+        if (item.text.toLowerCase().includes(targetPhrase) || item.layer === targetPhrase) {
+          item.status = "skipped";
+          item.evidence = `Cancelled by user amendment: "${text.slice(0, 50)}"`;
+        }
+      }
+    }
+
+    if (/\b(?:also\s+add|one\s+more\s+thing|and\s+add)\b/i.test(text)) {
+      const newItems = decomposeRequestIntoLedger(text, maxItems);
+      for (const ni of newItems) {
+        if (existingContract.intents && existingContract.intents.length < maxItems) {
+          ni.id = `I${existingContract.intents.length + 1}`;
+          existingContract.intents.push(ni);
+        }
+      }
+    }
+
+    existingContract.consecutiveNoChangeReprompts = 0;
+    return {
+      action: "amendment",
+      contract: existingContract,
+      directive:
+        "[SPB Amendment Directive: The user modified task specifications. " +
+        "The Intent Ledger has been updated with these changes.]",
+    };
+  }
+
+  // 3. New Task: prior work completed, or user initiates brand new instructions
+  if (allResolved || (existingIntents.length === 0 && text.length > 0)) {
+    const archived = Array.isArray(existingContract.archivedContracts)
+      ? (existingContract.archivedContracts as Array<Record<string, unknown>>)
+      : [];
+    if (existingIntents.length > 0) {
+      archived.push({
+        taskSpecification: existingContract.taskSpecification,
+        intents: existingIntents,
+        completedAt: Date.now(),
+      });
+    }
+
+    const newContract: GuidanceContract = {
+      ...existingContract,
+      taskSpecification: text,
+      intents: decomposeRequestIntoLedger(text, maxItems),
+      strictCompletion: existingContract.strictCompletion,
+      archivedContracts: archived,
+      consecutiveNoChangeReprompts: 0,
+      createdAt: Date.now(),
+    };
+
+    return {
+      action: "new_task",
+      contract: newContract,
+    };
+  }
+
+  return { action: "continuation", contract: existingContract };
+}
+
+/**
+ * Apex Tier Intent Expansion with Prompt-Anchor Caching.
+ * Performs deep full-lifecycle cross-layer decomposition, identifying unspoken requirements,
+ * implied validation schemas, edge cases, and scope fences.
+ * Caches expansions in durable SQLite storage keyed by prompt anchor hash.
+ */
+export function expandIntentLedgerApex(
+  prompt: string,
+  promptAnchorHash: string,
+  maxItems: number = 8
+): IntentLedgerItem[] {
+  // 1. Check prompt-anchor cache for instant retrieval
+  try {
+    const cached = getLearnedOptimization(promptAnchorHash);
+    if (cached?.enhancementTemplate) {
+      const parsed = JSON.parse(cached.enhancementTemplate);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed as IntentLedgerItem[];
+      }
+    }
+  } catch {
+    // Non-blocking cache retrieval fallback
+  }
+
+  // 2. Base heuristic decomposition
+  const items = decomposeRequestIntoLedger(prompt, maxItems);
+  if (items.length === 0) return [];
+
+  // 3. Apex Deep Full-Lifecycle Expansion (Unspoken intent discovery)
+  const explicitItems = [...items];
+
+  for (const expItem of explicitItems) {
+    if (items.length >= maxItems) break;
+
+    // A. Form / UI Component implies client input validation and API contract
+    if (expItem.layer === "ui" && expItem.kind === "explicit") {
+      const hasValidation = items.some((it) => it.parentId === expItem.id && it.layer === "ui");
+      if (!hasValidation && items.length < maxItems) {
+        items.push({
+          id: `I${items.length + 1}`,
+          parentId: expItem.id,
+          text: `Client input validation and error feedback states for ${expItem.text.slice(0, 40)}`,
+          kind: "required-implied",
+          layer: "ui",
+          gap: "missing",
+          acceptance:
+            "Form handles empty, invalid, and boundary inputs with visible error feedback",
+          status: "open",
+        });
+      }
+    }
+
+    // B. API Route implies request schema validation and HTTP status codes
+    if (expItem.layer === "api" && expItem.kind === "explicit") {
+      const hasValidation = items.some(
+        (it) => it.parentId === expItem.id && it.text.toLowerCase().includes("validation")
+      );
+      if (!hasValidation && items.length < maxItems) {
+        items.push({
+          id: `I${items.length + 1}`,
+          parentId: expItem.id,
+          text: `Request body/query schema validation and 4xx/5xx status handling for ${expItem.text.slice(0, 40)}`,
+          kind: "required-implied",
+          layer: "api",
+          gap: "missing",
+          acceptance:
+            "Endpoint validates payload via Zod/schema and returns 400 on malformed input",
+          status: "open",
+        });
+      }
+    }
+
+    // C. Data migration implies idempotent rollback and entity model typing
+    if (expItem.layer === "data" && expItem.kind === "explicit") {
+      const hasModel = items.some((it) => it.parentId === expItem.id);
+      if (!hasModel && items.length < maxItems) {
+        items.push({
+          id: `I${items.length + 1}`,
+          parentId: expItem.id,
+          text: `Idempotent migration schema and TypeScript entity typing for ${expItem.text.slice(0, 40)}`,
+          kind: "required-implied",
+          layer: "data",
+          gap: "missing",
+          acceptance: "Database migration executes idempotently without table corruption",
+          status: "open",
+        });
+      }
+    }
+  }
+
+  // 4. Save to persistent SQLite cache
+  try {
+    saveLearnedOptimization({
+      patternHash: promptAnchorHash,
+      tier: "tier_1_apex",
+      taskPhase: "ARCHITECTURAL_PLANNING",
+      optimizationStrategy: "apex_intent_ledger",
+      enhancementTemplate: JSON.stringify(items),
+      successCount: 1,
+      failureCount: 0,
+      avgSatisfactionScore: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  } catch {
+    // Non-blocking telemetry
+  }
+
+  return items;
 }

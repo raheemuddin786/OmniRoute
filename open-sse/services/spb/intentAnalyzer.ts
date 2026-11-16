@@ -15,6 +15,25 @@ export type TaskPhase =
   | "INSPECTION_SYNTHESIS"
   | "IMAGE_GENERATION";
 
+export type IntentKind = "explicit" | "required-implied" | "optional";
+export type IntentLayer = "ui" | "api" | "data" | "test" | "config" | "docs";
+export type IntentStatus =
+  "open" | "in_progress" | "done" | "done_unverified" | "blocked" | "skipped";
+export type IntentGap = "exists" | "partial" | "missing";
+
+export interface IntentLedgerItem {
+  id: string; // e.g. "I1", "I2"
+  parentId?: string; // If required-implied, references parent explicit ID
+  text: string;
+  kind: IntentKind;
+  layer: IntentLayer;
+  gap?: IntentGap;
+  targetFiles?: string[];
+  acceptance: string;
+  status: IntentStatus;
+  evidence?: string;
+}
+
 export interface GuidanceContract {
   supervisorTier?: "tier_1_apex" | "tier_2_resilient" | string;
   origin?: "supervisor" | "auto";
@@ -23,6 +42,18 @@ export interface GuidanceContract {
   instructions?: string[];
   targetFiles?: string[];
   verificationCriteria?: string[];
+  intents?: IntentLedgerItem[];
+  strictCompletion?: boolean;
+  consecutiveNoChangeReprompts?: number;
+  lastStateDigest?: string;
+  outOfScopeViolations?: string[];
+  baselineModifiedFiles?: string[];
+  baselineFileHashes?: Record<string, string>;
+  baselineFileStats?: Record<string, { size: number; mtime: number; hash: string }>;
+  observedReadFiles?: string[];
+  testExecutionPassed?: boolean;
+  baselineTestPassed?: boolean;
+  archivedContracts?: unknown[];
   createdAt?: number;
   [key: string]: unknown;
 }

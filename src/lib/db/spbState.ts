@@ -450,6 +450,30 @@ export function updateCheckpointSatisfaction(
   }
 }
 
+/**
+ * Atomically updates only the guidance_contract column for a session.
+ * Prevents full read-modify-write checkpoint clobbering under concurrent turns.
+ */
+export function updateGuidanceContract(sessionId: string, guidanceContract: unknown): boolean {
+  try {
+    initSpbStateTable();
+    const db = getDbInstance();
+    const contractStr = guidanceContract ? JSON.stringify(guidanceContract) : null;
+    db.prepare(`UPDATE spb_state_checkpoints SET guidance_contract = ? WHERE session_id = ?`).run(
+      contractStr,
+      sessionId
+    );
+    const cached = checkpointMemoryCache.get(sessionId);
+    if (cached) {
+      cached.guidanceContract = guidanceContract;
+    }
+    return true;
+  } catch (err) {
+    console.error("[SPB State] Failed to update guidance contract:", err);
+    return false;
+  }
+}
+
 export function getCheckpoint(sessionId: string): SpbStateCheckpoint | null {
   // 1. Check in-memory cache first for instant retrieval
   const cached = checkpointMemoryCache.get(sessionId);

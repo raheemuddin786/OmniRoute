@@ -68,6 +68,12 @@ export interface SpbRuntimeConfig {
   diffTimeoutMs?: number;
   minResponseLength?: number;
   retryStatusCodes?: number[];
+  strictCompletion?: boolean;
+  intentLedgerMode?: "off" | "heuristic" | "apex_guided";
+  maxLedgerItems?: number;
+  maxReprompts?: number;
+  requireGitDiffEvidence?: boolean;
+  requireTestPassBeforeDone?: boolean;
   tokenBounds?: {
     apex?: Partial<SpbTokenBoundTier>;
     resilient?: Partial<SpbTokenBoundTier>;
@@ -87,6 +93,12 @@ export interface ConcreteSpbRuntimeConfig {
   diffTimeoutMs: number;
   minResponseLength: number;
   retryStatusCodes: number[];
+  strictCompletion: boolean;
+  intentLedgerMode: "off" | "heuristic" | "apex_guided";
+  maxLedgerItems: number;
+  maxReprompts: number;
+  requireGitDiffEvidence: boolean;
+  requireTestPassBeforeDone: boolean;
   tokenBounds: {
     apex: SpbTokenBoundTier;
     resilient: SpbTokenBoundTier;
@@ -106,6 +118,12 @@ export const DEFAULT_SPB_RUNTIME_CONFIG: ConcreteSpbRuntimeConfig = {
   diffTimeoutMs: 5000,
   minResponseLength: 20,
   retryStatusCodes: [400, 402, 408, 409, 429, 500, 502, 503, 504, 529],
+  strictCompletion: false,
+  intentLedgerMode: "heuristic",
+  maxLedgerItems: 8,
+  maxReprompts: 2,
+  requireGitDiffEvidence: true,
+  requireTestPassBeforeDone: true,
   tokenBounds: {
     apex: { high: 16384, medium: 12288, low: 8192 },
     resilient: { high: 8192, medium: 8192, low: 4096 },

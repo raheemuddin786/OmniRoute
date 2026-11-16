@@ -458,6 +458,23 @@ async function applySpbOutboundZeroLoss(
       // Best-effort workspace detection
     }
 
+    const { getTierConfig } = await import("@omniroute/open-sse/services/tierResolver");
+    const activeProfileName = runtimeOpts?.spbProfile || spbDecision?.spbProfile || "default";
+    const activeProfileConfig = getTierConfig(activeProfileName);
+    const dynamicMaxReprompts = activeProfileConfig?.spbConfig?.maxReprompts ?? 2;
+    const hasActiveLedger = Boolean(spbDecision?.intent?.guidanceContract?.intents?.length);
+    const isStrict = Boolean(
+      spbDecision?.intent?.guidanceContract?.strictCompletion ??
+      activeProfileConfig?.spbConfig?.strictCompletion ??
+      false
+    );
+
+    // If caller requested streaming and strict completion is NOT active (or no active ledger),
+    // bypass outbound buffering to preserve immediate time-to-first-token (TTFT) streaming.
+    if (body?.stream && (!isStrict || !hasActiveLedger)) {
+      return withSpbHeaders(response, spbDecision);
+    }
+
     const evaluatedResponse = await processSpbOutboundZeroLoss({
       initialResponse: response,
       dispatchModel: async (newBody: any) => {
@@ -507,8 +524,9 @@ async function applySpbOutboundZeroLoss(
       tier,
       taskPhase,
       sessionId,
-      maxReprompts: 2,
+      maxReprompts: dynamicMaxReprompts,
       workspaceRoot: detectedWorkspaceRoot,
+      spbProfile: activeProfileName,
     });
 
     // Update checkpoint with satisfaction score for cross-tier restoration
@@ -976,11 +994,25 @@ async function handleChatImplementation(
         );
       }
 
+      let detectedWorkspaceRoot: string | undefined;
+      try {
+        const { resolveWorkspaceLinker } = await import("@/lib/usage/workspaceLinker");
+        const linked = resolveWorkspaceLinker({
+          headers: clientRawRequest?.headers || request?.headers || null,
+          body: clientRawRequest?.body || body || null,
+          sessionTag: conversationId || sessionAffinityKey || null,
+        });
+        if (linked?.workspaceRoot) detectedWorkspaceRoot = linked.workspaceRoot;
+      } catch {
+        // Best-effort
+      }
+
       spbDecision = await processSmartProxyRouting({
         sessionId: effectiveSessionId,
         messages: body.messages,
         tools: body.tools,
         spbProfile: spbProfileName || "default",
+        workspaceRoot: detectedWorkspaceRoot,
       });
       log.info(
         "SPB",

@@ -1708,6 +1708,146 @@ export function SmartProxyBridgeTab() {
                       </div>
                     </div>
 
+                    {/* Intent Ledger & Strict Completion Gate */}
+                    <div>
+                      <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Intent Ledger &amp; Strict Completion Gate
+                      </h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                        <div className="flex flex-col justify-center rounded-md border p-2.5 bg-background">
+                          <label className="text-xs font-medium text-foreground flex items-center justify-between cursor-pointer">
+                            <span>Strict Completion Gate</span>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(spbConfig.strictCompletion)}
+                              onChange={(e) =>
+                                setSpbConfig((prev) => ({
+                                  ...prev,
+                                  strictCompletion: e.target.checked,
+                                }))
+                              }
+                              className="rounded border-input text-primary focus:ring-primary h-4 w-4"
+                            />
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mt-1">
+                            Block final response until all required ledger items pass with evidence
+                          </span>
+                        </div>
+
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Ledger Expansion Mode
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Decomposition depth
+                          </span>
+                          <select
+                            value={spbConfig.intentLedgerMode || "heuristic"}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                intentLedgerMode: e.target.value as
+                                  "off" | "heuristic" | "apex_guided",
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          >
+                            <option value="heuristic">Heuristic (Fast, 0ms latency)</option>
+                            <option value="apex_guided">
+                              Apex Guided (Full SDLC &amp; Implied)
+                            </option>
+                            <option value="off">Off (Standard pass-through)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Max Reprompts Budget
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Autonomous re-prompts before halt
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="10"
+                            value={spbConfig.maxReprompts ?? 2}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                maxReprompts: Math.max(0, parseInt(e.target.value, 10) || 0),
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Max Ledger Items Cap
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mb-1">
+                            Limits expansion to prevent drift
+                          </span>
+                          <input
+                            type="number"
+                            min="1"
+                            max="20"
+                            value={spbConfig.maxLedgerItems ?? 8}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                maxLedgerItems: Math.max(1, parseInt(e.target.value, 10) || 8),
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+
+                        <div className="flex flex-col justify-center rounded-md border p-2.5 bg-background">
+                          <label className="text-xs font-medium text-foreground flex items-center justify-between cursor-pointer">
+                            <span>Require Git Diff Evidence</span>
+                            <input
+                              type="checkbox"
+                              checked={spbConfig.requireGitDiffEvidence !== false}
+                              onChange={(e) =>
+                                setSpbConfig((prev) => ({
+                                  ...prev,
+                                  requireGitDiffEvidence: e.target.checked,
+                                }))
+                              }
+                              className="rounded border-input text-primary focus:ring-primary h-4 w-4"
+                            />
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mt-1">
+                            Reject code completion claims missing disk diffs
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col justify-center rounded-md border p-2.5 bg-background">
+                          <label className="text-xs font-medium text-foreground flex items-center justify-between cursor-pointer">
+                            <span>Require Passing Tests</span>
+                            <input
+                              type="checkbox"
+                              checked={spbConfig.requireTestPassBeforeDone !== false}
+                              onChange={(e) =>
+                                setSpbConfig((prev) => ({
+                                  ...prev,
+                                  requireTestPassBeforeDone: e.target.checked,
+                                }))
+                              }
+                              className="rounded border-input text-primary focus:ring-primary h-4 w-4"
+                            />
+                          </label>
+                          <span className="text-[11px] text-muted-foreground block mt-1">
+                            Verify test execution before marking test items done
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
                     {/* Tier Profiles: Temperatures & Reasoning Efforts */}
                     <div>
                       <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">

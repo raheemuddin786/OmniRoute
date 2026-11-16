@@ -4,6 +4,10 @@
  * telemetry auditing, and autonomous zero-loss fallback recovery with full fault tolerance.
  */
 
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import {
   classifyIntent,
   IntentProfile,
@@ -27,6 +31,9 @@ import {
 import { forkSession, ForkedSessionContext } from "./branchManager.ts";
 import {
   decomposeRequestIntoSubTasks,
+  decomposeRequestIntoLedger,
+  resolveSessionLifecycle,
+  expandIntentLedgerApex,
   executeParallelPhase,
   executeSequentialPhase,
   type SubTask,
@@ -87,6 +94,7 @@ export interface SpbRoutingContext {
   messages: Array<{ role: string; content?: string }>;
   tools?: unknown[];
   spbProfile?: string;
+  workspaceRoot?: string;
 }
 
 export interface SpbRoutingDecision {
@@ -101,6 +109,102 @@ export interface SpbRoutingDecision {
   tokensSaved?: number;
   originalPrompt?: string;
   error?: string;
+}
+
+export function snapshotWorkingTreeDirtyFiles(cwd?: string): {
+  files: string[];
+  hashes: Record<string, string>;
+  stats: Record<string, { size: number; mtime: number; hash: string }>;
+} {
+  const targetCwd = cwd || process.env.UPSTREAM_CWD || process.cwd();
+  const files: string[] = [];
+  const hashes: Record<string, string> = {};
+  const stats: Record<string, { size: number; mtime: number; hash: string }> = {};
+  const MAX_HASH_FILES = 100;
+  const MAX_HASH_BYTES = 2 * 1024 * 1024; // 2MB cap
+  try {
+    const res = spawnSync("git", ["status", "--porcelain=v1", "-uall"], {
+      cwd: targetCwd,
+      encoding: "utf8",
+      timeout: 3000,
+    });
+    if (res.status === 0 && res.stdout) {
+      for (const line of res.stdout.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const filePart = line.length > 3 ? line.slice(3).trim() : trimmed;
+        if (filePart.includes("->")) {
+          const parts = filePart.split("->").map((p) => p.trim());
+          for (const p of parts) {
+            if (p) files.push(p);
+          }
+        } else if (filePart) {
+          files.push(filePart);
+        }
+      }
+      for (let i = 0; i < Math.min(files.length, MAX_HASH_FILES); i++) {
+        const f = files[i];
+        try {
+          const abs = path.isAbsolute(f) ? f : path.resolve(targetCwd, f);
+          if (fs.existsSync(abs)) {
+            const st = fs.statSync(abs);
+            if (st.isFile()) {
+              let hash = "";
+              if (st.size <= MAX_HASH_BYTES) {
+                hash = crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex");
+              } else {
+                // For large files, hash header + metadata
+                const fd = fs.openSync(abs, "r");
+                const buf = Buffer.alloc(64 * 1024);
+                const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+                fs.closeSync(fd);
+                hash = crypto
+                  .createHash("sha256")
+                  .update(`${st.size}:${st.mtimeMs}:`)
+                  .update(buf.subarray(0, bytesRead))
+                  .digest("hex");
+              }
+              hashes[f] = hash;
+              stats[f] = { size: st.size, mtime: st.mtimeMs, hash };
+            }
+          }
+        } catch {
+          // Non-blocking hash capture
+        }
+      }
+    }
+  } catch {
+    // Non-blocking fallback
+  }
+  return { files, hashes, stats };
+}
+
+export function snapshotRegressionBaseline(cwd?: string): {
+  testCommandDetected: string | null;
+  testsPassing: boolean | null;
+} {
+  const targetCwd = cwd || process.env.UPSTREAM_CWD || process.cwd();
+  try {
+    const pkgPath = path.resolve(targetCwd, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      if (pkg.scripts?.test) {
+        // Quick non-blocking baseline test probe
+        const res = spawnSync("npm", ["test", "--", "--run", "--testTimeout=2000"], {
+          cwd: targetCwd,
+          encoding: "utf8",
+          timeout: 4000,
+        });
+        return {
+          testCommandDetected: "npm test",
+          testsPassing: res.status === 0,
+        };
+      }
+    }
+  } catch {
+    // Non-blocking fallback
+  }
+  return { testCommandDetected: null, testsPassing: null };
 }
 
 export async function processSmartProxyRouting(
@@ -195,14 +299,27 @@ export async function processSmartProxyRouting(
       }
     }
 
-    // 3. Check for existing checkpoint & state resumption with safe error handling
+    // 3. Resolve tier configuration & check for existing checkpoint
+    const tierConfig = getTierConfig(context.spbProfile);
+    let autoRecoveryDirective: string | undefined;
     let checkpointRestored = false;
     let existingCheckpoint = null;
     let restoredModel: string | null = null;
     try {
       existingCheckpoint = getCheckpoint(sessionId);
       if (existingCheckpoint?.guidanceContract && !intent.guidanceContract) {
-        intent.guidanceContract = existingCheckpoint.guidanceContract as GuidanceContract;
+        const existing = existingCheckpoint.guidanceContract as GuidanceContract;
+        const resolution = resolveSessionLifecycle(
+          existing,
+          lastUserText,
+          tierConfig?.spbConfig?.maxLedgerItems ?? 8
+        );
+        intent.guidanceContract = resolution.contract;
+        if (resolution.directive) {
+          autoRecoveryDirective = autoRecoveryDirective
+            ? `${autoRecoveryDirective}\n\n${resolution.directive}`
+            : resolution.directive;
+        }
       }
     } catch (dbErr) {
       console.warn(
@@ -223,7 +340,6 @@ export async function processSmartProxyRouting(
     let stagnationDetected = false;
     let stagnationRecovered = false;
     let isStagnant = false;
-    let autoRecoveryDirective: string | undefined;
 
     // Calculate cumulative non-mutating turn counter:
     // Any turn that does NOT mutate code increments consecutiveReads.
@@ -297,7 +413,6 @@ export async function processSmartProxyRouting(
 
     // Pass isToolResultTurn AND guidanceContract to enforce supervision
     // Tier 3 will require a guidanceContract for all phases
-    const tierConfig = getTierConfig(context.spbProfile);
     let tierAssignment = selectModelTier(
       intent.taskPhase,
       intent.complexityScore,
@@ -497,6 +612,46 @@ export async function processSmartProxyRouting(
       tierAssignment.guidanceContract = activeGuidanceContract;
     }
 
+    // Ensure active guidance contract has an initialized Intent Ledger
+    if (activeGuidanceContract) {
+      if (
+        !Array.isArray(activeGuidanceContract.intents) ||
+        activeGuidanceContract.intents.length === 0
+      ) {
+        const mode = tierConfig?.spbConfig?.intentLedgerMode || "apex_guided";
+        if (mode === "apex_guided" || intent.complexityScore >= 0.6) {
+          activeGuidanceContract.intents = expandIntentLedgerApex(
+            lastUserText || rootTaskSpecification,
+            intent.promptAnchorHash,
+            tierConfig?.spbConfig?.maxLedgerItems ?? 8
+          );
+        } else {
+          activeGuidanceContract.intents = decomposeRequestIntoLedger(
+            lastUserText || rootTaskSpecification,
+            tierConfig?.spbConfig?.maxLedgerItems ?? 8
+          );
+        }
+      }
+      activeGuidanceContract.strictCompletion = tierConfig?.spbConfig?.strictCompletion ?? false;
+      if (
+        !activeGuidanceContract.baselineModifiedFiles ||
+        !activeGuidanceContract.baselineFileHashes
+      ) {
+        const baselineSnapshot = snapshotWorkingTreeDirtyFiles(context.workspaceRoot);
+        activeGuidanceContract.baselineModifiedFiles = baselineSnapshot.files;
+        activeGuidanceContract.baselineFileHashes = baselineSnapshot.hashes;
+        activeGuidanceContract.baselineFileStats = baselineSnapshot.stats;
+      }
+      if (
+        activeGuidanceContract.baselineTestPassed === undefined &&
+        tierConfig?.spbConfig?.requireTestPassBeforeDone
+      ) {
+        const testBaseline = snapshotRegressionBaseline(context.workspaceRoot);
+        activeGuidanceContract.baselineTestPassed = testBaseline.testsPassing ?? true;
+      }
+      tierAssignment.guidanceContract = activeGuidanceContract;
+    }
+
     // 6. Save new state checkpoint asynchronously / safely
     // Include guidanceContract and stagnation tracking in checkpoint for session restore and verification loop
     // Satisfaction score will be updated later by applySpbOutboundZeroLoss via updateCheckpointSatisfaction
@@ -613,6 +768,45 @@ export async function processSmartProxyRouting(
       );
     } catch (telemErr) {
       console.warn("[SPB Bridge] Telemetry recording warning:", telemErr);
+    }
+
+    // Format Intent Checklist and Scope Fence Directive for inbound prompt
+    let checklistDirective: string | undefined;
+    if (activeGuidanceContract?.intents && activeGuidanceContract.intents.length > 0) {
+      const openItems = activeGuidanceContract.intents.filter(
+        (it) => it.status !== "done" && it.status !== "done_unverified" && it.status !== "skipped"
+      );
+      const doneCount = activeGuidanceContract.intents.length - openItems.length;
+
+      let violationsNotice = "";
+      if (
+        activeGuidanceContract.outOfScopeViolations &&
+        activeGuidanceContract.outOfScopeViolations.length > 0
+      ) {
+        violationsNotice = `\n[SCOPE FENCE ALERT: Out-of-scope files touched in prior turn: ${activeGuidanceContract.outOfScopeViolations.slice(0, 3).join(", ")}. Revert or justify changes.]\n`;
+      }
+
+      if (openItems.length > 0) {
+        checklistDirective =
+          `[SPB-IR Intent Checklist & Scope Fence: ${doneCount}/${activeGuidanceContract.intents.length} Complete]${violationsNotice}\n` +
+          `Active Objectives:\n` +
+          openItems
+            .map(
+              (it) =>
+                `- [${it.id}] (${it.layer.toUpperCase()}) [${it.kind}]: ${it.text} | Acceptance: ${it.acceptance}`
+            )
+            .join("\n") +
+          `\nMandatory Guidelines:\n` +
+          `1. Grounding / Gap Analysis: Inspect existing repository code first. If an item already exists, note it with evidence.\n` +
+          `2. Scope Fence: Confine modifications strictly to the target files required for these open items.\n` +
+          `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.`;
+      }
+    }
+
+    if (checklistDirective) {
+      autoRecoveryDirective = autoRecoveryDirective
+        ? `${autoRecoveryDirective}\n\n${checklistDirective}`
+        : checklistDirective;
     }
 
     // Inject auto-recovery directive into messages if stagnation was detected
