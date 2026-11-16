@@ -17,6 +17,7 @@ import {
   saveLearnedOptimization,
   getCheckpoint,
   updateGuidanceContract,
+  recordSpbTelemetry,
 } from "../../../src/lib/db/spbState.ts";
 import { computePatternHash } from "./inboundIntelligence.ts";
 import { spawnSync } from "node:child_process";
@@ -24,6 +25,8 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { getTierConfig } from "../tierResolver.ts";
+import { judgeCompletion, type MechanicalEvidence, type ModelDispatchFn } from "./apexLedger.ts";
+import { snapshotWorkingTreeDirtyFiles } from "./proxyBridge.ts";
 
 /**
  * Marker injected into stream/json responses when a reviewer discrepancy is unresolved.
@@ -1537,17 +1540,104 @@ export async function processSpbOutboundZeroLoss(args: {
       activeContract?.strictCompletion ?? tierCfg?.spbConfig?.strictCompletion ?? false
     );
 
+    const mode = tierCfg?.spbConfig?.intentLedgerMode ?? "off";
     let ledgerEval: LedgerEvaluationResult | undefined;
-    if (!extracted.hasToolCalls && isStrict && activeContract?.intents?.length) {
-      ledgerEval = evaluateLedgerCompletion(args.sessionId, extracted.text, diffReview, isStrict);
-      if (!ledgerEval.isSatisfied && ledgerEval.suggestedReprompt) {
-        evalResult.isSatisfied = false;
-        evalResult.suggestedReprompt = ledgerEval.suggestedReprompt;
-        evalResult.satisfactionScore = Math.max(
-          0.2,
-          ledgerEval.doneItems.length /
-            Math.max(1, ledgerEval.doneItems.length + ledgerEval.openItems.length)
+    if (!extracted.hasToolCalls && activeContract?.intents?.length) {
+      if ((mode === "apex_guided" || mode === "apex_shadow") && isStrict) {
+        const cwd = resolveDiffCwd();
+        const currentSnapshot = snapshotWorkingTreeDirtyFiles(cwd);
+        const baselineHashes = activeContract.baselineFileHashes || {};
+        const diffFiles = currentSnapshot.files.filter(
+          (f) => currentSnapshot.hashes[f] !== baselineHashes[f]
         );
+        const diffDelta = {
+          files: diffFiles,
+          hashes: currentSnapshot.hashes,
+        };
+        const mechanicalEvidence: MechanicalEvidence = {
+          diffDelta,
+          testCommands:
+            (activeContract.executedTestCommands as Array<{ command: string; exitCode: number }>) ||
+            [],
+          observedReadFiles: activeContract.observedReadFiles || [],
+          observedWrittenFiles: activeContract.observedWrittenFiles || [],
+          diffVisible: Boolean(args.workspaceRoot && fs.existsSync(args.workspaceRoot)),
+          sharedWorkspace: Boolean(activeContract.sharedWorkspace),
+        };
+
+        const judgeDispatch: ModelDispatchFn = async (p) => {
+          const res = await args.dispatchModel({
+            messages: p.messages,
+            temperature: p.temperature ?? 0,
+            response_format: p.response_format,
+          });
+          return await res.text();
+        };
+
+        const judgeResult = await judgeCompletion(
+          activeContract.intents,
+          mechanicalEvidence,
+          extracted.text,
+          judgeDispatch,
+          {
+            sessionId: args.sessionId,
+            profile: args.spbProfile,
+          }
+        );
+
+        // Update items in contract
+        for (const jItem of judgeResult.items) {
+          const matched = activeContract.intents.find((it) => it.id === jItem.id);
+          if (matched) {
+            matched.status = jItem.status;
+            matched.evidence = jItem.evidence;
+          }
+        }
+
+        if (judgeResult.outOfScopeFiles.length > 0) {
+          activeContract.outOfScopeViolations = judgeResult.outOfScopeFiles;
+        }
+
+        updateGuidanceContract(args.sessionId, activeContract);
+
+        if (mode === "apex_shadow") {
+          // Shadow mode: log decisions to telemetry, inject nothing, never reprompt
+          try {
+            recordSpbTelemetry({
+              sessionId: args.sessionId,
+              taskPhase: args.taskPhase,
+              modelTier: args.tier,
+              checkpointRestored: false,
+              fallbackTriggered: false,
+              statusCode: 200,
+              latencyMs: 0,
+              timestamp: Date.now(),
+              spbProfile: args.spbProfile || "default",
+            });
+          } catch {
+            // Ignore
+          }
+          evalResult.isSatisfied = true;
+        } else {
+          // apex_guided mode
+          if (!judgeResult.isSatisfied && judgeResult.reprompt) {
+            evalResult.isSatisfied = false;
+            evalResult.suggestedReprompt = judgeResult.reprompt;
+          } else {
+            evalResult.isSatisfied = true;
+          }
+        }
+      } else if (isStrict) {
+        ledgerEval = evaluateLedgerCompletion(args.sessionId, extracted.text, diffReview, isStrict);
+        if (!ledgerEval.isSatisfied && ledgerEval.suggestedReprompt) {
+          evalResult.isSatisfied = false;
+          evalResult.suggestedReprompt = ledgerEval.suggestedReprompt;
+          evalResult.satisfactionScore = Math.max(
+            0.2,
+            ledgerEval.doneItems.length /
+              Math.max(1, ledgerEval.doneItems.length + ledgerEval.openItems.length)
+          );
+        }
       }
     }
 
