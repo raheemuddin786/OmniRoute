@@ -56,7 +56,7 @@ export const spbRuntimeConfigSchema = z
       .default(DEFAULT_SPB_RUNTIME_CONFIG.retryStatusCodes),
     strictCompletion: z.boolean().default(DEFAULT_SPB_RUNTIME_CONFIG.strictCompletion),
     intentLedgerMode: z
-      .enum(["off", "heuristic", "apex_guided"])
+      .enum(["off", "heuristic", "apex_guided", "apex_shadow"])
       .default(DEFAULT_SPB_RUNTIME_CONFIG.intentLedgerMode),
     maxLedgerItems: z
       .number()

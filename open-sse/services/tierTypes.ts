@@ -69,7 +69,7 @@ export interface SpbRuntimeConfig {
   minResponseLength?: number;
   retryStatusCodes?: number[];
   strictCompletion?: boolean;
-  intentLedgerMode?: "off" | "heuristic" | "apex_guided";
+  intentLedgerMode?: "off" | "heuristic" | "apex_guided" | "apex_shadow";
   maxLedgerItems?: number;
   maxReprompts?: number;
   requireGitDiffEvidence?: boolean;

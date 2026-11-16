@@ -24,6 +24,7 @@ export type IntentGap = "exists" | "partial" | "missing";
 export interface IntentLedgerItem {
   id: string; // e.g. "I1", "I2"
   parentId?: string; // If required-implied, references parent explicit ID
+  reason?: string; // Justification for required-implied requirement
   text: string;
   kind: IntentKind;
   layer: IntentLayer;
@@ -43,6 +44,9 @@ export interface GuidanceContract {
   targetFiles?: string[];
   verificationCriteria?: string[];
   intents?: IntentLedgerItem[];
+  nonGoals?: string[];
+  contextSource?: "repo" | "conversation";
+  sharedWorkspace?: boolean;
   strictCompletion?: boolean;
   consecutiveNoChangeReprompts?: number;
   lastStateDigest?: string;
