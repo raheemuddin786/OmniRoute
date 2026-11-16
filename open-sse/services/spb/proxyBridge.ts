@@ -33,7 +33,6 @@ import {
   decomposeRequestIntoSubTasks,
   decomposeRequestIntoLedger,
   resolveSessionLifecycle,
-  expandIntentLedgerApex,
   executeParallelPhase,
   executeSequentialPhase,
   type SubTask,
@@ -41,6 +40,12 @@ import {
   type VerifiedArtifactContract,
   type DecompositionResult,
 } from "./contextPartition.ts";
+import {
+  expandLedgerWithApex,
+  classifyFollowUp,
+  gatherApexContext,
+  type ModelDispatchFn,
+} from "./apexLedger.ts";
 import {
   enhanceInboundPrompt,
   evaluateRequestNecessity,
@@ -95,6 +100,7 @@ export interface SpbRoutingContext {
   tools?: unknown[];
   spbProfile?: string;
   workspaceRoot?: string;
+  dispatchModel?: ModelDispatchFn;
 }
 
 export interface SpbRoutingDecision {
@@ -111,6 +117,8 @@ export interface SpbRoutingDecision {
   error?: string;
 }
 
+const mtimeCache = new Map<string, { size: number; mtime: number; hash: string }>();
+
 export function snapshotWorkingTreeDirtyFiles(cwd?: string): {
   files: string[];
   hashes: Record<string, string>;
@@ -123,21 +131,22 @@ export function snapshotWorkingTreeDirtyFiles(cwd?: string): {
   const MAX_HASH_FILES = 100;
   const MAX_HASH_BYTES = 2 * 1024 * 1024; // 2MB cap
   try {
-    const res = spawnSync("git", ["status", "--porcelain=v1", "-uall"], {
+    const res = spawnSync("git", ["status", "--porcelain=v1", "-uall", "-z"], {
       cwd: targetCwd,
       encoding: "utf8",
       timeout: 3000,
     });
     if (res.status === 0 && res.stdout) {
-      for (const line of res.stdout.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const filePart = line.length > 3 ? line.slice(3).trim() : trimmed;
-        if (filePart.includes("->")) {
-          const parts = filePart.split("->").map((p) => p.trim());
-          for (const p of parts) {
-            if (p) files.push(p);
-          }
+      const tokens = res.stdout.split("\0");
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (!token) continue;
+        const code = token.slice(0, 2);
+        const filePart = token.slice(3).trim();
+        if (code.includes("R") || code.includes("C")) {
+          if (filePart) files.push(filePart);
+          const orig = tokens[++i];
+          if (orig) files.push(orig);
         } else if (filePart) {
           files.push(filePart);
         }
@@ -149,6 +158,13 @@ export function snapshotWorkingTreeDirtyFiles(cwd?: string): {
           if (fs.existsSync(abs)) {
             const st = fs.statSync(abs);
             if (st.isFile()) {
+              const cached = mtimeCache.get(abs);
+              if (cached && cached.mtime === st.mtimeMs && cached.size === st.size) {
+                hashes[f] = cached.hash;
+                stats[f] = cached;
+                continue;
+              }
+
               let hash = "";
               if (st.size <= MAX_HASH_BYTES) {
                 hash = crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex");
@@ -165,7 +181,9 @@ export function snapshotWorkingTreeDirtyFiles(cwd?: string): {
                   .digest("hex");
               }
               hashes[f] = hash;
-              stats[f] = { size: st.size, mtime: st.mtimeMs, hash };
+              const entry = { size: st.size, mtime: st.mtimeMs, hash };
+              stats[f] = entry;
+              mtimeCache.set(abs, entry);
             }
           }
         } catch {
@@ -309,16 +327,32 @@ export async function processSmartProxyRouting(
       existingCheckpoint = getCheckpoint(sessionId);
       if (existingCheckpoint?.guidanceContract && !intent.guidanceContract) {
         const existing = existingCheckpoint.guidanceContract as GuidanceContract;
-        const resolution = resolveSessionLifecycle(
-          existing,
-          lastUserText,
-          tierConfig?.spbConfig?.maxLedgerItems ?? 8
-        );
-        intent.guidanceContract = resolution.contract;
-        if (resolution.directive) {
-          autoRecoveryDirective = autoRecoveryDirective
-            ? `${autoRecoveryDirective}\n\n${resolution.directive}`
-            : resolution.directive;
+        const mode = tierConfig?.spbConfig?.intentLedgerMode ?? "off";
+        if ((mode === "apex_guided" || mode === "apex_shadow") && context.dispatchModel) {
+          const followUp = await classifyFollowUp(existing, lastUserText, context.dispatchModel, {
+            maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
+          });
+          intent.guidanceContract = {
+            ...existing,
+            intents: followUp.ledger,
+          };
+          if (followUp.directive && mode === "apex_guided") {
+            autoRecoveryDirective = autoRecoveryDirective
+              ? `${autoRecoveryDirective}\n\n${followUp.directive}`
+              : followUp.directive;
+          }
+        } else {
+          const resolution = resolveSessionLifecycle(
+            existing,
+            lastUserText,
+            tierConfig?.spbConfig?.maxLedgerItems ?? 8
+          );
+          intent.guidanceContract = resolution.contract;
+          if (resolution.directive && mode !== "apex_shadow") {
+            autoRecoveryDirective = autoRecoveryDirective
+              ? `${autoRecoveryDirective}\n\n${resolution.directive}`
+              : resolution.directive;
+          }
         }
       }
     } catch (dbErr) {
@@ -618,14 +652,32 @@ export async function processSmartProxyRouting(
         !Array.isArray(activeGuidanceContract.intents) ||
         activeGuidanceContract.intents.length === 0
       ) {
-        const mode = tierConfig?.spbConfig?.intentLedgerMode || "apex_guided";
-        if (mode === "apex_guided" || intent.complexityScore >= 0.6) {
-          activeGuidanceContract.intents = expandIntentLedgerApex(
+        const mode = tierConfig?.spbConfig?.intentLedgerMode || "off";
+        if (mode === "apex_guided" || mode === "apex_shadow") {
+          const apexCtx = gatherApexContext({
+            workspaceRoot: context.workspaceRoot,
+            prompt: lastUserText || rootTaskSpecification,
+            conversationMessages: messages,
+          });
+          const expansion = await expandLedgerWithApex(
             lastUserText || rootTaskSpecification,
-            intent.promptAnchorHash,
-            tierConfig?.spbConfig?.maxLedgerItems ?? 8
+            apexCtx,
+            context.dispatchModel ||
+              (async () => {
+                throw new Error(
+                  "No live dispatch model provided to SPB proxyBridge; falling back to heuristic decomposer"
+                );
+              }),
+            {
+              maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
+              promptAnchorHash: intent.promptAnchorHash,
+              tier: tierAssignment.tier,
+            }
           );
-        } else {
+          activeGuidanceContract.intents = expansion.intents;
+          activeGuidanceContract.nonGoals = expansion.nonGoals;
+          activeGuidanceContract.contextSource = expansion.contextSource;
+        } else if (mode === "heuristic" || intent.complexityScore >= 0.6) {
           activeGuidanceContract.intents = decomposeRequestIntoLedger(
             lastUserText || rootTaskSpecification,
             tierConfig?.spbConfig?.maxLedgerItems ?? 8
@@ -772,7 +824,12 @@ export async function processSmartProxyRouting(
 
     // Format Intent Checklist and Scope Fence Directive for inbound prompt
     let checklistDirective: string | undefined;
-    if (activeGuidanceContract?.intents && activeGuidanceContract.intents.length > 0) {
+    const ledgerMode = tierConfig?.spbConfig?.intentLedgerMode ?? "off";
+    if (
+      ledgerMode !== "apex_shadow" &&
+      activeGuidanceContract?.intents &&
+      activeGuidanceContract.intents.length > 0
+    ) {
       const openItems = activeGuidanceContract.intents.filter(
         (it) => it.status !== "done" && it.status !== "done_unverified" && it.status !== "skipped"
       );
@@ -799,7 +856,9 @@ export async function processSmartProxyRouting(
           `\nMandatory Guidelines:\n` +
           `1. Grounding / Gap Analysis: Inspect existing repository code first. If an item already exists, note it with evidence.\n` +
           `2. Scope Fence: Confine modifications strictly to the target files required for these open items.\n` +
-          `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.`;
+          `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.\n` +
+          `4. Initial Inspection Directive: Report your initial assessment as [I#: exists|partial|missing] with cited evidence.\n` +
+          `5. Baseline Verification: Run existing tests to verify baseline pass/fail status before applying changes.`;
       }
     }
 
