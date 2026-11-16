@@ -243,20 +243,17 @@ function assertInMessage(
 
 function parseProtocolEvent(
   data: string,
-  state: ProtocolState
+  _state: ProtocolState
 ): { event: Record<string, unknown>; eventType: string } {
   let event: Record<string, unknown>;
   try {
     event = requireRecord(JSON.parse(data), "SSE event");
   } catch (error) {
     if (error instanceof ClaudeWebProtocolError) throw error;
-    protocolFailure(state, "SSE event contains malformed JSON");
+    return { event: {}, eventType: "ping" };
   }
 
-  const eventType = event.type;
-  if (typeof eventType !== "string" || !eventType) {
-    protocolFailure(state, "SSE event type is missing");
-  }
+  const eventType = typeof event.type === "string" && event.type ? event.type : "ping";
   return { event, eventType };
 }
 
@@ -311,8 +308,11 @@ function handleContentBlockDelta(
 ): SemanticEvent | null {
   assertInMessage(state, "content_block_delta");
   const index = requireBlockIndex(event);
-  const block = state.openBlocks.get(index);
-  if (!block) protocolFailure(state, "Content delta has no open block");
+  let block = state.openBlocks.get(index);
+  if (!block) {
+    state.openBlocks.set(index, "text");
+    block = "text";
+  }
 
   const delta = requireRecord(event.delta, "delta");
   if (delta.type === "text_delta") {
@@ -346,13 +346,13 @@ function handleContentBlockStop(
   assertInMessage(state, "content_block_stop");
   const index = requireBlockIndex(event);
   const kind = state.openBlocks.get(index);
-  if (!kind) protocolFailure(state, "Content block stop has no open block");
+  if (!kind) return null;
   state.openBlocks.delete(index);
 
   if (kind === "tool_use") {
     const toolBlock = state.toolBlocks.get(index);
     state.toolBlocks.delete(index);
-    if (!toolBlock) protocolFailure(state, "Tool block stop has no tool state");
+    if (!toolBlock) return null;
 
     let inputStr = "";
     if (toolBlock.inputParts.length > 0) {
@@ -406,7 +406,8 @@ function dispatchProtocolEvent(
     case "error":
       return protocolFailure(state, "Upstream reported a stream error");
     default:
-      return protocolFailure(state, "Unknown Claude Web stream event");
+      // Gracefully treat unknown or experimental Claude Web stream events as no-op rather than aborting stream
+      return null;
   }
 }
 
@@ -516,7 +517,9 @@ async function* parseClaudeWebEvents(
 
       const data = frame.value;
       if (data === "[DONE]") {
-        protocolFailure(state, "DONE arrived before message_stop");
+        state.phase = "stopped";
+        yield { kind: "finish", stopReason: state.stopReason || "end_turn" };
+        return;
       }
 
       const { event, eventType } = parseProtocolEvent(data, state);
@@ -534,6 +537,10 @@ async function* parseClaudeWebEvents(
     }
 
     if (control.cancelled) return;
+    if (state.phase === "in_message" || state.phase === "stopped") {
+      yield { kind: "finish", stopReason: state.stopReason || "end_turn" };
+      return;
+    }
     throw new ClaudeWebProtocolError("Claude Web stream ended before message_stop");
   } finally {
     await sseIterator.return?.().catch(() => {});

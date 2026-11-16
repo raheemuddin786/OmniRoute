@@ -972,6 +972,40 @@ async function handleChatImplementation(
       );
     })();
 
+  // Pipeline: API key policy enforcement (model restrictions + budget limits)
+  telemetry.startPhase("policy");
+  const policy = await enforceApiKeyPolicy(request, modelStr, DEFER_METERED_BUDGET);
+  if (policy.rejection) {
+    log.warn(
+      "POLICY",
+      `API key policy rejected: ${modelStr} (key=${policy.apiKeyInfo?.id || "unknown"})`
+    );
+    return logHandlerRejection(policy.rejection, {
+      path: new URL(request.url).pathname,
+      model: modelStr,
+      requestBody: body ?? null,
+      apiKeyId: policy.apiKeyInfo?.id ?? null,
+      apiKeyName: policy.apiKeyInfo?.name ?? null,
+      correlationId: reqId,
+    });
+  }
+  const apiKeyInfo = policy.apiKeyInfo;
+  let managedLease: ManagedLeaseDispatchContext | null = null;
+  if (isExclusiveLeaseManagedKey(apiKeyInfo)) {
+    try {
+      validateExclusiveLeaseKeyConfiguration(apiKeyInfo);
+      managedLease = {
+        apiKeyId: apiKeyInfo!.id,
+        context: parseManagedLeaseRequestContext(request.headers),
+      };
+    } catch (error) {
+      if (error instanceof LeaseContextError) return buildManagedLeaseErrorResponse(error);
+      throw error;
+    }
+  }
+  const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
+  telemetry.endPhase();
+
   let spbDecision: SpbRoutingDecision | null = null;
   if (isSpbActive && Array.isArray(body?.messages)) {
     try {
@@ -1151,40 +1185,6 @@ async function handleChatImplementation(
       log.warn("SPB", `SPB-IR processing warning: ${spbErr}`);
     }
   }
-
-  // Pipeline: API key policy enforcement (model restrictions + budget limits)
-  telemetry.startPhase("policy");
-  const policy = await enforceApiKeyPolicy(request, modelStr, DEFER_METERED_BUDGET);
-  if (policy.rejection) {
-    log.warn(
-      "POLICY",
-      `API key policy rejected: ${modelStr} (key=${policy.apiKeyInfo?.id || "unknown"})`
-    );
-    return logHandlerRejection(policy.rejection, {
-      path: new URL(request.url).pathname,
-      model: modelStr,
-      requestBody: body ?? null,
-      apiKeyId: policy.apiKeyInfo?.id ?? null,
-      apiKeyName: policy.apiKeyInfo?.name ?? null,
-      correlationId: reqId,
-    });
-  }
-  const apiKeyInfo = policy.apiKeyInfo;
-  let managedLease: ManagedLeaseDispatchContext | null = null;
-  if (isExclusiveLeaseManagedKey(apiKeyInfo)) {
-    try {
-      validateExclusiveLeaseKeyConfiguration(apiKeyInfo);
-      managedLease = {
-        apiKeyId: apiKeyInfo!.id,
-        context: parseManagedLeaseRequestContext(request.headers),
-      };
-    } catch (error) {
-      if (error instanceof LeaseContextError) return buildManagedLeaseErrorResponse(error);
-      throw error;
-    }
-  }
-  const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
-  telemetry.endPhase();
 
   // OmniRoute-native `previous_response_id` continuation: reconstruct the
   // full input server-side before ANY downstream validation/translation

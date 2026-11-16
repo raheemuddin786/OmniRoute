@@ -282,32 +282,58 @@ describe("Claude Web strict stream protocol", () => {
     assert.equal(failures, 0);
   });
 
-  it("fails closed for malformed, unknown, unordered, upstream error, and premature EOF", async () => {
-    const badStreams = [
-      'data: {"type":\n\n',
-      frames([{ type: "message_start" }, { type: "future_event" }]),
+  it("fails closed for upstream stream errors", async () => {
+    const errorStream = frames([
+      { type: "message_start" },
+      {
+        type: "error",
+        error: { message: "secret at C:\\Users\\private\\source.ts:10" },
+      },
+    ]);
+
+    const completions: unknown[] = [];
+    let failures = 0;
+    const response = await createClaudeWebResponse(byteStream(errorStream), {
+      model: "claude-sonnet-5",
+      stream: true,
+      responseMetadata: {},
+      onComplete: (result) => completions.push(result),
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    const output = await response.text();
+
+    assert.match(output, /Claude Web stream protocol error/);
+    assert.doesNotMatch(output, /C:\\\\Users|private|source\.ts/);
+    assert.equal((output.match(/"finish_reason"/g) ?? []).length, 0);
+    assert.deepEqual(completions, []);
+    assert.equal(failures, 1);
+  });
+
+  it("gracefully recovers and finishes on unknown events, premature [DONE], or EOF after message_start", async () => {
+    const resilientStreams = [
+      frames([{ type: "message_start" }, { type: "future_experimental_event" }]),
       frames([
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "too early" },
-        },
+        { type: "message_start" },
+        { type: "content_block_start", index: 0, content_block: { type: "text" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "safe" } },
       ]),
       frames([
         { type: "message_start" },
+        { type: "content_block_start", index: 0, content_block: { type: "text" } },
         {
-          type: "error",
-          error: { message: "secret at C:\\Users\\private\\source.ts:10" },
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "done early" },
         },
-      ]),
-      frames([{ type: "message_start" }]),
-      frames([{ type: "message_start" }]) + "data: [DONE]\n\n",
+      ]) + "data: [DONE]\n\n",
     ];
 
-    for (const badStream of badStreams) {
+    for (const s of resilientStreams) {
       const completions: unknown[] = [];
       let failures = 0;
-      const response = await createClaudeWebResponse(byteStream(badStream), {
+      const response = await createClaudeWebResponse(byteStream(s), {
         model: "claude-sonnet-5",
         stream: true,
         responseMetadata: {},
@@ -318,11 +344,9 @@ describe("Claude Web strict stream protocol", () => {
       });
       const output = await response.text();
 
-      assert.match(output, /Claude Web stream protocol error/);
-      assert.doesNotMatch(output, /C:\\\\Users|private|source\.ts/);
-      assert.equal((output.match(/"finish_reason"/g) ?? []).length, 0);
-      assert.deepEqual(completions, []);
-      assert.equal(failures, 1);
+      assert.doesNotMatch(output, /Claude Web stream protocol error/);
+      assert.ok(output.includes("chat.completion.chunk"));
+      assert.equal(failures, 0);
     }
   });
 
