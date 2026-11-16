@@ -1596,6 +1596,7 @@ export async function processSpbOutboundZeroLoss(args: {
           return await res.text();
         };
 
+        const judgeStartTime = Date.now();
         const judgeResult = await judgeCompletion(
           activeContract.intents,
           mechanicalEvidence,
@@ -1608,6 +1609,7 @@ export async function processSpbOutboundZeroLoss(args: {
             modelTier: args.tier,
           }
         );
+        const judgeLatencyMs = Date.now() - judgeStartTime;
 
         // Update items in contract
         for (const jItem of judgeResult.items) {
@@ -1625,18 +1627,31 @@ export async function processSpbOutboundZeroLoss(args: {
         updateGuidanceContract(args.sessionId, activeContract);
 
         if (mode === "apex_shadow") {
-          // Shadow mode: log decisions to telemetry, inject nothing, never reprompt
+          // Shadow mode: log decisions to telemetry with full ledger and judge verdict, inject nothing, never reprompt
           try {
             recordSpbTelemetry({
               sessionId: args.sessionId,
               taskPhase: args.taskPhase,
               modelTier: args.tier,
               checkpointRestored: false,
-              fallbackTriggered: false,
+              fallbackTriggered: !judgeResult.isSatisfied,
               statusCode: 200,
-              latencyMs: 0,
+              latencyMs: judgeLatencyMs,
               timestamp: Date.now(),
               spbProfile: args.spbProfile || "default",
+              operation: "shadow_judge",
+              intentLedger: JSON.stringify(activeContract.intents),
+              judgeDecision: JSON.stringify({
+                items: judgeResult.items,
+                isSatisfied: judgeResult.isSatisfied,
+                outOfScopeFiles: judgeResult.outOfScopeFiles,
+              }),
+              repromptText: judgeResult.reprompt || "",
+              fallbackReason: judgeResult.isSatisfied
+                ? undefined
+                : judgeResult.reprompt
+                  ? judgeResult.reprompt.slice(0, 100)
+                  : "Open items remaining in shadow evaluation",
             });
           } catch {
             // Ignore

@@ -1050,3 +1050,111 @@ test("SPB Apex Ledger: judgeCompletion strips internal labels from reprompts", a
   assert.ok(!res.reprompt.includes("Rule 18"));
   assert.ok(res.reprompt.includes("Complete the implementation"));
 });
+
+test("SPB Apex Ledger: classifyFollowUp re-parents required-implied children when parent is skipped", async () => {
+  const existingContract: GuidanceContract = {
+    intents: [
+      {
+        id: "I1",
+        text: "User login endpoint",
+        kind: "explicit",
+        layer: "api",
+        acceptance: "Returns 200 on login",
+        status: "done",
+      },
+      {
+        id: "I2",
+        text: "User signup endpoint",
+        kind: "explicit",
+        layer: "api",
+        acceptance: "Returns 201 on signup",
+        status: "open",
+      },
+      {
+        id: "I3",
+        text: "Crypto & auth utilities (JWT, password hash)",
+        kind: "required-implied",
+        parentId: "I2", // Initially parented to signup
+        reason: "Required to hash passwords and generate tokens",
+        layer: "api",
+        acceptance: "Exports hashPassword and generateToken",
+        status: "open",
+      },
+    ],
+    strictCompletion: true,
+  };
+
+  const mockDispatch: ModelDispatchFn = async () => {
+    return JSON.stringify({
+      relation: "amendment",
+      directive: "Skipped signup endpoint",
+      intents: [
+        { id: "I1", status: "done" },
+        { id: "I2", status: "skipped" },
+        // Model attempts to mark I3 skipped because I2 was skipped
+        { id: "I3", status: "skipped", parentId: "I2" },
+      ],
+    });
+  };
+
+  const result = await classifyFollowUp(existingContract, "actually skip signup", mockDispatch);
+  assert.equal(result.relation, "amendment");
+
+  const i1 = result.ledger.find((i) => i.id === "I1");
+  const i2 = result.ledger.find((i) => i.id === "I2");
+  const i3 = result.ledger.find((i) => i.id === "I3");
+
+  assert.equal(i1?.status, "done", "Done item I1 must stay done");
+  assert.equal(i2?.status, "skipped", "Signup item I2 must be skipped");
+  assert.notEqual(i3?.status, "skipped", "Required-implied child I3 must NOT be skipped");
+  assert.equal(i3?.status, "open", "Required-implied child I3 must be re-opened");
+  assert.equal(
+    i3?.parentId,
+    "I1",
+    "Required-implied child I3 must be re-parented to active explicit item I1"
+  );
+  assert.ok(i3?.reason?.includes("re-parented"), "Reason must record re-parenting");
+});
+
+test("SPB Apex Ledger: items added by follow-up reconciliation satisfy schema validation with promptRef", async () => {
+  const existingContract: GuidanceContract = {
+    intents: [
+      {
+        id: "I1",
+        text: "Initial feature",
+        kind: "explicit",
+        layer: "api",
+        acceptance: "Working",
+        status: "open",
+      },
+    ],
+    strictCompletion: true,
+  };
+
+  const mockDispatch: ModelDispatchFn = async () => {
+    return JSON.stringify({
+      relation: "amendment",
+      directive: "Added password reset",
+      intents: [
+        { id: "I1", status: "open" },
+        // New item returned without promptRef
+        {
+          id: "I2",
+          text: "Password reset endpoint",
+          kind: "explicit",
+          layer: "api",
+          acceptance: "Working password reset",
+          status: "open",
+        },
+      ],
+    });
+  };
+
+  const result = await classifyFollowUp(existingContract, "also add password reset", mockDispatch);
+  assert.equal(result.relation, "amendment");
+
+  const i2 = result.ledger.find((i) => i.id === "I2");
+  assert.ok(i2, "New item I2 must be present in reconciled ledger");
+  assert.ok(i2?.promptRef, "Explicit item must have non-empty promptRef");
+  assert.ok(i2.promptRef.includes("password reset"), "promptRef must reference user ask");
+});

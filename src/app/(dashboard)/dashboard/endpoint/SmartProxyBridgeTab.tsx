@@ -1747,7 +1747,7 @@ export function SmartProxyBridgeTab() {
                               setSpbConfig((prev) => ({
                                 ...prev,
                                 intentLedgerMode: e.target.value as
-                                  "off" | "heuristic" | "apex_guided",
+                                  "off" | "heuristic" | "apex_guided" | "apex_shadow",
                               }))
                             }
                             className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
@@ -1755,6 +1755,9 @@ export function SmartProxyBridgeTab() {
                             <option value="heuristic">Heuristic (Fast, 0ms latency)</option>
                             <option value="apex_guided">
                               Apex Guided (Full SDLC &amp; Implied)
+                            </option>
+                            <option value="apex_shadow">
+                              Apex Shadow (Evaluate &amp; Log, Zero Prompt Injection)
                             </option>
                             <option value="off">Off (Standard pass-through)</option>
                           </select>

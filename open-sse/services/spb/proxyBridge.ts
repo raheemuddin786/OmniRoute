@@ -802,6 +802,7 @@ export async function processSmartProxyRouting(
 
     // 7. Record telemetry audit
     try {
+      const ledgerMode = tierConfig?.spbConfig?.intentLedgerMode ?? "off";
       recordSpbTelemetry({
         sessionId,
         taskPhase: intent.taskPhase,
@@ -814,6 +815,15 @@ export async function processSmartProxyRouting(
         stagnationDetected,
         stagnationRecovered,
         spbProfile: context.spbProfile || "default",
+        operation:
+          ledgerMode === "apex_shadow"
+            ? "shadow_expansion"
+            : ledgerMode === "apex_guided"
+              ? "apex_expansion"
+              : "routing",
+        intentLedger: activeGuidanceContract?.intents
+          ? JSON.stringify(activeGuidanceContract.intents)
+          : undefined,
       });
       console.log(
         `[SPB Bridge Execution] Session: ${sessionId} | Turn: ${intent.isToolResultTurn ? "tool_result" : "human_prompt"} | Phase: ${intent.taskPhase} | Tier: ${tierAssignment.tier} | Stagnation: ${stagnationRecovered ? "recovered" : stagnationDetected ? "detected" : "none"} | Contract: ${activeGuidanceContract ? "present" : "none"}`

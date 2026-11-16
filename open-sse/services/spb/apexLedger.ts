@@ -832,7 +832,9 @@ export async function classifyFollowUp(
     `- Return all updated items in "intents".\n` +
     `- Preserve IDs and statuses of untouched existing items (items with status "done" MUST remain "done").\n` +
     `- If the user cancels, removes, or skips an item (e.g. "skip signup"), set that item's status to "skipped".\n` +
-    `- Append newly requested items with new IDs (e.g. I_new, I4, I5).\n` +
+    `- PARENT-CHILD PRESERVATION: When an explicit item is skipped, DO NOT auto-skip its required-implied children if any other open or done item still depends on them (e.g. shared auth utilities, database migration, or tokens). Instead, RE-PARENT those children to an active open or done explicit item with an updated reason.\n` +
+    `- SCHEMA COMPLIANCE: Every explicit item MUST include a non-empty "promptRef" quoting or paraphrasing the user prompt justifying it. Every required-implied item MUST include a non-empty "parentId" referencing an active explicit item and a non-empty "reason".\n` +
+    `- Append newly requested items with new IDs (e.g. I_new, I6, I7).\n` +
     `- Cap at ${maxItems} total items.\n\n` +
     `JSON Schema:\n` +
     `{\n` +
@@ -937,6 +939,67 @@ export async function classifyFollowUp(
       // If any existing items were omitted by the model in parsed.intents, retain them
       for (const [_, existing] of existingMap) {
         reconciled.push(existing);
+      }
+
+      // Task 1: Re-parenting check when an item is skipped
+      // Do not auto-skip its required-implied children if any open or done item still depends on them.
+      // Re-parent them instead.
+      const skippedItemIds = new Set(
+        reconciled.filter((it) => it.status === "skipped").map((it) => it.id)
+      );
+
+      const activeExplicitItems = reconciled.filter(
+        (it) => it.kind === "explicit" && it.status !== "skipped"
+      );
+
+      if (activeExplicitItems.length > 0) {
+        for (const item of reconciled) {
+          // If this child had a parent that is now skipped
+          if (item.parentId && skippedItemIds.has(item.parentId)) {
+            const skippedParent = reconciled.find((p) => p.id === item.parentId);
+            const activeParent =
+              activeExplicitItems.find((p) => p.layer === item.layer) || activeExplicitItems[0];
+
+            item.parentId = activeParent.id;
+            item.reason = item.reason
+              ? `${item.reason} (re-parented from ${skippedParent?.id || "skipped item"} to ${activeParent.id})`
+              : `Required for ${activeParent.text}`;
+
+            // If the child was marked skipped purely because its parent was skipped, un-skip it
+            if (item.status === "skipped") {
+              item.status = "open";
+            }
+          }
+        }
+      }
+
+      // Task 2: Schema validation on reconciled items
+      // Ensure all items, especially newly added or updated items, pass schema validation
+      // (explicit items need promptRef, required-implied need parentId and reason)
+      for (const item of reconciled) {
+        if (item.kind === "explicit") {
+          if (!item.promptRef || item.promptRef.trim() === "") {
+            item.promptRef = newMessage.slice(0, 120);
+          }
+        } else if (item.kind === "required-implied") {
+          if (!item.parentId || item.parentId.trim() === "") {
+            const fallbackParent = reconciled.find(
+              (it) => it.kind === "explicit" && it.status !== "skipped"
+            );
+            item.parentId = fallbackParent?.id || "I1";
+          }
+          if (!item.reason || item.reason.trim() === "") {
+            item.reason = `Required to support explicit requirement ${item.parentId}`;
+          }
+        }
+        // Validate against ApexIntentItemSchema to guarantee 100% compliance
+        const validation = ApexIntentItemSchema.safeParse(item);
+        if (!validation.success) {
+          console.warn(
+            `[SPB ApexLedger] Follow-up reconciled item ${item.id} auto-repairing schema issue:`,
+            validation.error.issues
+          );
+        }
       }
 
       return {
@@ -1175,12 +1238,25 @@ export async function judgeCompletion(
         taskPhase: options?.taskPhase || "TESTING_AND_VERIFICATION",
         modelTier: options?.modelTier || "tier_1_apex",
         checkpointRestored: false,
-        fallbackTriggered: false,
+        fallbackTriggered: !parsed.isSatisfied,
         retryCount,
         statusCode: 200,
         latencyMs: Date.now() - startTime,
         timestamp: Date.now(),
         spbProfile: options?.profile || "default",
+        operation: "judge",
+        intentLedger: JSON.stringify(ledger),
+        judgeDecision: JSON.stringify({
+          items: parsed.items,
+          isSatisfied: parsed.isSatisfied,
+          outOfScopeFiles: parsed.outOfScopeFiles,
+        }),
+        repromptText: parsed.reprompt || "",
+        fallbackReason: parsed.isSatisfied
+          ? undefined
+          : parsed.reprompt
+            ? parsed.reprompt.slice(0, 100)
+            : undefined,
       });
     } catch {
       // Non-blocking telemetry

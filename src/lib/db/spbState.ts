@@ -32,6 +32,10 @@ export interface SpbTelemetryRecord {
   spbProfile?: string;
   retryCount?: number;
   fallbackReason?: string;
+  intentLedger?: string;
+  judgeDecision?: string;
+  repromptText?: string;
+  operation?: string;
 }
 
 export interface SpbTelemetrySummary {
@@ -72,6 +76,13 @@ export interface SpbActivityRecord {
   stagnationRecovered: boolean;
   satisfactionScore?: number;
   repromptCount?: number;
+  spbProfile?: string;
+  retryCount?: number;
+  fallbackReason?: string;
+  intentLedger?: string;
+  judgeDecision?: string;
+  repromptText?: string;
+  operation?: string;
 }
 
 export interface SpbDetailedMetrics {
@@ -347,6 +358,26 @@ export function initSpbStateTable(): void {
       // Column already exists
     }
     try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN intent_ledger TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN judge_decision TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN reprompt_text TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN operation TEXT DEFAULT 'routing';");
+    } catch {
+      // Column already exists
+    }
+    try {
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_spb_telemetry_profile ON spb_telemetry_audit(spb_profile);"
       );
@@ -595,8 +626,9 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       `
       INSERT INTO spb_telemetry_audit
       (session_id, task_phase, model_tier, checkpoint_restored, fallback_triggered, status_code, latency_ms, timestamp,
-       stagnation_detected, stagnation_recovered, spb_profile, retry_count, fallback_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       stagnation_detected, stagnation_recovered, spb_profile, retry_count, fallback_reason,
+       intent_ledger, judge_decision, reprompt_text, operation)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       record.sessionId,
@@ -611,7 +643,11 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       record.stagnationRecovered ? 1 : 0,
       profile,
       record.retryCount ?? 0,
-      record.fallbackReason || null
+      record.fallbackReason || null,
+      record.intentLedger || null,
+      record.judgeDecision || null,
+      record.repromptText || null,
+      record.operation || "routing"
     );
   } catch (err) {
     console.error("[SPB State] Failed to record telemetry:", err);
@@ -1298,6 +1334,13 @@ export function getSpbActivityRecords(options: SpbActivityFilterOptions = {}): {
            a.timestamp,
            a.stagnation_detected,
            a.stagnation_recovered,
+           a.spb_profile,
+           a.retry_count,
+           a.fallback_reason,
+           a.intent_ledger,
+           a.judge_decision,
+           a.reprompt_text,
+           a.operation,
            e.satisfaction_score,
            e.reprompt_count
          FROM spb_telemetry_audit a
@@ -1332,6 +1375,13 @@ export function getSpbActivityRecords(options: SpbActivityFilterOptions = {}): {
         r.reprompt_count !== null && r.reprompt_count !== undefined
           ? Number(r.reprompt_count)
           : undefined,
+      spbProfile: r.spb_profile ? String(r.spb_profile) : undefined,
+      retryCount: Number(r.retry_count ?? 0),
+      fallbackReason: r.fallback_reason ? String(r.fallback_reason) : undefined,
+      intentLedger: r.intent_ledger ? String(r.intent_ledger) : undefined,
+      judgeDecision: r.judge_decision ? String(r.judge_decision) : undefined,
+      repromptText: r.reprompt_text ? String(r.reprompt_text) : undefined,
+      operation: r.operation ? String(r.operation) : undefined,
     }));
 
     return { records, total };
