@@ -1007,12 +1007,50 @@ async function handleChatImplementation(
         // Best-effort
       }
 
+      const apexDispatchModel = async (payload: {
+        messages: Array<{ role: string; content: string }>;
+        temperature?: number;
+        response_format?: unknown;
+      }) => {
+        const { getTierConfig } = await import("@omniroute/open-sse/services/tierResolver");
+        const profileConfig = getTierConfig(spbProfileName || "default");
+        const apexModel =
+          profileConfig?.tierModels?.apex?.[0] ||
+          (profileConfig?.tierModels as Record<string, string[]> | undefined)?.tier_1_apex?.[0] ||
+          "anthropic/claude-3-5-sonnet";
+        const dispatchRes = await handleSingleModelChat(
+          {
+            messages: payload.messages,
+            temperature: payload.temperature ?? 0,
+            response_format: payload.response_format,
+          },
+          apexModel,
+          clientRawRequest,
+          request,
+          null,
+          apiKeyInfo,
+          telemetry,
+          {
+            sessionId: effectiveSessionId,
+            sessionAffinityKey,
+            correlationId: reqId,
+            conversationId,
+            managedLease,
+            videoBridgeLog,
+          },
+          null,
+          false
+        );
+        return await dispatchRes.text();
+      };
+
       spbDecision = await processSmartProxyRouting({
         sessionId: effectiveSessionId,
         messages: body.messages,
         tools: body.tools,
         spbProfile: spbProfileName || "default",
         workspaceRoot: detectedWorkspaceRoot,
+        dispatchModel: apexDispatchModel,
       });
       log.info(
         "SPB",
