@@ -10,6 +10,7 @@ import {
   trimPatch,
   trimTree,
   cleanAndParseJson,
+  parseAndValidateJson,
   extractToolEvidenceFromMessages,
   ApexLedgerExpansionSchema,
   type ModelDispatchFn,
@@ -77,6 +78,7 @@ test("SPB Apex Ledger: expandLedgerWithApex parses structured JSON and identifie
           id: "I1",
           text: "Implement user authentication endpoint",
           kind: "explicit",
+          promptRef: "Build user authentication endpoint",
           layer: "api",
           targetFiles: ["src/api/auth.ts"],
           acceptance: "POST /auth returns JWT token",
@@ -148,6 +150,7 @@ test("SPB Apex Ledger: expandLedgerWithApex returns cached expansion on repeat c
           id: "I1",
           text: "Refactor router",
           kind: "explicit",
+          promptRef: "Refactor router",
           layer: "api",
           targetFiles: ["src/router.ts"],
           acceptance: "Router compiles",
@@ -247,6 +250,7 @@ test("SPB Apex Ledger: classifyFollowUp classifies amendment and updates ledger 
           id: "I1",
           text: "Add login route",
           kind: "explicit",
+          promptRef: "Add login route",
           layer: "api",
           targetFiles: [],
           acceptance: "Returns 200",
@@ -265,6 +269,7 @@ test("SPB Apex Ledger: classifyFollowUp classifies amendment and updates ledger 
           id: "I3",
           text: "Add password reset endpoint",
           kind: "explicit",
+          promptRef: "add password reset",
           layer: "api",
           targetFiles: [],
           acceptance: "POST /reset returns 200",
@@ -788,6 +793,7 @@ test("SPB Apex Ledger: apex_shadow mode executes expansion and judge without inj
           id: "I1",
           text: "Shadow feature task",
           kind: "explicit",
+          promptRef: "Build the shadow test feature",
           layer: "api",
           targetFiles: ["src/shadow.ts"],
           acceptance: "Shadow feature is implemented",
@@ -856,4 +862,104 @@ test("SPB Apex Ledger: apex_shadow mode executes expansion and judge without inj
   assert.ok(summary.tierDistribution["tier_1_apex"] >= 1);
   assert.equal(typeof summary.failOpenCount, "number");
   assert.ok(summary.failOpensPerProfile);
+});
+
+test("SPB Apex Ledger: schema rejects invalid items and expandLedgerWithApex retries with validation error", async () => {
+  // 1. Direct schema check: explicit missing promptRef
+  const invalidExplicit = {
+    isActionable: true,
+    intents: [
+      {
+        id: "I1",
+        text: "Add login endpoint",
+        kind: "explicit",
+        // missing promptRef
+        layer: "api",
+        targetFiles: [],
+        acceptance: "Returns 200",
+      },
+    ],
+    nonGoals: [],
+    constraints: [],
+  };
+  const valExplicit = parseAndValidateJson(
+    JSON.stringify(invalidExplicit),
+    ApexLedgerExpansionSchema
+  );
+  assert.equal(valExplicit.success, false);
+  assert.ok(valExplicit.error.includes("missing promptRef"));
+
+  // 2. Direct schema check: required-implied missing parentId and reason
+  const invalidImplied = {
+    isActionable: true,
+    intents: [
+      {
+        id: "I1",
+        text: "Add login endpoint",
+        kind: "explicit",
+        promptRef: "Add login endpoint",
+        layer: "api",
+        targetFiles: [],
+        acceptance: "Returns 200",
+      },
+      {
+        id: "I2",
+        text: "Create database table",
+        kind: "required-implied",
+        // missing parentId and reason
+        layer: "data",
+        targetFiles: [],
+        acceptance: "Table created",
+      },
+    ],
+    nonGoals: [],
+    constraints: [],
+  };
+  const valImplied = parseAndValidateJson(
+    JSON.stringify(invalidImplied),
+    ApexLedgerExpansionSchema
+  );
+  assert.equal(valImplied.success, false);
+  assert.ok(valImplied.error.includes("missing parentId"));
+
+  // 3. Verify retry in expandLedgerWithApex: first dispatch returns invalid output, retry returns valid
+  let dispatchCount = 0;
+  const retryDispatch: ModelDispatchFn = async ({ messages }) => {
+    dispatchCount++;
+    if (dispatchCount === 1) {
+      // Return invalid output on turn 1 (explicit missing promptRef)
+      return JSON.stringify(invalidExplicit);
+    }
+    // Return corrected output on turn 2
+    assert.ok(messages.some((m) => m.content.includes("SCHEMA VALIDATION ERROR")));
+    return JSON.stringify({
+      isActionable: true,
+      intents: [
+        {
+          id: "I1",
+          text: "Add login endpoint",
+          kind: "explicit",
+          promptRef: "Add login endpoint",
+          layer: "api",
+          targetFiles: ["src/api/login.ts"],
+          acceptance: "Returns 200 OK",
+        },
+      ],
+      nonGoals: [],
+      constraints: ["Use worktree isolation"],
+    });
+  };
+
+  const res = await expandLedgerWithApex(
+    "Add login endpoint",
+    { contextSource: "conversation" },
+    retryDispatch,
+    { skipCache: true }
+  );
+
+  assert.equal(dispatchCount, 2, "Must retry once when initial expansion fails validation");
+  assert.equal(res.source, "apex", "After successful retry, source must be 'apex'");
+  assert.equal(res.intents.length, 1);
+  assert.equal(res.intents[0].id, "I1");
+  assert.deepEqual(res.constraints, ["Use worktree isolation"]);
 });

@@ -48,6 +48,14 @@ export interface ApexTelemetryRecord {
   timestamp: number;
 }
 
+export interface DetectedStackInfo {
+  framework: string;
+  testRunner: string;
+  database: string;
+  primaryLanguages: string[];
+  dependenciesSummary: string[];
+}
+
 export interface ApexContextSources {
   workspaceRoot?: string | null;
   treeExcerpt?: string;
@@ -57,6 +65,8 @@ export interface ApexContextSources {
   mentionedFiles?: Record<string, string>;
   conversationExcerpts?: string[];
   contextSource: "repo" | "conversation";
+  detectedStack?: DetectedStackInfo;
+  contextDigest?: string;
 }
 
 export interface MechanicalEvidence {
@@ -72,21 +82,51 @@ export interface MechanicalEvidence {
   sharedWorkspace?: boolean;
 }
 
-export const ApexIntentItemSchema = z.object({
-  id: z.string(),
-  text: z.string(),
-  kind: z.enum(["explicit", "required-implied", "optional"]),
-  parentId: z.string().nullable().optional(),
-  reason: z.string().optional(),
-  layer: z.enum(["ui", "api", "data", "test", "config", "docs"]),
-  targetFiles: z.array(z.string()).default([]),
-  acceptance: z.string(),
-});
+export const ApexIntentItemSchema = z
+  .object({
+    id: z.string(),
+    text: z.string(),
+    kind: z.enum(["explicit", "required-implied", "optional"]),
+    parentId: z.string().nullable().optional(),
+    reason: z.string().optional(),
+    promptRef: z.string().optional(),
+    layer: z.enum(["ui", "api", "data", "test", "config", "docs"]),
+    targetFiles: z.array(z.string()).default([]),
+    acceptance: z.string(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.kind === "required-implied") {
+      if (!data.parentId || typeof data.parentId !== "string" || !data.parentId.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Item ${data.id} is 'required-implied' but missing parentId pointing to an explicit item`,
+          path: ["parentId"],
+        });
+      }
+      if (!data.reason || typeof data.reason !== "string" || !data.reason.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Item ${data.id} is 'required-implied' but missing reason explaining why the explicit ask fails or is unsafe without it`,
+          path: ["reason"],
+        });
+      }
+    }
+    if (data.kind === "explicit") {
+      if (!data.promptRef || typeof data.promptRef !== "string" || !data.promptRef.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Item ${data.id} is 'explicit' but missing promptRef quoting or paraphrasing user ask`,
+          path: ["promptRef"],
+        });
+      }
+    }
+  });
 
 export const ApexLedgerExpansionSchema = z.object({
   isActionable: z.boolean(),
   intents: z.array(ApexIntentItemSchema),
   nonGoals: z.array(z.string()).default([]),
+  constraints: z.array(z.string()).default([]),
 });
 
 export const ApexFollowUpSchema = z.object({
@@ -176,10 +216,13 @@ export function trimTree(tree: string, maxChars = BUDGET_LIMITS.MAX_REPO_TREE_CH
 }
 
 // ============================================================================
-// JSON Parser Helper
+// JSON Parser & Validator Helper (Requirement 1 & 3)
 // ============================================================================
 
-export function cleanAndParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
+export function parseAndValidateJson<T>(
+  raw: string,
+  schema: z.ZodType<T>
+): { success: true; data: T } | { success: false; error: string } {
   try {
     let cleaned = raw.trim();
     if (cleaned.startsWith("```")) {
@@ -190,19 +233,41 @@ export function cleanAndParseJson<T>(raw: string, schema: z.ZodType<T>): T | nul
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       cleaned = cleaned.slice(firstBrace, lastBrace + 1);
     }
-    const parsed = JSON.parse(cleaned);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (jsonErr) {
+      return {
+        success: false,
+        error: `JSON syntax error: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`,
+      };
+    }
     const validated = schema.safeParse(parsed);
     if (validated.success) {
-      return validated.data;
+      return { success: true, data: validated.data };
     }
-    return null;
-  } catch {
-    return null;
+    const issueMessages = validated.error.issues
+      .map((iss) => `${iss.path.join(".") || "root"}: ${iss.message}`)
+      .join("; ");
+    return {
+      success: false,
+      error: `Schema validation rejected: ${issueMessages}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: `Unexpected parse error: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 }
 
+export function cleanAndParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
+  const result = parseAndValidateJson(raw, schema);
+  return result.success ? result.data : null;
+}
+
 // ============================================================================
-// Context Gathering (Requirement B)
+// Context Gathering (Requirement B & 4)
 // ============================================================================
 
 export function gatherApexContext(options: {
@@ -217,6 +282,20 @@ export function gatherApexContext(options: {
       const testLayout: string[] = [];
       const mentionedFiles: Record<string, string> = {};
 
+      const IGNORED_DIRS = new Set([
+        ".git",
+        "node_modules",
+        ".next",
+        ".turbo",
+        "coverage",
+        ".claude",
+        "_mono_repo",
+        "_references",
+        "_tasks",
+        "dist",
+        "build",
+      ]);
+
       const walk = (dir: string, depth: number) => {
         if (depth > 3) return;
         try {
@@ -225,6 +304,7 @@ export function gatherApexContext(options: {
             const rel = path.relative(root, path.join(dir, ent.name));
             if (isSensitiveFile(rel)) continue;
             if (ent.isDirectory()) {
+              if (IGNORED_DIRS.has(ent.name)) continue;
               treeLines.push(`${"  ".repeat(depth)}[DIR] ${ent.name}/`);
               if (ent.name === "tests" || ent.name === "test" || ent.name === "__tests__") {
                 testLayout.push(rel);
@@ -252,6 +332,26 @@ export function gatherApexContext(options: {
         } catch {
           packageManifest = null;
         }
+      }
+
+      // Detect project stack info grounded in packageManifest
+      const detectedStack: DetectedStackInfo = {
+        framework: "Next.js 16 (App Router) + React",
+        testRunner: "Node.js native test runner (node --test) + Vitest",
+        database: "SQLite (WAL mode via better-sqlite3 / node:sqlite)",
+        primaryLanguages: ["TypeScript", "SQL"],
+        dependenciesSummary: [],
+      };
+
+      if (packageManifest) {
+        const deps = {
+          ...((packageManifest.dependencies as Record<string, string>) || {}),
+          ...((packageManifest.devDependencies as Record<string, string>) || {}),
+        };
+        detectedStack.dependenciesSummary = Object.keys(deps).slice(0, 15);
+        if (deps["next"]) detectedStack.framework = `Next.js ${deps["next"]} (App Router)`;
+        if (deps["better-sqlite3"]) detectedStack.database = "SQLite (better-sqlite3 / WAL mode)";
+        if (deps["vitest"]) detectedStack.testRunner = "Vitest + Node.js native test runner";
       }
 
       let conventionsExcerpt = "";
@@ -285,14 +385,23 @@ export function gatherApexContext(options: {
         }
       }
 
+      const treeExcerpt = trimTree(treeLines.join("\n"));
+      const contextDigest = crypto
+        .createHash("sha256")
+        .update(treeExcerpt + conventionsExcerpt + JSON.stringify(detectedStack))
+        .digest("hex")
+        .slice(0, 12);
+
       return {
         workspaceRoot: root,
-        treeExcerpt: trimTree(treeLines.join("\n")),
+        treeExcerpt,
         packageManifest,
         conventionsExcerpt: conventionsExcerpt.slice(0, BUDGET_LIMITS.MAX_EXCERPTS_CHARS),
         testLayout: testLayout.slice(0, 20),
         mentionedFiles,
         contextSource: "repo",
+        detectedStack,
+        contextDigest,
       };
     } catch {
       // Fall through to conversation context
@@ -335,7 +444,12 @@ export async function expandLedgerWithApex(
   isActionable: boolean;
   intents: IntentLedgerItem[];
   nonGoals: string[];
+  constraints: string[];
   contextSource: "repo" | "conversation";
+  source: "apex" | "heuristic_fallback";
+  fallbackReason?: string;
+  detectedStack?: DetectedStackInfo;
+  contextDigest?: string;
 }> {
   const startTime = Date.now();
   const maxItems = options?.maxItems ?? 8;
@@ -345,13 +459,15 @@ export async function expandLedgerWithApex(
     crypto.createHash("sha256").update(prompt).digest("hex").slice(0, 16);
 
   // Digest context to allow robust caching
-  const contextDigest = crypto
-    .createHash("sha256")
-    .update(
-      (context.treeExcerpt || "") + (context.conventionsExcerpt || "") + context.contextSource
-    )
-    .digest("hex")
-    .slice(0, 12);
+  const contextDigest =
+    context.contextDigest ||
+    crypto
+      .createHash("sha256")
+      .update(
+        (context.treeExcerpt || "") + (context.conventionsExcerpt || "") + context.contextSource
+      )
+      .digest("hex")
+      .slice(0, 12);
 
   const cacheKey = `spb_apex_ledger_${APEX_LEDGER_PROMPT_VERSION}_${modelTier}_${anchorHash}_${contextDigest}`;
 
@@ -378,7 +494,11 @@ export async function expandLedgerWithApex(
               status: "open" as IntentStatus,
             })),
             nonGoals: validated.data.nonGoals,
+            constraints: validated.data.constraints || [],
             contextSource: context.contextSource,
+            source: "apex",
+            detectedStack: context.detectedStack,
+            contextDigest,
           };
         }
       }
@@ -391,34 +511,45 @@ export async function expandLedgerWithApex(
     `${SECURITY_DATA_FENCE_DIRECTIVE}\n\n` +
     `You are the Apex Tier Intent Decomposition Engine for an autonomous agent proxy.\n` +
     `Analyze the user prompt and project context. Decompose the request into a strict Intent Ledger across SDLC layers.\n\n` +
-    `RULES:\n` +
-    `1. Actionable vs Advisory: If the prompt is purely advisory, informational, or conceptual (e.g. "How do I add auth?"), return "isActionable": false and empty intents.\n` +
-    `2. One item per distinct user ask. Never invent unnecessary work that was not requested.\n` +
-    `3. Implied items: Identify strictly required implied dependencies across UI, API, Data, and Tests. Every implied item MUST specify "parentId" pointing to its explicit parent, and a valid "reason".\n` +
-    `4. Nice-to-have or follow-up suggestions must be marked "optional" (optional items do not block completion).\n` +
-    `5. Define non-goals explicitly to prevent agent drift.\n` +
-    `6. Cap at maximum ${maxItems} total items.\n` +
-    `7. Output ONLY valid JSON adhering to the schema.\n\n` +
-    `JSON Schema:\n` +
+    `RULES (STRICT COMPLIANCE REQUIRED):\n` +
+    `1. CONSTRAINTS VS INTENTS: Repo conventions (AGENTS.md/CLAUDE.md worktree, base-green, PR rules, git commit attribution) are constraints on HOW the agent works, NEVER ledger items. Put them in "constraints", not in "intents".\n` +
+    `2. EXPLICIT ITEMS: "explicit" means the user's own words asked for it. You MUST populate "promptRef" quoting or paraphrasing the exact part of the prompt that justifies it.\n` +
+    `3. DERIVED OBSERVABLE ACCEPTANCE CRITERIA: Acceptance criteria must be observable and derived directly from the prompt or repo. DO NOT invent arbitrary numbers (coverage %, rate limits, row counts) or external tools/libraries (e.g. Knex, Prisma) that neither the user nor the project stack mentioned.\n` +
+    `4. REQUIRED-IMPLIED VS OPTIONAL: Use "required-implied" ONLY if the explicit ask fails, causes regressions, or is unsafe without it (e.g., database schema for persistence, input validation for an endpoint, regression tests for a bugfix). "required-implied" MUST specify a non-empty "parentId" referencing an explicit item and a non-empty "reason". Otherwise mark it "optional".\n` +
+    `5. GROUNDED TARGET FILES: "targetFiles" must come from the supplied repository tree. If unsure or if creating a new file whose path is unconfirmed, return [] rather than guessing invented directory paths.\n` +
+    `6. ACTIONABLE VS ADVISORY: If the user request is purely advisory, informational, questions, or conceptual (e.g. "How do I add auth?"), return "isActionable": false, "intents": [], "nonGoals": [], "constraints": [].\n\n` +
+    `JSON Schema (Return ONLY this JSON):\n` +
     `{\n` +
-    `  "isActionable": true,\n` +
+    `  "isActionable": boolean,\n` +
     `  "intents": [\n` +
     `    {\n` +
     `      "id": "I1",\n` +
-    `      "text": "Description of item",\n` +
+    `      "text": "Specific implementation task",\n` +
     `      "kind": "explicit" | "required-implied" | "optional",\n` +
-    `      "parentId": null | "I1",\n` +
-    `      "reason": "Why implied item is strictly necessary",\n` +
+    `      "promptRef": "Quote or paraphrase of user ask (MANDATORY for explicit)",\n` +
+    `      "parentId": "I1" (MANDATORY for required-implied, null for explicit),\n` +
+    `      "reason": "Why implied item is strictly necessary (MANDATORY for required-implied)",\n` +
     `      "layer": "ui" | "api" | "data" | "test" | "config" | "docs",\n` +
-    `      "targetFiles": ["path/to/file.ts"],\n` +
-    `      "acceptance": "Concrete verifiable criteria"\n` +
+    `      "targetFiles": ["actual/path/from/repo/tree.ts"],\n` +
+    `      "acceptance": "Observable verification criteria without invented metrics"\n` +
     `    }\n` +
     `  ],\n` +
-    `  "nonGoals": ["Out of scope items"]\n` +
+    `  "nonGoals": ["Explicit out-of-scope items"],\n` +
+    `  "constraints": ["Repo conventions on how agent must work, e.g. worktree isolation, base-green"]\n` +
     `}`;
+
+  const stackSummary = context.detectedStack
+    ? `DETECTED PROJECT STACK:\n` +
+      `- Framework: ${context.detectedStack.framework}\n` +
+      `- Test Runner: ${context.detectedStack.testRunner}\n` +
+      `- Database / Persistence: ${context.detectedStack.database}\n` +
+      `- Primary Languages: ${context.detectedStack.primaryLanguages.join(", ")}\n` +
+      `- Libraries: ${context.detectedStack.dependenciesSummary.slice(0, 10).join(", ")}\n\n`
+    : "";
 
   const userContent =
     `PROJECT CONTEXT (${context.contextSource}):\n` +
+    stackSummary +
     (context.treeExcerpt ? `Directory Structure:\n${context.treeExcerpt}\n\n` : "") +
     (context.conventionsExcerpt ? `Conventions:\n${context.conventionsExcerpt}\n\n` : "") +
     (context.testLayout?.length ? `Test Layout:\n${context.testLayout.join(", ")}\n\n` : "") +
@@ -428,7 +559,7 @@ export async function expandLedgerWithApex(
     `USER PROMPT:\n${prompt}`;
 
   try {
-    const raw = await dispatchFn({
+    let raw = await dispatchFn({
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
@@ -437,10 +568,52 @@ export async function expandLedgerWithApex(
       response_format: { type: "json_object" },
     });
 
-    const parsed = cleanAndParseJson(raw, ApexLedgerExpansionSchema);
-    if (!parsed) {
-      throw new Error("Apex expansion returned unparseable JSON");
+    let parseResult = parseAndValidateJson(raw, ApexLedgerExpansionSchema);
+
+    // If validation failed, retry ONCE with the specific validation error before falling back (Requirement 3)
+    if (!parseResult.success) {
+      console.warn(
+        `[SPB ApexLedger] Initial expansion failed validation (${parseResult.error}). Retrying with validation feedback...`
+      );
+      try {
+        const retryRaw = await dispatchFn({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userContent },
+            { role: "assistant", content: raw },
+            {
+              role: "user",
+              content:
+                `SCHEMA VALIDATION ERROR:\nYour previous response failed validation:\n${parseResult.error}\n\n` +
+                `Please fix the errors and output ONLY valid JSON adhering strictly to the schema and rules:\n` +
+                `- "constraints": repo conventions (worktree, base-green, PR rules) belong in "constraints", NOT in "intents".\n` +
+                `- "explicit" items MUST have non-empty "promptRef" quoting/paraphrasing the user's words.\n` +
+                `- "required-implied" items MUST have non-empty "parentId" and "reason".\n` +
+                `- Acceptance criteria must not invent numbers or external libraries not mentioned.\n` +
+                `- Output strictly the corrected JSON.`,
+            },
+          ],
+          temperature: 0,
+          response_format: { type: "json_object" },
+        });
+
+        const retryParse = parseAndValidateJson(retryRaw, ApexLedgerExpansionSchema);
+        if (retryParse.success) {
+          raw = retryRaw;
+          parseResult = retryParse;
+        } else {
+          console.warn(`[SPB ApexLedger] Retry also failed validation: ${retryParse.error}`);
+        }
+      } catch (retryErr) {
+        console.warn(`[SPB ApexLedger] Retry dispatch error:`, retryErr);
+      }
     }
+
+    if (!parseResult.success) {
+      throw new Error(`Apex expansion schema validation failed: ${parseResult.error}`);
+    }
+
+    const parsed = parseResult.data;
 
     // Cache the verified result
     try {
@@ -475,12 +648,17 @@ export async function expandLedgerWithApex(
         status: "open" as IntentStatus,
       })),
       nonGoals: parsed.nonGoals,
+      constraints: parsed.constraints || [],
       contextSource: context.contextSource,
+      source: "apex",
+      detectedStack: context.detectedStack,
+      contextDigest,
     };
   } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
     console.warn(
       "[SPB ApexLedger] Apex expansion failed, falling back to heuristic decomposer:",
-      err
+      errorMsg
     );
     options?.onTelemetry?.({
       operation: "expand",
@@ -494,7 +672,12 @@ export async function expandLedgerWithApex(
       isActionable: heuristicItems.length > 0,
       intents: heuristicItems,
       nonGoals: [],
+      constraints: [],
       contextSource: context.contextSource,
+      source: "heuristic_fallback",
+      fallbackReason: errorMsg,
+      detectedStack: context.detectedStack,
+      contextDigest,
     };
   }
 }

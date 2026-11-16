@@ -100,5 +100,41 @@
       "minIntents": 0,
       "layers": []
     }
+  },
+  {
+    "id": "eval_12_already_implemented",
+    "prompt": "Add health check endpoint at /api/health that returns status ok and a timestamp.",
+    "expected": {
+      "isActionable": true,
+      "minIntents": 1,
+      "layers": ["api"]
+    }
+  },
+  {
+    "id": "eval_13_oneline_bugfix",
+    "prompt": "Fix typo in variable name in src/lib/db/providers.ts.",
+    "expected": {
+      "isActionable": true,
+      "minIntents": 1,
+      "layers": ["data"]
+    }
+  },
+  {
+    "id": "eval_14_amendment_followup",
+    "prompt": "Also add password reset with email token to the user auth flow.",
+    "expected": {
+      "isActionable": true,
+      "minIntents": 2,
+      "layers": ["api"]
+    }
+  },
+  {
+    "id": "eval_15_tempt_overexpansion",
+    "prompt": "Update the API timeout from 5s to 10s in open-sse/config/constants.ts.",
+    "expected": {
+      "isActionable": true,
+      "minIntents": 1,
+      "layers": ["config"]
+    }
   }
 ]
