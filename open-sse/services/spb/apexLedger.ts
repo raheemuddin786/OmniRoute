@@ -220,23 +220,30 @@ export const ApexLedgerExpansionSchema = z.object({
   constraints: z.array(z.string()).default([]),
 });
 
+export const FollowUpItemSchema = z.object({
+  id: z.string(),
+  text: z.string().optional(),
+  kind: z.enum(["explicit", "required-implied", "optional"]).optional(),
+  layer: z.enum(["ui", "api", "data", "test", "docs", "ops", "config"]).optional(),
+  targetFiles: z.array(z.string()).default([]),
+  acceptance: z.string().optional(),
+  parentId: z.string().optional(),
+  reason: z.string().optional(),
+  promptRef: z.string().optional(),
+  status: z
+    .enum(["open", "in_progress", "done", "done_unverified", "failed", "blocked", "skipped"])
+    .default("open"),
+});
+
 export const ApexFollowUpSchema = z.object({
   relation: z.enum(["continuation", "amendment", "new_task"]),
   directive: z.string().optional(),
-  intents: z
-    .array(
-      ApexIntentItemSchema.extend({
-        status: z
-          .enum(["open", "in_progress", "done", "done_unverified", "blocked", "skipped"])
-          .default("open"),
-      })
-    )
-    .optional(),
+  intents: z.array(FollowUpItemSchema).optional(),
 });
 
 export const JudgeItemEvaluationSchema = z.object({
   id: z.string(),
-  status: z.enum(["done", "open", "blocked", "done_unverified"]),
+  status: z.enum(["done", "open", "blocked", "done_unverified"]).default("open"),
   evidence: z.string().default(""),
   missing: z.string().default(""),
 });
@@ -245,7 +252,7 @@ export const JudgeCompletionSchema = z.object({
   items: z.array(JudgeItemEvaluationSchema),
   outOfScopeFiles: z.array(z.string()).default([]),
   reprompt: z.string().default(""),
-  isSatisfied: z.boolean(),
+  isSatisfied: z.union([z.boolean(), z.string().transform((s) => s.toLowerCase() === "true")]),
 });
 
 export type ApexLedgerExpansion = z.infer<typeof ApexLedgerExpansionSchema>;
@@ -582,10 +589,10 @@ export async function expandLedgerWithApex(
     `2. EXPLICIT ITEMS: "explicit" means the user's own words asked for it. You MUST populate "promptRef" quoting or paraphrasing the exact part of the prompt that justifies it.\n` +
     `3. DERIVED OBSERVABLE ACCEPTANCE CRITERIA: Acceptance criteria must be observable and derived directly from the prompt or repo. DO NOT invent arbitrary numbers (coverage %, rate limits, row counts), package versions (e.g. @^9.0.0), or non-existent files that neither the user nor the project stack mentioned.\n` +
     `4. REQUIRED-IMPLIED VS OPTIONAL:\n` +
-    `   - Use "required-implied" ONLY if the explicit ask fails, causes regressions, or is unsafe without it (e.g. database schema for persistence, input validation for an endpoint). "required-implied" MUST specify a non-empty "parentId" referencing an explicit item and a non-empty "reason".\n` +
+    `   - Use "required-implied" ONLY if the explicit ask fails, produces runtime errors, or causes immediate regressions without it (e.g. database schema for persistence, input validation for an endpoint). "required-implied" MUST specify a non-empty "parentId" referencing an explicit item and a non-empty "reason". If the ask succeeds without it, mark it "optional".\n` +
     `   - A "run existing tests" or regression check item is ALWAYS "optional" unless the user explicitly requested tests in their prompt.\n` +
     `5. NO SECRET OR .ENV MODIFICATIONS: NEVER create ledger items that edit .env, .env.*, secrets, tokens, or credential files. If environment variables or secrets are needed, list them in "constraints" as a configuration note for the user, NEVER as a mutable ledger item or targetFile.\n` +
-    `6. GROUNDED TARGET FILES: "targetFiles" must come from the supplied repository tree. If unsure or if creating a new file whose path is unconfirmed, return [] rather than guessing invented directory paths.\n` +
+    `6. GROUNDED FILES & STACK: "targetFiles" must come strictly from the supplied repository tree or match existing project directory conventions. DO NOT guess file paths, directory structures, or third-party frameworks/libraries not present in the supplied project stack.\n` +
     `7. ACTIONABLE VS ADVISORY: If the user request is purely advisory, informational, questions, or conceptual (e.g. "How do I add auth?"), return "isActionable": false, "intents": [], "nonGoals": [], "constraints": [].\n\n` +
     `JSON Schema (Return ONLY this JSON):\n` +
     `{\n` +
@@ -822,15 +829,26 @@ export async function classifyFollowUp(
     `- "amendment": User changes, adds, or cancels requirements ("actually don't do X", "skip Y and add Z").\n` +
     `- "new_task": Prior work is finished or user changes topic entirely.\n\n` +
     `RULES FOR AMENDMENT:\n` +
-    `- Preserve IDs and statuses of untouched existing items.\n` +
-    `- If an item is cancelled, mark status "skipped".\n` +
-    `- Append newly requested items with new IDs (e.g. I_new).\n` +
+    `- Return all updated items in "intents".\n` +
+    `- Preserve IDs and statuses of untouched existing items (items with status "done" MUST remain "done").\n` +
+    `- If the user cancels, removes, or skips an item (e.g. "skip signup"), set that item's status to "skipped".\n` +
+    `- Append newly requested items with new IDs (e.g. I_new, I4, I5).\n` +
     `- Cap at ${maxItems} total items.\n\n` +
     `JSON Schema:\n` +
     `{\n` +
     `  "relation": "continuation" | "amendment" | "new_task",\n` +
     `  "directive": "Optional guidance directive for the agent",\n` +
-    `  "intents": [...] // Reconciled ledger for amendment\n` +
+    `  "intents": [\n` +
+    `    {\n` +
+    `      "id": "item ID",\n` +
+    `      "text": "description",\n` +
+    `      "status": "done" | "open" | "in_progress" | "blocked" | "skipped",\n` +
+    `      "kind": "explicit" | "required-implied" | "optional",\n` +
+    `      "layer": "ui" | "api" | "data" | "test" | "docs" | "ops" | "config",\n` +
+    `      "targetFiles": ["..."],\n` +
+    `      "acceptance": "..."\n` +
+    `    }\n` +
+    `  ]\n` +
     `}`;
 
   const userContent =
@@ -877,9 +895,53 @@ export async function classifyFollowUp(
     }
 
     if (parsed.relation === "amendment" && Array.isArray(parsed.intents)) {
+      const existingMap = new Map(existingIntents.map((i) => [i.id, i]));
+      const reconciled: IntentLedgerItem[] = [];
+
+      for (const it of parsed.intents.slice(0, maxItems)) {
+        const existing = existingMap.get(it.id);
+        if (existing) {
+          // If existing item was done, preserve done status
+          const finalStatus =
+            existing.status === "done" ? "done" : ((it.status || existing.status) as IntentStatus);
+
+          reconciled.push({
+            ...existing,
+            ...(it.text ? { text: it.text } : {}),
+            ...(it.kind ? { kind: it.kind } : {}),
+            ...(it.layer ? { layer: it.layer } : {}),
+            ...(it.targetFiles && it.targetFiles.length > 0 ? { targetFiles: it.targetFiles } : {}),
+            ...(it.acceptance ? { acceptance: it.acceptance } : {}),
+            ...(it.parentId ? { parentId: it.parentId } : {}),
+            ...(it.reason ? { reason: it.reason } : {}),
+            ...(it.promptRef ? { promptRef: it.promptRef } : {}),
+            status: finalStatus,
+          });
+          existingMap.delete(it.id);
+        } else {
+          reconciled.push({
+            id: it.id,
+            text: it.text || `Item ${it.id}`,
+            kind: it.kind || "explicit",
+            layer: it.layer || "api",
+            targetFiles: it.targetFiles || [],
+            acceptance: it.acceptance || "Requirement satisfied",
+            status: (it.status as IntentStatus) || "open",
+            parentId: it.parentId,
+            reason: it.reason,
+            promptRef: it.promptRef,
+          });
+        }
+      }
+
+      // If any existing items were omitted by the model in parsed.intents, retain them
+      for (const [_, existing] of existingMap) {
+        reconciled.push(existing);
+      }
+
       return {
         relation: "amendment",
-        ledger: parsed.intents.slice(0, maxItems),
+        ledger: reconciled.slice(0, maxItems),
         directive:
           parsed.directive ||
           "[SPB Amendment Directive: Ledger updated to reflect amended instructions]",
@@ -950,7 +1012,7 @@ export async function judgeCompletion(
   }
 ): Promise<JudgeCompletionResult> {
   const startTime = Date.now();
-  const timeoutMs = options?.timeoutMs ?? 8000;
+  const timeoutMs = options?.timeoutMs ?? 45000;
 
   // If remote proxy where git diff delta is physically invisible, fail gracefully to done_unverified
   if (!evidence.diffVisible) {
@@ -1020,30 +1082,58 @@ export async function judgeCompletion(
     `MECHANICAL EVIDENCE:\n${JSON.stringify(evidencePayload, null, 2)}\n\n` +
     `ASSISTANT FINAL TEXT:\n${finalText.slice(0, 3000)}`;
 
+  let raw = "";
+  let retryCount = 0;
+
   try {
-    let timeoutTimer: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutTimer = setTimeout(
-        () => reject(new Error(`Judge evaluation timed out after ${timeoutMs}ms`)),
-        timeoutMs
+    const executeDispatchWithTimeout = async (): Promise<string> => {
+      let timeoutTimer: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutTimer = setTimeout(
+          () => reject(new Error(`Judge evaluation timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      });
+
+      return Promise.race([
+        dispatchFn({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userContent },
+          ],
+          temperature: options?.temperature ?? 0,
+          response_format: { type: "json_object" },
+        }),
+        timeoutPromise,
+      ]).finally(() => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+      });
+    };
+
+    try {
+      raw = await executeDispatchWithTimeout();
+    } catch (firstErr) {
+      const isTimeout = firstErr instanceof Error && firstErr.message.includes("timed out");
+      if (isTimeout) {
+        retryCount = 1;
+        console.warn(
+          `[SPB ApexLedger] Judge evaluation timed out after ${timeoutMs}ms. Retrying once before fail-open...`
+        );
+        raw = await executeDispatchWithTimeout();
+      } else {
+        throw firstErr;
+      }
+    }
+
+    let parsed = cleanAndParseJson(raw, JudgeCompletionSchema);
+    if (!parsed) {
+      retryCount = 1;
+      console.warn(
+        "[SPB ApexLedger] Judge completion returned unparseable JSON. Retrying once before fail-open..."
       );
-    });
-
-    const raw = await Promise.race([
-      dispatchFn({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: options?.temperature ?? 0,
-        response_format: { type: "json_object" },
-      }),
-      timeoutPromise,
-    ]).finally(() => {
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-    });
-
-    const parsed = cleanAndParseJson(raw, JudgeCompletionSchema);
+      raw = await executeDispatchWithTimeout();
+      parsed = cleanAndParseJson(raw, JudgeCompletionSchema);
+    }
     if (!parsed) throw new Error("Judge completion returned unparseable JSON");
 
     // Clean internal labels from reprompts (Operator item 4)
@@ -1074,6 +1164,7 @@ export async function judgeCompletion(
       operation: "judge",
       latencyMs: Date.now() - startTime,
       fallbackUsed: false,
+      retryCount,
       repromptReason: parsed.isSatisfied ? undefined : parsed.reprompt.slice(0, 80),
       timestamp: Date.now(),
     });
@@ -1085,7 +1176,7 @@ export async function judgeCompletion(
         modelTier: options?.modelTier || "tier_1_apex",
         checkpointRestored: false,
         fallbackTriggered: false,
-        retryCount: 0,
+        retryCount,
         statusCode: 200,
         latencyMs: Date.now() - startTime,
         timestamp: Date.now(),
@@ -1112,7 +1203,7 @@ export async function judgeCompletion(
         checkpointRestored: false,
         fallbackTriggered: true,
         fallbackReason: failReason,
-        retryCount: 0,
+        retryCount,
         statusCode: 200,
         latencyMs: Date.now() - startTime,
         timestamp: Date.now(),
