@@ -30,6 +30,8 @@ export interface SpbTelemetryRecord {
   stagnationDetected?: boolean;
   stagnationRecovered?: boolean;
   spbProfile?: string;
+  retryCount?: number;
+  fallbackReason?: string;
 }
 
 export interface SpbTelemetrySummary {
@@ -38,6 +40,8 @@ export interface SpbTelemetrySummary {
   fallbacksTriggered: number;
   failOpenCount?: number;
   failOpensPerProfile?: Record<string, number>;
+  totalRetries?: number;
+  fallbackReasons?: Record<string, number>;
   phaseDistribution: Record<string, number>;
   tierDistribution: Record<string, number>;
   lastRoutedAt: string | null;
@@ -333,6 +337,16 @@ export function initSpbStateTable(): void {
       // Column already exists
     }
     try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN fallback_reason TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_spb_telemetry_profile ON spb_telemetry_audit(spb_profile);"
       );
@@ -581,8 +595,8 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       `
       INSERT INTO spb_telemetry_audit
       (session_id, task_phase, model_tier, checkpoint_restored, fallback_triggered, status_code, latency_ms, timestamp,
-       stagnation_detected, stagnation_recovered, spb_profile)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       stagnation_detected, stagnation_recovered, spb_profile, retry_count, fallback_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       record.sessionId,
@@ -595,7 +609,9 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       record.timestamp,
       record.stagnationDetected ? 1 : 0,
       record.stagnationRecovered ? 1 : 0,
-      profile
+      profile,
+      record.retryCount ?? 0,
+      record.fallbackReason || null
     );
   } catch (err) {
     console.error("[SPB State] Failed to record telemetry:", err);
@@ -607,6 +623,8 @@ export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySumm
     totalRoutes: 0,
     checkpointsRestored: 0,
     fallbacksTriggered: 0,
+    totalRetries: 0,
+    fallbackReasons: {},
     phaseDistribution: {},
     tierDistribution: {},
     lastRoutedAt: null,
@@ -633,7 +651,8 @@ export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySumm
            COUNT(*) AS total_routes,
            MAX(timestamp) AS max_time,
            SUM(checkpoint_restored) AS checkpoints_restored,
-           SUM(fallback_triggered) AS fallbacks_triggered
+           SUM(fallback_triggered) AS fallbacks_triggered,
+           SUM(retry_count) AS total_retries
          FROM spb_telemetry_audit ${whereClause}`
       )
       .get(...params) as
@@ -642,6 +661,7 @@ export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySumm
           max_time: number | null;
           checkpoints_restored: number;
           fallbacks_triggered: number;
+          total_retries: number;
         }
       | undefined;
 
@@ -675,12 +695,24 @@ export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySumm
       failOpensPerProfile[r.spb_profile || "default"] = r.fail_opens || 0;
     }
 
+    const fallbackReasonRows = db
+      .prepare(
+        `SELECT fallback_reason, COUNT(*) AS count FROM spb_telemetry_audit WHERE fallback_reason IS NOT NULL GROUP BY fallback_reason`
+      )
+      .all() as Array<{ fallback_reason: string; count: number }>;
+    const fallbackReasons: Record<string, number> = {};
+    for (const r of fallbackReasonRows) {
+      fallbackReasons[r.fallback_reason] = r.count;
+    }
+
     return {
       totalRoutes: summaryRow.total_routes,
       checkpointsRestored: summaryRow.checkpoints_restored || 0,
       fallbacksTriggered: summaryRow.fallbacks_triggered || 0,
       failOpenCount: summaryRow.fallbacks_triggered || 0,
       failOpensPerProfile,
+      totalRetries: summaryRow.total_retries || 0,
+      fallbackReasons,
       phaseDistribution,
       tierDistribution,
       lastRoutedAt: summaryRow.max_time ? new Date(summaryRow.max_time).toISOString() : null,

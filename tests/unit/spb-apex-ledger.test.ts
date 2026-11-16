@@ -963,3 +963,90 @@ test("SPB Apex Ledger: schema rejects invalid items and expandLedgerWithApex ret
   assert.equal(res.intents[0].id, "I1");
   assert.deepEqual(res.constraints, ["Use worktree isolation"]);
 });
+
+test("SPB Apex Ledger: schema rejects items targeting .env or secret files", async () => {
+  const invalidSecretItem = {
+    isActionable: true,
+    intents: [
+      {
+        id: "I1",
+        text: "Add JWT secret to env file",
+        kind: "explicit",
+        promptRef: "Add JWT secret",
+        layer: "config",
+        targetFiles: [".env"],
+        acceptance: "JWT secret added",
+      },
+    ],
+    nonGoals: [],
+    constraints: [],
+  };
+
+  const parsed = parseAndValidateJson(JSON.stringify(invalidSecretItem), ApexLedgerExpansionSchema);
+  assert.equal(parsed.success, false);
+  assert.ok(parsed.error.includes("targets sensitive file '.env'"));
+});
+
+test("SPB Apex Ledger: evaluateTestRegression detects regressions against pre-edit baseline", async () => {
+  const { evaluateTestRegression } = await import("../../open-sse/services/spb/apexLedger.ts");
+
+  const baseline = [
+    { command: "npm test", exitCode: 0 },
+    { command: "npm run lint", exitCode: 1 }, // pre-existing failure
+  ];
+
+  const postEditNoRegression = [
+    { command: "npm test", exitCode: 0 },
+    { command: "npm run lint", exitCode: 1 },
+  ];
+
+  const r1 = evaluateTestRegression(baseline, postEditNoRegression);
+  assert.equal(r1.hasRegression, false);
+  assert.equal(r1.regressions.length, 0);
+
+  const postEditWithRegression = [
+    { command: "npm test", exitCode: 1 }, // Regressed! Was 0, now 1
+    { command: "npm run lint", exitCode: 1 }, // Pre-existing, not a regression
+  ];
+
+  const r2 = evaluateTestRegression(baseline, postEditWithRegression);
+  assert.equal(r2.hasRegression, true);
+  assert.equal(r2.regressions.length, 1);
+  assert.ok(r2.regressions[0].includes("passed in baseline (exit 0) but failed post-edit"));
+});
+
+test("SPB Apex Ledger: judgeCompletion strips internal labels from reprompts", async () => {
+  const ledger: IntentLedgerItem[] = [
+    {
+      id: "I1",
+      text: "Implement feature",
+      kind: "explicit",
+      layer: "api",
+      acceptance: "Working",
+      status: "open",
+    },
+  ];
+
+  const evidence: MechanicalEvidence = {
+    diffDelta: { files: [], hashes: {} },
+    testCommands: [],
+    observedReadFiles: [],
+    observedWrittenFiles: [],
+    diffVisible: true,
+  };
+
+  const mockDispatch: ModelDispatchFn = async () => {
+    return JSON.stringify({
+      items: [{ id: "I1", status: "open", evidence: "", missing: "Code not written" }],
+      outOfScopeFiles: [],
+      reprompt: "Complete the implementation. Ensure compliance with Requirement H and Rule 18.",
+      isSatisfied: false,
+    });
+  };
+
+  const res = await judgeCompletion(ledger, evidence, "Not done yet", mockDispatch);
+  assert.equal(res.isSatisfied, false);
+  assert.ok(!res.reprompt.includes("Requirement H"));
+  assert.ok(!res.reprompt.includes("Rule 18"));
+  assert.ok(res.reprompt.includes("Complete the implementation"));
+});
