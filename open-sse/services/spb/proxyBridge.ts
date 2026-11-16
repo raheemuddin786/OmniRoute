@@ -108,6 +108,7 @@ export interface SpbRoutingDecision {
   tierAssignment: TierAssignment;
   selectedModel: string | null;
   checkpointRestored: boolean;
+  guidanceContract?: GuidanceContract;
   enhancement?: PromptEnhancementResult;
   necessity?: NecessityCheckResult;
   enhancedMessages?: Array<{ role: string; content?: unknown }>;
@@ -328,18 +329,64 @@ export async function processSmartProxyRouting(
       if (existingCheckpoint?.guidanceContract && !intent.guidanceContract) {
         const existing = existingCheckpoint.guidanceContract as GuidanceContract;
         const mode = tierConfig?.spbConfig?.intentLedgerMode ?? "off";
-        if ((mode === "apex_guided" || mode === "apex_shadow") && context.dispatchModel) {
+
+        // Operator Fix 2: Only real user messages may trigger follow-up classification; tool-result turns never do.
+        const isToolTurn =
+          intent.isToolResultTurn ||
+          (Array.isArray(messages) &&
+            messages.length > 0 &&
+            messages[messages.length - 1]?.role === "tool");
+
+        if (isToolTurn) {
+          // Tool-result turns strictly retain the existing guidance contract without running follow-up classification
+          intent.guidanceContract = existing;
+        } else if ((mode === "apex_guided" || mode === "apex_shadow") && context.dispatchModel) {
           const followUp = await classifyFollowUp(existing, lastUserText, context.dispatchModel, {
             maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
           });
-          intent.guidanceContract = {
-            ...existing,
-            intents: followUp.ledger,
-          };
-          if (followUp.directive && mode === "apex_guided") {
-            autoRecoveryDirective = autoRecoveryDirective
-              ? `${autoRecoveryDirective}\n\n${followUp.directive}`
-              : followUp.directive;
+
+          // Operator Fix 2: Never replace an active ledger with a smaller or more generic one without logging a reason
+          const existingCount = existing.intents?.length ?? 0;
+          const newCount = followUp.ledger?.length ?? 0;
+          const isGenericCollapse =
+            newCount === 1 &&
+            existingCount > 1 &&
+            followUp.relation !== "new_task" &&
+            followUp.relation !== "amendment";
+
+          if (
+            existingCount > 0 &&
+            (newCount < existingCount || isGenericCollapse) &&
+            followUp.relation === "continuation"
+          ) {
+            try {
+              recordSpbTelemetry({
+                sessionId,
+                taskPhase: intent.taskPhase,
+                modelTier: tierAssignment.tier || "tier_1_apex",
+                checkpointRestored: true,
+                fallbackTriggered: true,
+                statusCode: 200,
+                latencyMs: 0,
+                timestamp: Date.now(),
+                spbProfile: context.spbProfile || "default",
+                operation: "ledger_downgrade_rejected",
+                fallbackReason: `Rejected follow-up collapse: attempted to replace ${existingCount} active items with ${newCount} items during continuation`,
+              });
+            } catch {
+              // Non-blocking telemetry
+            }
+            intent.guidanceContract = existing;
+          } else {
+            intent.guidanceContract = {
+              ...existing,
+              intents: followUp.ledger,
+            };
+            if (followUp.directive && mode === "apex_guided") {
+              autoRecoveryDirective = autoRecoveryDirective
+                ? `${autoRecoveryDirective}\n\n${followUp.directive}`
+                : followUp.directive;
+            }
           }
         } else {
           const resolution = resolveSessionLifecycle(
@@ -438,8 +485,8 @@ export async function processSmartProxyRouting(
       stagnationDetected = true;
       stagnationRecovered = true;
       const duplicateBlockDirective =
-        `[DUPLICATE INSPECTION BLOCKED: The file '${intent.duplicateFilePath}' has already been read multiple times in this session. ` +
-        `Repeatedly reading the same file is strictly prohibited. You MUST proceed immediately to applying edits (Write/Edit) or executing tests.]`;
+        `[SPB Guidance: The file '${intent.duplicateFilePath}' has already been inspected multiple times. ` +
+        `Context from this file has been acquired. Proceed to applying edits (Write/Edit) or executing tests.]`;
       autoRecoveryDirective = autoRecoveryDirective
         ? `${autoRecoveryDirective}\n\n${duplicateBlockDirective}`
         : duplicateBlockDirective;
@@ -562,8 +609,8 @@ export async function processSmartProxyRouting(
         supervisorTier: "tier_2_resilient",
         taskSpecification: rootTaskSpecification,
         constraints: [
-          "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections.",
-          "Immediately perform code modification or test execution using available tools.",
+          "Exploration checkpoint reached: prioritize implementation or verification steps.",
+          "Proceed to code modification or test execution using available tools.",
           "Zero unverified assumptions — all code changes must be tool-verified",
           "Preserve existing architecture and contracts during modifications",
         ],
@@ -578,14 +625,13 @@ export async function processSmartProxyRouting(
       };
       tierAssignment.guidanceContract = activeGuidanceContract;
 
-      // Inject auto-recovery directive into the inbound prompt to override passive exploration
+      // Inject auto-recovery directive into the inbound prompt to override passive exploration (Operator requirement 4)
       autoRecoveryDirective =
-        "[SPB-IR Auto-Recovery Directive: Active Execution Mandate]\n" +
-        "Autonomous execution loop recovery engaged: Excessive consecutive inspection cycles detected (≥ 3 turns)." +
-        "\nYou are prohibited from performing further read-only inspection calls in this turn." +
-        "\nYou must directly write/edit the solution or execute verification tests immediately.";
+        "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
+        "Exploration checkpoint reached. You have gathered sufficient repository context for this task. " +
+        "Proceed to implement the solution using editing tools (Write/Edit) or execute verification tests.";
     } else if (
-      intent.taskPhase === "ARCHITECTURAL_PLANNING" ||
+      (intent.taskPhase === "ARCHITECTURAL_PLANNING" && !activeGuidanceContract) ||
       (!activeGuidanceContract &&
         (tierAssignment.tier === "tier_1_apex" || tierAssignment.tier === "tier_2_resilient"))
     ) {
@@ -652,36 +698,47 @@ export async function processSmartProxyRouting(
         !Array.isArray(activeGuidanceContract.intents) ||
         activeGuidanceContract.intents.length === 0
       ) {
-        const mode = tierConfig?.spbConfig?.intentLedgerMode || "off";
-        if (mode === "apex_guided" || mode === "apex_shadow") {
-          const apexCtx = gatherApexContext({
-            workspaceRoot: context.workspaceRoot,
-            prompt: lastUserText || rootTaskSpecification,
-            conversationMessages: messages,
-          });
-          const expansion = await expandLedgerWithApex(
-            lastUserText || rootTaskSpecification,
-            apexCtx,
-            context.dispatchModel ||
-              (async () => {
-                throw new Error(
-                  "No live dispatch model provided to SPB proxyBridge; falling back to heuristic decomposer"
-                );
-              }),
-            {
-              maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
-              promptAnchorHash: intent.promptAnchorHash,
-              tier: tierAssignment.tier,
-            }
-          );
-          activeGuidanceContract.intents = expansion.intents;
-          activeGuidanceContract.nonGoals = expansion.nonGoals;
-          activeGuidanceContract.contextSource = expansion.contextSource;
-        } else if (mode === "heuristic" || intent.complexityScore >= 0.6) {
-          activeGuidanceContract.intents = decomposeRequestIntoLedger(
-            lastUserText || rootTaskSpecification,
-            tierConfig?.spbConfig?.maxLedgerItems ?? 8
-          );
+        // Operator Fix 2: Never initiate initial expansion on a tool-result turn
+        const isToolTurn =
+          intent.isToolResultTurn ||
+          (Array.isArray(messages) &&
+            messages.length > 0 &&
+            messages[messages.length - 1]?.role === "tool");
+
+        if (!isToolTurn) {
+          const mode = tierConfig?.spbConfig?.intentLedgerMode || "off";
+          if (mode === "apex_guided" || mode === "apex_shadow") {
+            const apexCtx = gatherApexContext({
+              workspaceRoot: context.workspaceRoot,
+              prompt: lastUserText || rootTaskSpecification,
+              conversationMessages: messages,
+            });
+            const expansion = await expandLedgerWithApex(
+              lastUserText || rootTaskSpecification,
+              apexCtx,
+              context.dispatchModel ||
+                (async () => {
+                  throw new Error(
+                    "No live dispatch model provided to SPB proxyBridge; falling back to heuristic decomposer"
+                  );
+                }),
+              {
+                maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
+                promptAnchorHash: intent.promptAnchorHash,
+                tier: tierAssignment.tier,
+                sessionId,
+                profile: context.spbProfile,
+              }
+            );
+            activeGuidanceContract.intents = expansion.intents;
+            activeGuidanceContract.nonGoals = expansion.nonGoals;
+            activeGuidanceContract.contextSource = expansion.contextSource;
+          } else if (mode === "heuristic" || intent.complexityScore >= 0.6) {
+            activeGuidanceContract.intents = decomposeRequestIntoLedger(
+              lastUserText || rootTaskSpecification,
+              tierConfig?.spbConfig?.maxLedgerItems ?? 8
+            );
+          }
         }
       }
       activeGuidanceContract.strictCompletion = tierConfig?.spbConfig?.strictCompletion ?? false;
@@ -854,21 +911,34 @@ export async function processSmartProxyRouting(
       }
 
       if (openItems.length > 0) {
-        checklistDirective =
-          `[SPB-IR Intent Checklist & Scope Fence: ${doneCount}/${activeGuidanceContract.intents.length} Complete]${violationsNotice}\n` +
-          `Active Objectives:\n` +
-          openItems
-            .map(
-              (it) =>
-                `- [${it.id}] (${it.layer.toUpperCase()}) [${it.kind}]: ${it.text} | Acceptance: ${it.acceptance}`
-            )
-            .join("\n") +
-          `\nMandatory Guidelines:\n` +
-          `1. Grounding / Gap Analysis: Inspect existing repository code first. If an item already exists, note it with evidence.\n` +
-          `2. Scope Fence: Confine modifications strictly to the target files required for these open items.\n` +
-          `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.\n` +
-          `4. Initial Inspection Directive: Report your initial assessment as [I#: exists|partial|missing] with cited evidence.\n` +
-          `5. Baseline Verification: Run existing tests to verify baseline pass/fail status before applying changes.`;
+        // Operator requirement 3: Inject turn-1 directives once; later turns get a one-line status
+        const isToolTurn =
+          intent.isToolResultTurn ||
+          (Array.isArray(messages) &&
+            messages.length > 0 &&
+            messages[messages.length - 1]?.role === "tool");
+        const isTurn1 = !isToolTurn && !existingCheckpoint;
+
+        if (isTurn1) {
+          checklistDirective =
+            `[SPB-IR Intent Checklist & Scope Fence: ${doneCount}/${activeGuidanceContract.intents.length} Complete]${violationsNotice}\n` +
+            `Active Objectives:\n` +
+            openItems
+              .map(
+                (it) =>
+                  `- [${it.id}] (${it.layer.toUpperCase()}) [${it.kind}]: ${it.text} | Acceptance: ${it.acceptance}`
+              )
+              .join("\n") +
+            `\nMandatory Guidelines:\n` +
+            `1. Grounding / Gap Analysis: Inspect existing repository code first. If an item already exists, note it with evidence.\n` +
+            `2. Scope Fence: Confine modifications strictly to the target files required for these open items.\n` +
+            `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.\n` +
+            `4. Initial Inspection Directive: Report your initial assessment as [I#: exists|partial|missing] with cited evidence.\n` +
+            `5. Baseline Verification: Run existing tests to verify baseline pass/fail status before applying changes.`;
+        } else {
+          // Later turns get a compact one-line status to prevent token bloat and agent distraction
+          checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete | Active: ${openItems.map((it) => `${it.id} (${it.text.slice(0, 35)})`).join(", ")}]${violationsNotice}`;
+        }
       }
     }
 
@@ -1015,6 +1085,7 @@ export async function processSmartProxyRouting(
       tierAssignment,
       selectedModel,
       checkpointRestored,
+      guidanceContract: activeGuidanceContract,
       enhancement,
       necessity: enhancement?.necessity,
       enhancedMessages,
@@ -1056,6 +1127,7 @@ export async function processSmartProxyRouting(
       tierAssignment: fallbackTier,
       selectedModel: fallbackModel,
       checkpointRestored: false,
+      guidanceContract: existingCheckpoint?.guidanceContract as GuidanceContract | undefined,
       error: errorMsg,
     };
   }

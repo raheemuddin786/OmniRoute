@@ -559,11 +559,11 @@ export function decomposeRequestIntoLedger(
   const getAcceptance = (layer: IntentLayer, _desc?: string): string => {
     switch (layer) {
       case "test":
-        return "Targeted test suite executes and passes with zero failures";
+        return "Automated test suite validates target feature behavior and assertions";
       case "data":
         return "Database migration/schema is idempotent, syntactically valid, and preserved";
       case "ui":
-        return "UI component renders correctly with zero runtime console/hydration errors";
+        return "UI component renders required controls and displays state without runtime exceptions";
       case "api":
         return "Endpoint/service handles payload and validates response correctly";
       case "config":

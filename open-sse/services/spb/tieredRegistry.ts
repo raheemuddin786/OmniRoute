@@ -313,10 +313,11 @@ export function detectAndRecoverFromStagnation(
   if (consecutiveReads >= stagnationThreshold) {
     isStagnant = true;
 
-    // Generate strict recovery directive to break the loop
+    // Softened recovery guidance (Operator requirement 4)
     recoveryDirective =
-      "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections. " +
-      "Proceed immediately to concrete execution using editing tools (Write/Edit) or tests. Do not perform any further read-only exploration.";
+      "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
+      "Exploration checkpoint reached. You have gathered sufficient repository context for this task. " +
+      "Proceed to implement the solution using editing tools (Write/Edit) or execute verification tests.";
     const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 

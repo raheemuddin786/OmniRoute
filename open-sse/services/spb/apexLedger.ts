@@ -139,6 +139,61 @@ export function evaluateTestRegression(
   };
 }
 
+/**
+ * Detects whether test files in the patch had assertions removed, disabled, or skipped.
+ * Used by Completion Judge to prevent agents from passing completion gates by weakening tests.
+ */
+export function detectWeakenedTestsInPatch(patch?: string): {
+  isWeakened: boolean;
+  reason?: string;
+} {
+  if (!patch) return { isWeakened: false };
+
+  const lines = patch.split("\n");
+  let inTestFile = false;
+
+  for (const line of lines) {
+    if (line.startsWith("---") || line.startsWith("+++") || line.startsWith("diff --git")) {
+      inTestFile = /\.(?:test|spec)\.[a-zA-Z0-9]+/i.test(line) || /\/tests?\//i.test(line);
+      continue;
+    }
+
+    if (inTestFile && line.startsWith("+") && !line.startsWith("+++")) {
+      const addedContent = line.slice(1).trim();
+
+      // Flag newly added .skip modifiers
+      if (/\b(?:test|it|describe)\.skip\b/i.test(addedContent)) {
+        return {
+          isWeakened: true,
+          reason: `Test skipped with .skip modifier: '${addedContent.slice(0, 60)}'`,
+        };
+      }
+
+      // Flag commented-out assertions
+      if (/^\/\/\s*(?:expect|assert|should)\b/i.test(addedContent)) {
+        return {
+          isWeakened: true,
+          reason: `Test assertion commented out: '${addedContent.slice(0, 60)}'`,
+        };
+      }
+
+      // Flag trivialized tautological assertions
+      if (
+        /\b(?:expect\s*\(\s*true\s*\)\s*\.toBe\s*\(\s*true\s*\)|assert\s*\.\s*(?:ok|equal)\s*\(\s*true\s*,\s*true\s*\))/i.test(
+          addedContent
+        )
+      ) {
+        return {
+          isWeakened: true,
+          reason: `Test assertion trivialized to always pass: '${addedContent.slice(0, 60)}'`,
+        };
+      }
+    }
+  }
+
+  return { isWeakened: false };
+}
+
 export const ApexIntentItemSchema = z
   .object({
     id: z.string(),
@@ -210,6 +265,19 @@ export const ApexIntentItemSchema = z
           path: ["promptRef"],
         });
       }
+    }
+
+    // 4. Prohibit generic tautologies like 'zero failures', 'all tests pass', etc. in acceptance criteria (Operator requirement 5)
+    if (
+      /\b(?:zero\s+failures?|all\s+tests?\s+pass|no\s+failures?|runs?\s+cleanly|working\s+properly)\b/i.test(
+        data.acceptance
+      )
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Item ${data.id} acceptance criteria must describe observable behavior, never generic 'zero failures' or 'all tests pass'`,
+        path: ["acceptance"],
+      });
     }
   });
 
@@ -587,7 +655,7 @@ export async function expandLedgerWithApex(
     `RULES (STRICT COMPLIANCE REQUIRED):\n` +
     `1. CONSTRAINTS VS INTENTS: Repo conventions (AGENTS.md/CLAUDE.md worktree, base-green, PR rules, git commit attribution) are constraints on HOW the agent works, NEVER ledger items. Put them in "constraints", not in "intents".\n` +
     `2. EXPLICIT ITEMS: "explicit" means the user's own words asked for it. You MUST populate "promptRef" quoting or paraphrasing the exact part of the prompt that justifies it.\n` +
-    `3. DERIVED OBSERVABLE ACCEPTANCE CRITERIA: Acceptance criteria must be observable and derived directly from the prompt or repo. DO NOT invent arbitrary numbers (coverage %, rate limits, row counts), package versions (e.g. @^9.0.0), or non-existent files that neither the user nor the project stack mentioned.\n` +
+    `3. DERIVED OBSERVABLE ACCEPTANCE CRITERIA: Acceptance criteria must describe specific observable system behavior (e.g. 'Renders form with email and password inputs', 'Endpoint returns HTTP 201 with created token ID'). NEVER use generic tautologies like 'zero failures', 'all tests pass', 'runs cleanly', or 'working properly'. DO NOT invent arbitrary numbers (coverage %, rate limits, row counts), package versions (e.g. @^9.0.0), or non-existent files that neither the user nor the project stack mentioned.\n` +
     `4. REQUIRED-IMPLIED VS OPTIONAL:\n` +
     `   - Use "required-implied" ONLY if the explicit ask fails, produces runtime errors, or causes immediate regressions without it (e.g. database schema for persistence, input validation for an endpoint). "required-implied" MUST specify a non-empty "parentId" referencing an explicit item and a non-empty "reason". If the ask succeeds without it, mark it "optional".\n` +
     `   - A "run existing tests" or regression check item is ALWAYS "optional" unless the user explicitly requested tests in their prompt.\n` +
@@ -634,6 +702,7 @@ export async function expandLedgerWithApex(
       : "") +
     `USER PROMPT:\n${prompt}`;
 
+  let retryCount = 0;
   try {
     let raw = await dispatchFn({
       messages: [
@@ -645,7 +714,6 @@ export async function expandLedgerWithApex(
     });
 
     let parseResult = parseAndValidateJson(raw, ApexLedgerExpansionSchema);
-    let retryCount = 0;
 
     // If validation failed, retry ONCE with the specific validation error before falling back (Requirement 3)
     if (!parseResult.success) {
@@ -1223,8 +1291,9 @@ export async function judgeCompletion(
     `1. Mechanical Evidence Only: An item can be marked "done" ONLY if supported by git diff delta, modified file hashes, or zero-exit-code test execution. NEVER mark an item "done" based solely on claims in the assistant's final text.\n` +
     `2. Test Items: Test items require evidence of test execution with exit code 0 or targeted test file modifications accompanied by test commands. If testCommands reports a non-zero exit code (e.g. exitCode != 0) or is missing, the test item MUST remain 'open' or 'blocked' even if the assistant text claims the tests passed. Assistant text claims alone never override tool-reported test results.\n` +
     `3. Pre-Edit Baseline Comparison: Mechanical evidence includes baselineTestCommands (recorded before editing) and testCommands (post-edit). If a test passed at baseline (exitCode: 0) and now fails post-edit (exitCode != 0), this is a REGRESSION; the item MUST be marked 'blocked'. If a test was already failing at baseline (exitCode != 0), it is a pre-existing issue.\n` +
-    `4. Scope Fence: Identify any modified files in the git diff that do NOT serve any item in the ledger as "outOfScopeFiles".\n` +
-    `5. Clean Reprompt (NO INTERNAL LABELS): Reprompts must contain ONLY the concise, factual missing work or actions needed from the agent. NEVER mention internal specification labels (e.g. do NOT include 'Requirement H', 'Requirement A', 'SPB', or 'Rule X') in the reprompt.\n\n` +
+    `4. Weakened Tests / Disabled Assertions: Test assertions MUST NOT be commented out, skipped (e.g. '.skip'), or trivialized to pass artificially. If test files in the diff delta disable assertions, mark the item 'blocked'.\n` +
+    `5. Scope Fence: Identify any modified files in the git diff that do NOT serve any item in the ledger as "outOfScopeFiles".\n` +
+    `6. Clean Reprompt (NO INTERNAL LABELS): Reprompts must contain ONLY the concise, factual missing work or actions needed from the agent. NEVER mention internal specification labels (e.g. do NOT include 'Requirement H', 'Requirement A', 'SPB', or 'Rule X') in the reprompt.\n\n` +
     `JSON Schema:\n` +
     `{\n` +
     `  "items": [\n` +
@@ -1332,6 +1401,23 @@ export async function judgeCompletion(
           parsed.isSatisfied = false;
         }
       }
+    }
+
+    // Weakened test check: prevent completion if test assertions were disabled or skipped (Operator requirement 5)
+    const weakenedCheck = detectWeakenedTestsInPatch(evidence.diffDelta?.patch);
+    if (weakenedCheck.isWeakened) {
+      for (const it of parsed.items) {
+        const matching = ledger.find((l) => l.id === it.id);
+        if (matching?.layer === "test" || /\btest\b/i.test(matching?.text || "")) {
+          it.status = "blocked";
+          it.missing = `Weakened test detected: ${weakenedCheck.reason}. Do not disable assertions or skip tests.`;
+          parsed.isSatisfied = false;
+        }
+      }
+      parsed.isSatisfied = false;
+      parsed.reprompt = parsed.reprompt
+        ? `${weakenedCheck.reason}. ${parsed.reprompt}`
+        : `Test assertions were weakened or skipped (${weakenedCheck.reason}). Implement the code to satisfy full assertions without weakening checks.`;
     }
 
     options?.onTelemetry?.({

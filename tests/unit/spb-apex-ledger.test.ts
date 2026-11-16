@@ -13,6 +13,8 @@ import {
   parseAndValidateJson,
   extractToolEvidenceFromMessages,
   ApexLedgerExpansionSchema,
+  ApexIntentItemSchema,
+  detectWeakenedTestsInPatch,
   type ModelDispatchFn,
 } from "../../open-sse/services/spb/apexLedger.ts";
 import { getSpbTelemetrySummary, initSpbStateTable } from "../../src/lib/db/spbState.ts";
@@ -1174,4 +1176,390 @@ test("SPB Apex Ledger: items added by follow-up reconciliation satisfy schema va
   assert.ok(i2, "New item I2 must be present in reconciled ledger");
   assert.ok(i2?.promptRef, "Explicit item must have non-empty promptRef");
   assert.ok(i2.promptRef.includes("password reset"), "promptRef must reference user ask");
+});
+
+test("SPB Apex Ledger: ApexIntentItemSchema rejects generic 'zero failures' and tautological acceptance criteria", () => {
+  const invalidZeroFailures = {
+    id: "I1",
+    text: "Add login endpoint",
+    kind: "explicit",
+    layer: "api",
+    targetFiles: ["src/api/login.ts"],
+    acceptance: "Targeted test suite executes and passes with zero failures",
+    promptRef: "Add login endpoint",
+  };
+
+  const res1 = ApexIntentItemSchema.safeParse(invalidZeroFailures);
+  assert.equal(res1.success, false, "Should reject acceptance containing 'zero failures'");
+  if (!res1.success) {
+    assert.ok(res1.error.issues.some((i) => i.message.includes("observable behavior")));
+  }
+
+  const invalidAllTestsPass = {
+    id: "I2",
+    text: "Verify tokens",
+    kind: "explicit",
+    layer: "test",
+    targetFiles: ["tests/token.test.ts"],
+    acceptance: "all tests pass cleanly",
+    promptRef: "Verify tokens",
+  };
+
+  const res2 = ApexIntentItemSchema.safeParse(invalidAllTestsPass);
+  assert.equal(res2.success, false, "Should reject acceptance containing 'all tests pass'");
+
+  const validBehavioral = {
+    id: "I3",
+    text: "Add login endpoint",
+    kind: "explicit",
+    layer: "api",
+    targetFiles: ["src/api/login.ts"],
+    acceptance: "Returns HTTP 200 with JWT token payload on valid credentials",
+    promptRef: "Add login endpoint",
+  };
+
+  const res3 = ApexIntentItemSchema.safeParse(validBehavioral);
+  assert.equal(res3.success, true, "Should accept specific observable behavioral criteria");
+});
+
+test("SPB Apex Ledger: detectWeakenedTestsInPatch identifies .skip and disabled assertions in test patches", () => {
+  const normalPatch = `
+--- a/tests/unit/auth.test.ts
++++ b/tests/unit/auth.test.ts
+@@ -10,3 +10,4 @@
++  assert.equal(res.status, 200);
+`;
+  assert.equal(detectWeakenedTestsInPatch(normalPatch).isWeakened, false);
+
+  const skippedTestPatch = `
+--- a/tests/unit/auth.test.ts
++++ b/tests/unit/auth.test.ts
+@@ -10,3 +10,4 @@
++test.skip("auth endpoint", async () => {
+`;
+  const skipCheck = detectWeakenedTestsInPatch(skippedTestPatch);
+  assert.equal(skipCheck.isWeakened, true);
+  assert.ok(skipCheck.reason?.includes(".skip"));
+
+  const commentedAssertionPatch = `
+--- a/tests/unit/auth.test.ts
++++ b/tests/unit/auth.test.ts
+@@ -10,3 +10,4 @@
++// expect(token).toBeDefined();
+`;
+  const commentCheck = detectWeakenedTestsInPatch(commentedAssertionPatch);
+  assert.equal(commentCheck.isWeakened, true);
+  assert.ok(commentCheck.reason?.includes("commented out"));
+
+  const trivializedAssertionPatch = `
+--- a/tests/unit/auth.test.ts
++++ b/tests/unit/auth.test.ts
+@@ -10,3 +10,4 @@
++  expect(true).toBe(true);
+`;
+  const trivialCheck = detectWeakenedTestsInPatch(trivializedAssertionPatch);
+  assert.equal(trivialCheck.isWeakened, true);
+  assert.ok(trivialCheck.reason?.includes("trivialized"));
+});
+
+test("SPB Apex Ledger: judgeCompletion blocks test items when weakened test patch is detected", async () => {
+  const ledger: IntentLedgerItem[] = [
+    {
+      id: "I1",
+      text: "Write unit test for auth verification",
+      kind: "explicit",
+      layer: "test",
+      acceptance: "Test validates bearer token authorization header",
+      status: "open",
+    },
+  ];
+
+  const weakenedEvidence = {
+    diffDelta: {
+      files: ["tests/unit/auth.test.ts"],
+      hashes: { "tests/unit/auth.test.ts": "hash1" },
+      patch: `
+--- a/tests/unit/auth.test.ts
++++ b/tests/unit/auth.test.ts
+@@ -10,3 +10,4 @@
++  // expect(authHeader).toBe("Bearer valid");
+`,
+    },
+    testCommands: [{ command: "npm test", exitCode: 0 }],
+    observedReadFiles: ["tests/unit/auth.test.ts"],
+    observedWrittenFiles: ["tests/unit/auth.test.ts"],
+    diffVisible: true,
+  };
+
+  const mockDispatch: ModelDispatchFn = async () => {
+    return JSON.stringify({
+      items: [{ id: "I1", status: "done", evidence: "Tests ran with exit 0", missing: "" }],
+      outOfScopeFiles: [],
+      reprompt: "",
+      isSatisfied: true,
+    });
+  };
+
+  const result = await judgeCompletion(
+    ledger,
+    weakenedEvidence,
+    "I finished all tests",
+    mockDispatch
+  );
+  assert.equal(
+    result.isSatisfied,
+    false,
+    "Must not satisfy completion when test assertions are commented out"
+  );
+  const testItem = result.items.find((i) => i.id === "I1");
+  assert.equal(testItem?.status, "blocked", "Weakened test item must be blocked");
+  assert.ok(
+    result.reprompt.includes("Weakened test detected") || result.reprompt.includes("weakened")
+  );
+});
+
+test("SPB Proxy Bridge: tool-result turns preserve active ledger without triggering follow-up classification", async () => {
+  initSpbStateTable();
+  const sessionId = `test_tool_turn_preserve_${Date.now()}`;
+
+  setNamedTierConfig("test_tool_preserve_profile", {
+    spbConfig: {
+      intentLedgerMode: "apex_guided",
+      strictCompletion: true,
+      maxLedgerItems: 8,
+    },
+  });
+
+  // Turn 1: Initial human prompt creates active ledger
+  let dispatchCallCount = 0;
+  const mockDispatch = async () => {
+    dispatchCallCount++;
+    return JSON.stringify({
+      isActionable: true,
+      intents: [
+        {
+          id: "I1",
+          text: "Implement feature A",
+          kind: "explicit",
+          layer: "api",
+          targetFiles: ["src/a.ts"],
+          acceptance: "Returns 200 with valid payload",
+          promptRef: "Implement feature A",
+        },
+        {
+          id: "I2",
+          text: "Implement feature B",
+          kind: "explicit",
+          layer: "api",
+          targetFiles: ["src/b.ts"],
+          acceptance: "Returns 201 with created record",
+          promptRef: "Implement feature B",
+        },
+      ],
+      nonGoals: [],
+      constraints: [],
+    });
+  };
+
+  const decisionTurn1 = await processSmartProxyRouting({
+    sessionId,
+    messages: [{ role: "user", content: "Implement feature A and feature B" }],
+    tools: [{ type: "function", function: { name: "test_tool", parameters: {} } }],
+    spbProfile: "test_tool_preserve_profile",
+    dispatchModel: mockDispatch,
+  });
+
+  assert.ok(
+    decisionTurn1.guidanceContract?.intents?.length === 2,
+    "Turn 1 must establish 2-item ledger"
+  );
+  const turn1Expansions = dispatchCallCount;
+
+  // Turn 2: Tool result turn arrives (agent ran a tool, now providing tool_result)
+  const decisionTurn2 = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: "Implement feature A and feature B" },
+      { role: "assistant", content: "Inspecting repo..." },
+      { role: "tool", content: "Found file src/a.ts", tool_call_id: "call_1" },
+    ],
+    tools: [{ type: "function", function: { name: "test_tool", parameters: {} } }],
+    spbProfile: "test_tool_preserve_profile",
+    dispatchModel: mockDispatch,
+  });
+
+  // Verify that Turn 2 preserved the exact 2-item ledger without invoking dispatchModel again
+  assert.equal(
+    decisionTurn2.guidanceContract?.intents?.length,
+    2,
+    "Turn 2 (tool turn) must preserve active 2-item ledger"
+  );
+  assert.equal(
+    dispatchCallCount,
+    turn1Expansions,
+    "Turn 2 must NOT call follow-up classifier or expansion on tool result turn"
+  );
+});
+
+test("SPB Proxy Bridge: ledger downgrade protection prevents collapsing active ledger to single generic item", async () => {
+  initSpbStateTable();
+  const sessionId = `test_downgrade_protect_${Date.now()}`;
+
+  setNamedTierConfig("test_downgrade_protect_profile", {
+    spbConfig: {
+      intentLedgerMode: "apex_guided",
+      strictCompletion: true,
+      maxLedgerItems: 8,
+    },
+  });
+
+  // Turn 1: Establish 3-item ledger
+  const decisionTurn1 = await processSmartProxyRouting({
+    sessionId,
+    messages: [{ role: "user", content: "Build user service, auth service, and db schema" }],
+    tools: [{ type: "function", function: { name: "test_tool", parameters: {} } }],
+    spbProfile: "test_downgrade_protect_profile",
+    dispatchModel: async () =>
+      JSON.stringify({
+        isActionable: true,
+        intents: [
+          {
+            id: "I1",
+            text: "User service",
+            kind: "explicit",
+            layer: "api",
+            targetFiles: ["user.ts"],
+            acceptance: "Works",
+            promptRef: "user service",
+          },
+          {
+            id: "I2",
+            text: "Auth service",
+            kind: "explicit",
+            layer: "api",
+            targetFiles: ["auth.ts"],
+            acceptance: "Works",
+            promptRef: "auth service",
+          },
+          {
+            id: "I3",
+            text: "DB schema",
+            kind: "explicit",
+            layer: "data",
+            targetFiles: ["db.sql"],
+            acceptance: "Works",
+            promptRef: "db schema",
+          },
+        ],
+        nonGoals: [],
+        constraints: [],
+      }),
+  });
+
+  assert.equal(decisionTurn1.guidanceContract?.intents?.length, 3, "Initial ledger has 3 items");
+
+  // Turn 2: User says "continue", but classifier attempts to return collapsed 1-item generic ledger
+  const decisionTurn2 = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: "Build user service, auth service, and db schema" },
+      { role: "assistant", content: "Working..." },
+      { role: "user", content: "continue" },
+    ],
+    tools: [{ type: "function", function: { name: "test_tool", parameters: {} } }],
+    spbProfile: "test_downgrade_protect_profile",
+    dispatchModel: async () =>
+      JSON.stringify({
+        relation: "continuation",
+        directive: "continue",
+        intents: [
+          // Malformed / collapsed single generic item
+          {
+            id: "I1",
+            text: "Targeted test suite executes",
+            kind: "explicit",
+            layer: "test",
+            acceptance: "Zero failures",
+            promptRef: "continue",
+          },
+        ],
+      }),
+  });
+
+  assert.equal(
+    decisionTurn2.guidanceContract?.intents?.length,
+    3,
+    "Ledger downgrade protection must retain all 3 items and reject the 1-item collapse"
+  );
+});
+
+test("SPB Proxy Bridge: injects turn-1 directives once and provides compact one-line status on later turns", async () => {
+  initSpbStateTable();
+  const sessionId = `test_turn1_vs_later_${Date.now()}`;
+
+  setNamedTierConfig("test_turn_directives_profile", {
+    spbConfig: {
+      intentLedgerMode: "apex_guided",
+      strictCompletion: true,
+      maxLedgerItems: 8,
+    },
+  });
+
+  // Turn 1:
+  const decisionTurn1 = await processSmartProxyRouting({
+    sessionId,
+    messages: [{ role: "user", content: "Create API route for items" }],
+    tools: [{ type: "function", function: { name: "test_tool", parameters: {} } }],
+    spbProfile: "test_turn_directives_profile",
+    dispatchModel: async () =>
+      JSON.stringify({
+        isActionable: true,
+        intents: [
+          {
+            id: "I1",
+            text: "Create API route",
+            kind: "explicit",
+            layer: "api",
+            targetFiles: ["src/api/items.ts"],
+            acceptance: "Returns items list",
+            promptRef: "Create API route",
+          },
+        ],
+        nonGoals: [],
+        constraints: [],
+      }),
+  });
+
+  const turn1Content = decisionTurn1.enhancedMessages?.[0]?.content as string;
+  assert.ok(
+    turn1Content.includes("Mandatory Guidelines:"),
+    "Turn 1 must include full guidelines and checklist"
+  );
+  assert.ok(turn1Content.includes("Active Objectives:"), "Turn 1 must list active objectives");
+
+  // Turn 2 (tool turn):
+  const decisionTurn2 = await processSmartProxyRouting({
+    sessionId,
+    messages: [
+      { role: "user", content: "Create API route for items" },
+      { role: "assistant", content: "Reading files..." },
+      { role: "tool", content: "File list: index.ts", tool_call_id: "c1" },
+    ],
+    tools: [{ type: "function", function: { name: "test_tool", parameters: {} } }],
+    spbProfile: "test_turn_directives_profile",
+  });
+
+  // Turn 2 messages should have the compact one-liner rather than repeating the entire 5 mandatory guidelines
+  const allEnhancedContent =
+    decisionTurn2.enhancedMessages
+      ?.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)))
+      .join("\n") || "";
+  assert.ok(
+    allEnhancedContent.includes("[SPB Intent Ledger:") || allEnhancedContent.includes("Complete"),
+    "Turn 2 must include compact one-line status"
+  );
+  assert.ok(
+    !allEnhancedContent.includes("Mandatory Guidelines:"),
+    "Turn 2 must NOT repeat full turn-1 mandatory guidelines boilerplate"
+  );
 });
