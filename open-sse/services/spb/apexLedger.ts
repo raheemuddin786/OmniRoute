@@ -652,12 +652,21 @@ export async function expandLedgerWithApex(
     `${SECURITY_DATA_FENCE_DIRECTIVE}\n\n` +
     `You are the Apex Tier Intent Decomposition Engine for an autonomous agent proxy.\n` +
     `Analyze the user prompt and project context. Decompose the request into a strict Intent Ledger across SDLC layers.\n\n` +
+    `REVIEW LENSES (SDLC PERSPECTIVES TO EXAMINE):\n` +
+    `Examine the ask through these 6 distinct engineering lenses:\n` +
+    `1. QA: Unit, integration, regression verification tests.\n` +
+    `2. Security: Input sanitization, authorization gates, secret protection.\n` +
+    `3. DB/migrations: Persistent storage schema, table migrations, relational integrity.\n` +
+    `4. UX: Error feedback, user-facing contracts, UI components.\n` +
+    `5. DevOps: Build, environment configuration, runtime dependencies.\n` +
+    `6. Docs: API specifications, updated user documentation.\n\n` +
     `RULES (STRICT COMPLIANCE REQUIRED):\n` +
     `1. CONSTRAINTS VS INTENTS: Repo conventions (AGENTS.md/CLAUDE.md worktree, base-green, PR rules, git commit attribution) are constraints on HOW the agent works, NEVER ledger items. Put them in "constraints", not in "intents".\n` +
     `2. EXPLICIT ITEMS: "explicit" means the user's own words asked for it. You MUST populate "promptRef" quoting or paraphrasing the exact part of the prompt that justifies it.\n` +
     `3. DERIVED OBSERVABLE ACCEPTANCE CRITERIA: Acceptance criteria must describe specific observable system behavior (e.g. 'Renders form with email and password inputs', 'Endpoint returns HTTP 201 with created token ID'). NEVER use generic tautologies like 'zero failures', 'all tests pass', 'runs cleanly', or 'working properly'. DO NOT invent arbitrary numbers (coverage %, rate limits, row counts), package versions (e.g. @^9.0.0), or non-existent files that neither the user nor the project stack mentioned.\n` +
     `4. REQUIRED-IMPLIED VS OPTIONAL:\n` +
-    `   - Use "required-implied" ONLY if the explicit ask fails, produces runtime errors, or causes immediate regressions without it (e.g. database schema for persistence, input validation for an endpoint). "required-implied" MUST specify a non-empty "parentId" referencing an explicit item and a non-empty "reason". If the ask succeeds without it, mark it "optional".\n` +
+    `   - An item is required-implied ONLY if the ask fails or is unsafe without it (e.g. database migration for user persistence, auth guard to prevent unauthorized access). "required-implied" MUST specify a non-empty "parentId" referencing an explicit item and a non-empty "reason".\n` +
+    `   - Everything else is optional (e.g. documentation, optional refactors, pre-emptive test suites unless asked). Optional items are reported, not executed by default.\n` +
     `   - A "run existing tests" or regression check item is ALWAYS "optional" unless the user explicitly requested tests in their prompt.\n` +
     `5. NO SECRET OR .ENV MODIFICATIONS: NEVER create ledger items that edit .env, .env.*, secrets, tokens, or credential files. If environment variables or secrets are needed, list them in "constraints" as a configuration note for the user, NEVER as a mutable ledger item or targetFile.\n` +
     `6. GROUNDED FILES & STACK: "targetFiles" must come strictly from the supplied repository tree or match existing project directory conventions. DO NOT guess file paths, directory structures, or third-party frameworks/libraries not present in the supplied project stack.\n` +

@@ -1784,6 +1784,7 @@ export async function processSpbOutboundZeroLoss(args: {
     }
 
     if (
+      mode !== "apex_shadow" &&
       !extracted.hasToolCalls &&
       newlyModifiedCount === 0 &&
       (extracted.observedToolCalls?.length ?? 0) === 0
