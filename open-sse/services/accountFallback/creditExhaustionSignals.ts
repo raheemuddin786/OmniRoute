@@ -62,4 +62,8 @@ export const CREDITS_EXHAUSTED_SIGNALS = [
   // would otherwise leave the account selected forever, since it cannot recover
   // until someone buys credits.
   "credit_balance_exhausted",
+  // Quota-exhaustion markers for free and tiered models:
+  "usage limit reached",
+  "free model usage limit",
+  "quota exceeded",
 ];

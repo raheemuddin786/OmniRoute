@@ -40,6 +40,7 @@ const QUOTA_PATTERNS: ReadonlyArray<RegExp> = [
   /limited\s+to\s+[\d,]+.*(?:calls?|requests?).*per\s+month/i,
   /quota.*exceed/i,
   /exceed.*quota/i,
+  /free model usage limit/i,
   /insufficient.*quota/i,
   /billing.*cap/i,
   /credit.*exhaust/i,
