@@ -29,6 +29,7 @@ import {
   getVisionBridgeConfig,
   isVisionBridgeForcedModel,
 } from "@/shared/constants/visionBridgeDefaults";
+import { isTextOnlyChatTransport } from "@/shared/constants/visionModels";
 import { resolveVisionBridgeRuntimeSettings } from "@/shared/constants/modalityBridgeDefaults";
 import { getBestVisionModel } from "./visionBridgeRouter";
 import { bridgeCacheKey, getSharedBridgeCacheFor } from "./modalityBridge/bridgeCache";
@@ -369,7 +370,7 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     let requestedModelVision: boolean | null = null;
 
     if (!isAuto && !isSpb) {
-      forceVisionBridge = isVisionBridgeForcedModel(model);
+      forceVisionBridge = isVisionBridgeForcedModel(model) || isTextOnlyChatTransport(model);
 
       // 4. Check if model supports vision
       const capabilities = getResolvedModelCapabilities(model);
@@ -484,6 +485,14 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // per-request deep scan of every message content part.
     const runtime = resolveVisionBridgeRuntimeSettings(settings);
     if (!runtime.enabled) {
+      if (forceVisionBridge) {
+        return {
+          block: true,
+          message:
+            "Vision bridge is disabled and requested model does not support image attachments",
+          meta: { reason: "vision_bridge_disabled", requestedModel: model },
+        };
+      }
       return { block: false };
     }
 

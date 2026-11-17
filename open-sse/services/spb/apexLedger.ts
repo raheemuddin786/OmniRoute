@@ -1208,7 +1208,12 @@ export async function classifyFollowUp(
 
     // Heuristic follow-up fallback
     const lower = newMessage.toLowerCase();
-    if (/\b(?:continue|proceed|keep going|go ahead)\b/.test(lower)) {
+    if (
+      /\b(?:continue|proceed|keep going|go ahead|resume|resume directly|token limit hit|output token limit|truncated)\b/.test(
+        lower
+      ) ||
+      (existingIntents.length > 0 && lower.startsWith("output token limit"))
+    ) {
       const unblocked = existingIntents.map((item) =>
         item.status === "blocked" ? { ...item, status: "in_progress" as IntentStatus } : item
       );

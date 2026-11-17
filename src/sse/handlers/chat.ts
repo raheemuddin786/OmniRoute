@@ -1006,6 +1006,33 @@ async function handleChatImplementation(
   const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
   telemetry.endPhase();
 
+  // Agentic conversation tracking (X-ConversationId): resolved once per
+  // incoming HTTP request, before combo dispatch / credential retries, so
+  // every attempt for this request shares the same id and the
+  // agentic_conversations row is only touched once.
+  const clientConversationHeader = request.headers.get("x-omniroute-session-id")?.trim() || null;
+  let conversationId: string | null = null;
+  try {
+    ({ conversationId } = await resolveConversationId({
+      body: body as Record<string, unknown>,
+      model: modelStr,
+      apiKeyId: apiKeyInfo?.id ?? null,
+      clientSessionIdHeader: clientConversationHeader,
+      clientSessionId: resolveClientSessionId(request.headers, body),
+      correlationId: reqId,
+    }));
+  } catch (error) {
+    // Best-effort tracking: a DB hiccup here must not turn an otherwise-working
+    // chat request into a hard failure. Downstream conversationId consumers
+    // already treat null/undefined as "untracked" (see withConversationId).
+    log.warn("CHAT", "resolveConversationId failed, continuing without conversation tracking", {
+      correlationId: reqId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  let videoBridgeLog: ReturnType<typeof deriveVideoBridgeLog> | undefined = undefined;
+
   let spbDecision: SpbRoutingDecision | null = null;
   if (isSpbActive && Array.isArray(body?.messages)) {
     try {
@@ -1329,33 +1356,8 @@ async function handleChatImplementation(
   // #12150 P1b: video-bridge log/Memory shadow — undefined on every
   // non-video request. Threaded through handleSingleModelChat's
   // runtimeOptions -> executeChatWithBreaker -> handleChatCore.
-  const videoBridgeLog = deriveVideoBridgeLog(preCallGuardrails.results, body);
+  videoBridgeLog = deriveVideoBridgeLog(preCallGuardrails.results, body);
   telemetry.endPhase();
-
-  // Agentic conversation tracking (X-ConversationId): resolved once per
-  // incoming HTTP request, before combo dispatch / credential retries, so
-  // every attempt for this request shares the same id and the
-  // agentic_conversations row is only touched once.
-  const clientConversationHeader = request.headers.get("x-omniroute-session-id")?.trim() || null;
-  let conversationId: string | null = null;
-  try {
-    ({ conversationId } = await resolveConversationId({
-      body: body as Record<string, unknown>,
-      model: modelStr,
-      apiKeyId: apiKeyInfo?.id ?? null,
-      clientSessionIdHeader: clientConversationHeader,
-      clientSessionId: resolveClientSessionId(request.headers, body),
-      correlationId: reqId,
-    }));
-  } catch (error) {
-    // Best-effort tracking: a DB hiccup here must not turn an otherwise-working
-    // chat request into a hard failure. Downstream conversationId consumers
-    // already treat null/undefined as "untracked" (see withConversationId).
-    log.warn("CHAT", "resolveConversationId failed, continuing without conversation tracking", {
-      correlationId: reqId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 
   // T08: per-key active session limit (0 = unlimited).
   if (apiKeyInfo?.id && sessionId) {

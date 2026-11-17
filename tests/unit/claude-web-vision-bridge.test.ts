@@ -128,6 +128,28 @@ test("If no bridge model is available, clear error stub is emitted instead of si
   );
 });
 
+test("If vision bridge is disabled, returns clear error blocking request for claude-web", async () => {
+  const guardrail = new VisionBridgeGuardrail({
+    deps: {
+      getSettings: async () => ({
+        visionBridgeEnabled: false,
+      }),
+    },
+  });
+
+  const result = await guardrail.preCall(ANTHROPIC_IMAGE_REQUEST, {
+    model: "claude-web/claude-sonnet-5-5",
+    log: console,
+  });
+
+  assert.equal(result.block, true);
+  assert.equal(result.meta?.reason, "vision_bridge_disabled");
+  assert.ok(
+    result.message?.includes("Vision bridge is disabled"),
+    "must return clear error message"
+  );
+});
+
 test("Without text-only transport override (before fix), claude-web dropped images silently to [Image]", () => {
   // Direct call to claude-web payload transformer without VisionBridge pre-processing
   const claudeWebPayload = transformToClaude(ANTHROPIC_IMAGE_REQUEST);
