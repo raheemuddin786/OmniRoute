@@ -2911,6 +2911,28 @@ async function handleSingleModelChat(
         if (!credentials?.allRateLimited && agy.earliestRetryHintAtMs !== null)
           return agyLease.buildAntigravityPoolBusyResponse(agy.earliestRetryHintAtMs);
         if (credentials?.allRateLimited) {
+          // Task A: When all connections are cooling down for claude-web, fail fast
+          // with earliest reset time instead of sleeping 60s in the queue/cooldown loop.
+          if (provider === "claude-web") {
+            const noCredsRes = handleNoCredentials(
+              credentials,
+              excludedConnectionIds.size > 0 ? Array.from(excludedConnectionIds)[0] : null,
+              provider,
+              model,
+              lastError,
+              lastStatus,
+              undefined,
+              isCombo,
+              null,
+              runtimeOptions?.correlationId ?? null
+            );
+            const lastFailedConnectionId =
+              excludedConnectionIds.size > 0
+                ? Array.from(excludedConnectionIds)[excludedConnectionIds.size - 1]
+                : null;
+            return withSelectedConnectionHeader(noCredsRes, lastFailedConnectionId);
+          }
+
           const retryDecision = getCooldownAwareRetryDecision({
             retryAfter: credentials.retryAfter,
             settings: retrySettings,
