@@ -31,7 +31,11 @@ import {
   type MechanicalEvidence,
   type ModelDispatchFn,
 } from "./apexLedger.ts";
-import { snapshotWorkingTreeDirtyFiles } from "./proxyBridge.ts";
+import {
+  snapshotWorkingTreeDirtyFiles,
+  hasCorruptedToolCalls,
+  getNextFailoverTier,
+} from "./proxyBridge.ts";
 
 /**
  * Marker injected into stream/json responses when a reviewer discrepancy is unresolved.
@@ -74,6 +78,7 @@ export interface ExtractedResponseContent {
   rawChunks: Uint8Array[];
   jsonBody?: Record<string, unknown>;
   hasToolCalls: boolean;
+  hasCorruptedToolCalls?: boolean;
   observedToolCalls?: Array<{ name: string; args: string }>;
 }
 
@@ -581,8 +586,12 @@ export async function extractResponseContent(
       }
 
       // Detect tool calls in JSON
+      let isToolCallsCorrupted = false;
       if (Array.isArray(firstChoiceMsg?.tool_calls) && firstChoiceMsg.tool_calls.length > 0) {
-        hasToolCalls = true;
+        if (hasCorruptedToolCalls(json)) {
+          isToolCallsCorrupted = true;
+        }
+        hasToolCalls = !isToolCallsCorrupted;
         for (const tc of firstChoiceMsg.tool_calls as Array<Record<string, unknown>>) {
           const fn = tc.function as Record<string, unknown> | undefined;
           if (fn && (fn.arguments === "" || fn.arguments === undefined)) {
@@ -599,7 +608,7 @@ export async function extractResponseContent(
           }
         }
       }
-      if (choices?.[0]?.finish_reason === "tool_calls") {
+      if (choices?.[0]?.finish_reason === "tool_calls" && !isToolCallsCorrupted) {
         hasToolCalls = true;
       }
       if (Array.isArray(json?.content)) {
@@ -640,6 +649,7 @@ export async function extractResponseContent(
         rawChunks: [],
         jsonBody: json,
         hasToolCalls,
+        hasCorruptedToolCalls: isToolCallsCorrupted,
         observedToolCalls,
       };
     } catch {
@@ -760,11 +770,46 @@ export async function extractResponseContent(
     }
   }
 
+  let streamCorruptedToolCalls = false;
+  if (observedToolCalls.length > 0) {
+    for (const tc of observedToolCalls) {
+      if (tc.name && tc.name.trim().length > 0) {
+        if (tc.args === "" || tc.args === null || tc.args === undefined) {
+          streamCorruptedToolCalls = true;
+          break;
+        }
+        const trimmed = typeof tc.args === "string" ? tc.args.trim() : "";
+        if (trimmed === "") {
+          streamCorruptedToolCalls = true;
+          break;
+        }
+        if (
+          (trimmed.startsWith("{") && !trimmed.endsWith("}")) ||
+          (trimmed.startsWith("[") && !trimmed.endsWith("]"))
+        ) {
+          streamCorruptedToolCalls = true;
+          break;
+        }
+        try {
+          JSON.parse(trimmed);
+        } catch {
+          streamCorruptedToolCalls = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (streamCorruptedToolCalls) {
+    hasToolCalls = false;
+  }
+
   return {
     text: accumulatedText,
     isStream: true,
     rawChunks,
     hasToolCalls,
+    hasCorruptedToolCalls: streamCorruptedToolCalls,
     observedToolCalls,
   };
 }
@@ -1470,9 +1515,55 @@ export async function processSpbOutboundZeroLoss(args: {
       .length || 0;
   const effectiveMaxReprompts = Math.min(configuredMaxReprompts, Math.max(1, initialOpenCount + 1));
 
+  let currentTier = args.tier;
+  let consecutiveZeroDiffTurns = 0;
+  const sentRepromptHashes = new Set<string>();
+
   while (repromptCount <= effectiveMaxReprompts) {
     const extracted = await extractResponseContent(currentResponse);
     lastExtracted = extracted;
+
+    // Check for corrupted tool calls (e.g. empty arguments "" or malformed JSON)
+    if (extracted.hasCorruptedToolCalls) {
+      const nextTier = getNextFailoverTier(currentTier);
+      console.warn(
+        `[SPB Outbound ZeroLoss] Corrupted tool call detected from upstream model. Promoting tier from ${currentTier} to ${nextTier}.`
+      );
+      try {
+        recordSpbTelemetry({
+          sessionId: args.sessionId,
+          taskPhase: args.taskPhase,
+          modelTier: nextTier,
+          checkpointRestored: false,
+          fallbackTriggered: true,
+          statusCode: 200,
+          latencyMs: 0,
+          timestamp: Date.now(),
+          spbProfile: args.spbProfile || "default",
+          operation: "tier_failover_corrupted_tool_call",
+          fallbackReason: `Corrupted tool calls emitted in ${currentTier}; escalated to ${nextTier}`,
+        });
+      } catch {
+        // Non-blocking telemetry
+      }
+
+      if (nextTier !== currentTier) {
+        currentTier = nextTier;
+        try {
+          const escalatedBody = {
+            ...args.body,
+            _spbTierPromotion: nextTier,
+          };
+          const failoverResponse = await args.dispatchModel(escalatedBody);
+          if (failoverResponse.ok) {
+            currentResponse = failoverResponse;
+            continue;
+          }
+        } catch (failoverErr) {
+          console.warn("[SPB Outbound ZeroLoss] Tier failover dispatch failed:", failoverErr);
+        }
+      }
+    }
 
     // Observe tool calls on active ledger
     if (extracted.hasToolCalls) {
@@ -1687,8 +1778,59 @@ export async function processSpbOutboundZeroLoss(args: {
       }
     }
 
+    let newlyModifiedCount = 0;
+    if (diffReview?.actualModifiedFiles) {
+      newlyModifiedCount = diffReview.actualModifiedFiles.length;
+    }
+
+    if (
+      !extracted.hasToolCalls &&
+      newlyModifiedCount === 0 &&
+      (extracted.observedToolCalls?.length ?? 0) === 0
+    ) {
+      consecutiveZeroDiffTurns++;
+      if (consecutiveZeroDiffTurns === 1) {
+        evalResult.suggestedReprompt =
+          "EXECUTION DIRECTIVE: You have not used any tools or modified any files. Proceed immediately to concrete execution using editing tools (Edit/Write/Bash) instead of conversational output.";
+        evalResult.isSatisfied = false;
+      } else if (consecutiveZeroDiffTurns >= 2) {
+        const promotedTier = getNextFailoverTier(currentTier);
+        if (promotedTier !== currentTier && promotedTier !== "tier_1_apex") {
+          console.warn(
+            `[SPB Outbound ZeroLoss] Consecutive zero-diff turns detected. Escalating from ${currentTier} to ${promotedTier}.`
+          );
+          currentTier = promotedTier;
+          try {
+            const escalatedBody = {
+              ...args.body,
+              _spbTierPromotion: promotedTier,
+            };
+            const failoverResponse = await args.dispatchModel(escalatedBody);
+            if (failoverResponse.ok) {
+              currentResponse = failoverResponse;
+              continue;
+            }
+          } catch {}
+        } else {
+          // At Apex tier or cannot escalate further: halt loop cleanly, mark open items blocked
+          evalResult.isSatisfied = true;
+          if (activeContract?.intents) {
+            for (const item of activeContract.intents) {
+              if (item.status === "open" || item.status === "in_progress") {
+                item.status = "blocked";
+                item.evidence = "Terminated: consecutive zero-diff turns reached tier limit";
+              }
+            }
+            updateGuidanceContract(args.sessionId, activeContract);
+          }
+        }
+      }
+    } else if (extracted.hasToolCalls || newlyModifiedCount > 0) {
+      consecutiveZeroDiffTurns = 0;
+    }
+
     console.log(
-      `[SPB Outbound ZeroLoss] Session ${args.sessionId} | Phase: ${args.taskPhase} | Tier: ${args.tier} | Satisfaction: ${evalResult.satisfactionScore.toFixed(2)} | Satisfied: ${evalResult.isSatisfied} | Omissions: ${evalResult.omissions.length} | ReviewerDiscrepancy: ${reviewerDiscrepancyDetected} | RepromptCount: ${repromptCount}`
+      `[SPB Outbound ZeroLoss] Session ${args.sessionId} | Phase: ${args.taskPhase} | Tier: ${currentTier} | Satisfaction: ${evalResult.satisfactionScore.toFixed(2)} | Satisfied: ${evalResult.isSatisfied} | Omissions: ${evalResult.omissions.length} | ReviewerDiscrepancy: ${reviewerDiscrepancyDetected} | RepromptCount: ${repromptCount}`
     );
 
     // If response satisfies 100% of intention criteria, max iterations reached, or tool call generated
@@ -1701,7 +1843,9 @@ export async function processSpbOutboundZeroLoss(args: {
       let ledgerSummary: string | undefined;
       const isExhaustedOrBlocked =
         !extracted.hasToolCalls &&
-        (repromptCount >= effectiveMaxReprompts || Boolean(ledgerEval?.isBlocked));
+        (repromptCount >= effectiveMaxReprompts ||
+          Boolean(ledgerEval?.isBlocked) ||
+          consecutiveZeroDiffTurns >= 2);
       if (isExhaustedOrBlocked) {
         const finalContract = getCheckpoint(args.sessionId)?.guidanceContract as
           GuidanceContract | undefined;
@@ -1764,7 +1908,7 @@ export async function processSpbOutboundZeroLoss(args: {
 
     // Response failed criteria: formulate targeted re-prompt and query upstream again
     // For empty or severely truncated outputs in autonomous / tool-using sessions, supply a continuation prompt
-    const repromptText =
+    let repromptText =
       evalResult.suggestedReprompt ||
       (!extracted.text.trim()
         ? "Your previous response was empty or contained no user-visible output or tool execution. Please continue autonomous execution immediately and supply substantive progress or output."
@@ -1773,6 +1917,15 @@ export async function processSpbOutboundZeroLoss(args: {
     if (!repromptText) {
       break;
     }
+
+    // Never repeat the exact same reprompt text; if already sent, differentiate or stop
+    if (sentRepromptHashes.has(repromptText.trim())) {
+      repromptText = `${repromptText.trim()} (Attempt ${repromptCount + 1}: please address the outstanding items directly).`;
+      if (sentRepromptHashes.has(repromptText.trim())) {
+        break;
+      }
+    }
+    sentRepromptHashes.add(repromptText.trim());
 
     repromptCount++;
     const currentMessages = Array.isArray(args.body?.messages)

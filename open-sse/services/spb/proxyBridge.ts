@@ -1151,3 +1151,63 @@ export function shouldTriggerZeroLossFallback(statusCode: number): boolean {
     statusCode === 529
   );
 }
+
+/**
+ * Inspects a response payload or object for corrupted tool calls.
+ * Flags empty/whitespace arguments or malformed/unparseable JSON arguments.
+ */
+export function hasCorruptedToolCalls(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+
+  // Check choices[0].message.tool_calls
+  const choices = Array.isArray(p.choices) ? (p.choices as Array<Record<string, unknown>>) : [];
+  const toolCalls =
+    choices[0]?.message && typeof choices[0].message === "object"
+      ? (choices[0].message as Record<string, unknown>).tool_calls
+      : Array.isArray(p.tool_calls)
+        ? p.tool_calls
+        : null;
+
+  if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+    for (const tc of toolCalls as Array<Record<string, unknown>>) {
+      const fn = tc?.function as Record<string, unknown> | undefined;
+      if (fn && typeof fn.name === "string" && fn.name.trim().length > 0) {
+        if (fn.arguments === undefined || fn.arguments === null) {
+          return true;
+        }
+        if (typeof fn.arguments === "string") {
+          const trimmed = fn.arguments.trim();
+          if (trimmed === "") return true;
+          if (
+            (trimmed.startsWith("{") && !trimmed.endsWith("}")) ||
+            (trimmed.startsWith("[") && !trimmed.endsWith("]"))
+          ) {
+            return true;
+          }
+          try {
+            JSON.parse(trimmed);
+          } catch {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Determines the next promoted failover tier in the SPB hierarchy:
+ * local (tier_3) -> resilient (tier_2) -> apex (tier_1).
+ */
+export function getNextFailoverTier(currentTier: ModelTier | string): ModelTier {
+  if (currentTier === "tier_3_local" || currentTier === "local") {
+    return "tier_2_resilient";
+  }
+  if (currentTier === "tier_2_resilient" || currentTier === "resilient") {
+    return "tier_1_apex";
+  }
+  return "tier_1_apex";
+}
