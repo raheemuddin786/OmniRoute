@@ -345,20 +345,17 @@ export async function processSmartProxyRouting(
             maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
           });
 
-          // Operator Fix 2: Never replace an active ledger with a smaller or more generic one without logging a reason
+          // Reject smaller or generic replacement ledgers and log operation ledger_downgrade_rejected
           const existingCount = existing.intents?.length ?? 0;
           const newCount = followUp.ledger?.length ?? 0;
           const isGenericCollapse =
-            newCount === 1 &&
-            existingCount > 1 &&
-            followUp.relation !== "new_task" &&
-            followUp.relation !== "amendment";
-
-          if (
+            newCount === 1 && existingCount > 1 && followUp.relation !== "new_task";
+          const isDowngrade =
             existingCount > 0 &&
             (newCount < existingCount || isGenericCollapse) &&
-            followUp.relation === "continuation"
-          ) {
+            followUp.relation !== "new_task";
+
+          if (isDowngrade) {
             try {
               recordSpbTelemetry({
                 sessionId,
@@ -371,7 +368,7 @@ export async function processSmartProxyRouting(
                 timestamp: Date.now(),
                 spbProfile: context.spbProfile || "default",
                 operation: "ledger_downgrade_rejected",
-                fallbackReason: `Rejected follow-up collapse: attempted to replace ${existingCount} active items with ${newCount} items during continuation`,
+                fallbackReason: `Rejected follow-up collapse: attempted to replace ${existingCount} active items with ${newCount} items during ${followUp.relation}`,
               });
             } catch {
               // Non-blocking telemetry

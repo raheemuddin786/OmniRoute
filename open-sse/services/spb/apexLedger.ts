@@ -1191,7 +1191,13 @@ export async function classifyFollowUp(
     }
 
     // new_task
-    const freshItems = heuristicFallback(newMessage, maxItems);
+    const freshItems =
+      Array.isArray(parsed.intents) && parsed.intents.length > 0
+        ? parsed.intents.map((item) => ({
+            ...item,
+            status: (item.status || "open") as IntentStatus,
+          }))
+        : heuristicFallback(newMessage, maxItems);
     return {
       relation: "new_task",
       ledger: freshItems,
@@ -1206,14 +1212,9 @@ export async function classifyFollowUp(
       timestamp: Date.now(),
     });
 
-    // Heuristic follow-up fallback
-    const lower = newMessage.toLowerCase();
-    if (
-      /\b(?:continue|proceed|keep going|go ahead|resume|resume directly|token limit hit|output token limit|truncated)\b/.test(
-        lower
-      ) ||
-      (existingIntents.length > 0 && lower.startsWith("output token limit"))
-    ) {
+    // When an active ledger already exists, any classification failure or error MUST strictly default
+    // to continuation to guarantee zero intention loss. Only a successful Apex classification may return new_task.
+    if (existingIntents.length > 0) {
       const unblocked = existingIntents.map((item) =>
         item.status === "blocked" ? { ...item, status: "in_progress" as IntentStatus } : item
       );
@@ -1221,14 +1222,6 @@ export async function classifyFollowUp(
         relation: "continuation",
         ledger: unblocked,
         directive: "[SPB Continuation Directive: Proceed with remaining open objectives]",
-      };
-    }
-
-    if (/\b(?:actually|skip|instead|don't|also add)\b/.test(lower)) {
-      return {
-        relation: "amendment",
-        ledger: existingIntents,
-        directive: "[SPB Amendment Directive: Maintain current objectives with noted adjustments]",
       };
     }
 
