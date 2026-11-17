@@ -200,6 +200,7 @@ function resolveToolCallKey(state, tc, incomingName: string): number {
   const upstreamIdx = typeof tc.index === "number" ? tc.index : 0;
   if (!(state._toolIdxRemap instanceof Map)) state._toolIdxRemap = new Map();
   const key = state._toolIdxRemap.get(upstreamIdx) ?? upstreamIdx;
+  if (!(state.toolCalls instanceof Map)) state.toolCalls = new Map();
   const existing = state.toolCalls.get(key);
   if (!existing || !isDistinctToolCall(existing, tc, incomingName)) return key;
   const fresh = typeof state._toolKeySeq === "number" ? state._toolKeySeq : -1;
@@ -278,9 +279,11 @@ function flushTruncatedClaudeStream(state) {
   const results = [];
   stopThinkingBlock(state, results);
   stopTextBlock(state, results);
-  for (const [, toolInfo] of state.toolCalls) {
-    if (!toolInfo.startEmitted || typeof toolInfo.blockIndex !== "number") continue;
-    results.push({ type: "content_block_stop", index: toolInfo.blockIndex });
+  if (state.toolCalls instanceof Map) {
+    for (const [, toolInfo] of state.toolCalls) {
+      if (!toolInfo.startEmitted || typeof toolInfo.blockIndex !== "number") continue;
+      results.push({ type: "content_block_stop", index: toolInfo.blockIndex });
+    }
   }
   state.upstreamError = {
     status: 502,
@@ -425,6 +428,7 @@ export function openaiToClaudeResponse(chunk, state) {
     }
     state.model = chunk.model || "unknown";
     state.nextBlockIndex = 0;
+    if (!(state.toolCalls instanceof Map)) state.toolCalls = new Map();
     state._pendingXmlToolCalls = [];
     state._dsmlHoldback = undefined;
     state._xmlInvokeBuffer = "";
@@ -684,6 +688,7 @@ export function openaiToClaudeResponse(chunk, state) {
       // id and function.name in SEPARATE SSE chunks. The Claude protocol cannot
       // patch a content_block_start after it is emitted, so content_block_start
       // is DEFERRED until the name arrives (#2077 / decolua/9router#2077).
+      if (!(state.toolCalls instanceof Map)) state.toolCalls = new Map();
       if (!state.toolCalls.has(idx) && (tc.id || incomingName || tc.function?.arguments)) {
         state.toolCalls.set(idx, createToolCallEntry(tc, incomingName));
       }
@@ -830,32 +835,34 @@ export function openaiToClaudeResponse(chunk, state) {
     // message_delta/message_stop below.
     emitResponsesWebSearch(state, results);
 
-    for (const [, toolInfo] of state.toolCalls) {
-      // A tool call whose name/args never arrived (only an id chunk was seen)
-      // still has a reserved block index but no content_block_start. Emit it now
-      // so the terminal content_block_stop is not orphaned (#2077 edge case).
-      if (!toolInfo.startEmitted) emitToolUseStart(state, toolInfo, results);
+    if (state.toolCalls instanceof Map) {
+      for (const [, toolInfo] of state.toolCalls) {
+        // A tool call whose name/args never arrived (only an id chunk was seen)
+        // still has a reserved block index but no content_block_start. Emit it now
+        // so the terminal content_block_stop is not orphaned (#2077 edge case).
+        if (!toolInfo.startEmitted) emitToolUseStart(state, toolInfo, results);
 
-      // For shimmed tools, emit one corrective input_json_delta with the
-      // fully patched JSON before closing the block. A refusal must not release
-      // the buffered arguments: the block is closed empty instead.
-      if (toolInfo.shimmed && choice.finish_reason !== "content_filter") {
-        const patched = applyToolCallShimToBuffer(
-          toolInfo.name,
-          toolInfo.argBuffer || "",
-          findToolCallSchema(toolInfo.name, state.toolSchemas)
-        );
+        // For shimmed tools, emit one corrective input_json_delta with the
+        // fully patched JSON before closing the block. A refusal must not release
+        // the buffered arguments: the block is closed empty instead.
+        if (toolInfo.shimmed && choice.finish_reason !== "content_filter") {
+          const patched = applyToolCallShimToBuffer(
+            toolInfo.name,
+            toolInfo.argBuffer || "",
+            findToolCallSchema(toolInfo.name, state.toolSchemas)
+          );
+          results.push({
+            type: "content_block_delta",
+            index: toolInfo.blockIndex,
+            delta: { type: "input_json_delta", partial_json: patched },
+          });
+        }
+
         results.push({
-          type: "content_block_delta",
+          type: "content_block_stop",
           index: toolInfo.blockIndex,
-          delta: { type: "input_json_delta", partial_json: patched },
         });
       }
-
-      results.push({
-        type: "content_block_stop",
-        index: toolInfo.blockIndex,
-      });
     }
 
     // Emit any XML-extracted tool calls (from models like Dracarys that

@@ -380,7 +380,9 @@ function handleMessageDelta(event: Record<string, unknown>, state: ProtocolState
 }
 
 function handleMessageStop(state: ProtocolState): SemanticEvent {
-  assertInMessage(state, "message_stop", true);
+  assertInMessage(state, "message_stop", false);
+  state.openBlocks.clear();
+  state.toolBlocks.clear();
   state.phase = "stopped";
   return { kind: "finish", stopReason: state.stopReason };
 }
