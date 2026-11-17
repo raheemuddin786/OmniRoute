@@ -36,6 +36,7 @@ import {
   collectJinaNativeModalities,
   isJinaNativeEmbeddingInput,
 } from "@/shared/validation/jinaNativeEmbeddingInput";
+import { getCircuitBreaker } from "@/shared/utils/circuitBreaker";
 import {
   collectGeminiNativeModalities,
   isGeminiEmbedding2Family,
@@ -781,18 +782,38 @@ async function fetchBedrockEmbeddingBatch(
 async function dispatchEmbeddingRequest(
   prepared: PreparedEmbeddingRequest,
   singleTexts: string[] | null,
-  reqLogger: RequestLogger
+  reqLogger: RequestLogger,
+  provider?: string
 ): Promise<Response> {
   // The plan is only ever set for `nativeInvokeProtocol: "bedrock-invoke"`.
   if (prepared.bedrock) return fetchBedrockEmbeddingBatch(prepared, prepared.bedrock, reqLogger);
   if (singleTexts) return fetchClovaEmbeddingBatch(prepared, singleTexts, reqLogger);
   reqLogger.logTargetRequest(prepared.upstreamUrl, prepared.headers, prepared.upstreamBody);
-  return fetch(prepared.upstreamUrl, {
-    method: "POST",
-    headers: prepared.headers,
-    body: JSON.stringify(prepared.upstreamBody),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+
+  const fetchOnce = () =>
+    fetch(prepared.upstreamUrl, {
+      method: "POST",
+      headers: prepared.headers,
+      body: JSON.stringify(prepared.upstreamBody),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+
+  try {
+    return await fetchOnce();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isConnRefused = /ECONNREFUSED|connect ECONNREFUSED/i.test(msg);
+    if (isConnRefused && provider) {
+      getCircuitBreaker(provider)._onFailure();
+      throw err;
+    }
+    const isSocketHangup = /socket hang up|ECONNRESET|fetch failed/i.test(msg);
+    if (isSocketHangup) {
+      // 1 retry on a fresh connection for socket hangup
+      return await fetchOnce();
+    }
+    throw err;
+  }
 }
 
 function pipelinePayloads(
@@ -998,7 +1019,12 @@ async function executeEmbedding(
   if (singleTextsOrFailure && !Array.isArray(singleTextsOrFailure)) return singleTextsOrFailure;
   const singleTexts = Array.isArray(singleTextsOrFailure) ? singleTextsOrFailure : null;
   try {
-    const response = await dispatchEmbeddingRequest(prepared, singleTexts, runtime.reqLogger);
+    const response = await dispatchEmbeddingRequest(
+      prepared,
+      singleTexts,
+      runtime.reqLogger,
+      runtime.provider
+    );
     // Fan-out providers make one upstream call per body/text; count each one.
     const requestCount = prepared.bedrock?.bodies.length ?? singleTexts?.length ?? 1;
     return response.ok
