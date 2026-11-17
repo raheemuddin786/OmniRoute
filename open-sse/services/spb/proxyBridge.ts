@@ -363,7 +363,7 @@ export async function processSmartProxyRouting(
               recordSpbTelemetry({
                 sessionId,
                 taskPhase: intent.taskPhase,
-                modelTier: tierAssignment.tier || "tier_1_apex",
+                modelTier: "tier_1_apex",
                 checkpointRestored: true,
                 fallbackTriggered: true,
                 statusCode: 200,

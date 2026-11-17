@@ -1104,7 +1104,21 @@ async function handleChatImplementation(
           null,
           false
         );
-        return await dispatchRes.text();
+        const resText = await dispatchRes.text();
+        try {
+          const parsed = JSON.parse(resText);
+          if (parsed && typeof parsed === "object" && "choices" in parsed) {
+            const firstChoice = (parsed as { choices?: Array<{ message?: { content?: unknown } }> })
+              .choices?.[0];
+            const content = firstChoice?.message?.content;
+            if (typeof content === "string") {
+              return content;
+            }
+          }
+        } catch {
+          // Pass raw text through
+        }
+        return resText;
       };
 
       spbDecision = await processSmartProxyRouting({
