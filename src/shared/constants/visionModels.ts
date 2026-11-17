@@ -93,7 +93,13 @@ export function isTextOnlyChatTransport(providerOrModel: string | null | undefin
   const provider = providerOrModel?.trim().toLowerCase().split("/")[0];
   // The Playground executor serializes text messages only, even when the
   // underlying model supports images through another provider's native API.
-  return provider === "cloudflare-playground" || provider === "cfp";
+  // The claude-web executor drops binary image blocks because claude.ai upload is not implemented.
+  return (
+    provider === "cloudflare-playground" ||
+    provider === "cfp" ||
+    provider === "claude-web" ||
+    provider === "cw"
+  );
 }
 
 /**
