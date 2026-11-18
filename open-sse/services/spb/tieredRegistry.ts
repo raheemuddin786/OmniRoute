@@ -322,10 +322,20 @@ export function detectAndRecoverFromStagnation(
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
     // Escalate tier assignment:
-    // When stagnation occurs, ALWAYS enforce concrete execution via tier_2_resilient.
-    // Never escalate to ARCHITECTURAL_PLANNING / Tier 1 Apex, as planning tiers perform
-    // further read-only inspection and create secondary loops.
-    escalationTier = "tier_2_resilient";
+    // If already on tier_2_resilient and stagnation persists across repeated inspection cycles
+    // (consecutiveReads >= stagnationThreshold * 2), escalate to tier_1_apex for architectural re-evaluation.
+    // Otherwise, enforce concrete execution via tier_2_resilient.
+    const currentTier = existingCheckpoint?.modelTier || "tier_2_resilient";
+    if (currentTier === "tier_2_resilient" && consecutiveReads >= stagnationThreshold * 2) {
+      escalationTier = "tier_1_apex";
+      newTaskPhase = "ARCHITECTURAL_PLANNING";
+      recoveryDirective =
+        "[Auto-Recovery Directive: APEX REASONING ESCALATION]\n" +
+        "Repeated non-mutating tool cycles detected on execution tier. Re-evaluating strategy with architectural guidance. " +
+        "Synthesize gathered context and formulate a direct file-modification action plan.";
+    } else {
+      escalationTier = "tier_2_resilient";
+    }
 
     // CRITICAL FIX: Do NOT reset consecutiveReads to 0 upon detection.
     // Resetting here causes an alternating-turn amnesia loop (turn 2 detected -> reset to 0 ->

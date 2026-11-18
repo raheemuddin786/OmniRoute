@@ -534,11 +534,21 @@ async function applySpbOutboundZeroLoss(
     // Update checkpoint with satisfaction score for cross-tier restoration
     // We need to extract the satisfaction score from the response headers
     const satisfactionHeader = evaluatedResponse.headers.get("X-OmniRoute-SPB-Satisfaction");
+    let satisfactionScore: number | null = null;
     if (satisfactionHeader) {
-      const satisfactionScore = parseFloat(satisfactionHeader);
-      if (!isNaN(satisfactionScore)) {
-        updateCheckpointSatisfaction(sessionId, satisfactionScore);
+      const parsed = parseFloat(satisfactionHeader);
+      if (!isNaN(parsed)) {
+        satisfactionScore = parsed;
       }
+    }
+
+    // Fallback: If HTTP 200 response completed cleanly without error, assign a baseline satisfaction of 0.95
+    if (satisfactionScore === null && evaluatedResponse.ok) {
+      satisfactionScore = 0.95;
+    }
+
+    if (satisfactionScore !== null) {
+      updateCheckpointSatisfaction(sessionId, satisfactionScore);
     }
 
     return evaluatedResponse;

@@ -503,21 +503,28 @@ export async function processSmartProxyRouting(
 
     // If stagnation recovery specified an escalation tier, enforce it immediately
     if (isStagnant && stagnationRecovery.escalationTier) {
-      const resilientModels =
-        tierConfig?.tierModels?.resilient ||
-        (tierConfig?.tierModels as Record<string, string[]> | undefined)?.tier_2_resilient;
+      const targetTierKey =
+        stagnationRecovery.escalationTier === "tier_1_apex"
+          ? "apex"
+          : stagnationRecovery.escalationTier === "tier_3_local"
+            ? "local"
+            : "resilient";
+
+      const tierModels =
+        tierConfig?.tierModels?.[targetTierKey] ||
+        (tierConfig?.tierModels as Record<string, string[]> | undefined)?.[
+          stagnationRecovery.escalationTier
+        ];
       tierAssignment = {
         tier: stagnationRecovery.escalationTier,
         recommendedModels:
-          resilientModels && resilientModels.length > 0
-            ? resilientModels
-            : tierAssignment.recommendedModels,
+          tierModels && tierModels.length > 0 ? tierModels : tierAssignment.recommendedModels,
         guidanceContract: tierAssignment.guidanceContract || intent.guidanceContract,
         requiresTools: intent.requiresTools,
         complexityScore: intent.complexityScore,
       };
       console.log(
-        `[SPB Bridge] Session ${sessionId} | Stagnation recovery tier applied: ${tierAssignment.tier}`
+        `[SPB Bridge] Session ${sessionId} | Stagnation recovery tier applied: ${tierAssignment.tier} (models: ${tierAssignment.recommendedModels?.join(", ")})`
       );
     }
     console.log(
@@ -574,11 +581,28 @@ export async function processSmartProxyRouting(
       normalizedGuidanceContract = intent.guidanceContract;
     }
 
-    const selectedModel =
-      restoredModel ||
-      (tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
-        ? tierAssignment.recommendedModels[0]
-        : null);
+    // When stagnant, do not reuse restoredModel if it is the model that became stagnant;
+    // rotate or alternate models within the tier if multiple models are configured.
+    let selectedModel = restoredModel;
+    if (
+      isStagnant &&
+      restoredModel &&
+      tierAssignment.recommendedModels &&
+      tierAssignment.recommendedModels.length > 1
+    ) {
+      const alternate = tierAssignment.recommendedModels.find((m) => m !== restoredModel);
+      if (alternate) {
+        selectedModel = alternate;
+        console.log(
+          `[SPB Bridge] Session ${sessionId} | Stagnation model rotated from ${restoredModel} to ${selectedModel}`
+        );
+      }
+    } else if (!selectedModel) {
+      selectedModel =
+        tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
+          ? tierAssignment.recommendedModels[0]
+          : null;
+    }
 
     // 5. Synthesize or propagate guidanceContract across session turns
     let activeGuidanceContract: GuidanceContract | undefined =
