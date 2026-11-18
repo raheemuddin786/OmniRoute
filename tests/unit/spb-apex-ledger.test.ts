@@ -382,7 +382,7 @@ test("SPB Apex Ledger: judgeCompletion flags outOfScopeFiles and reprompts agent
   assert.ok(res.reprompt.includes("revert"));
 });
 
-test("SPB Apex Ledger: judgeCompletion marks done_unverified when diff is not visible (remote proxy)", async () => {
+test("SPB Apex Ledger: judgeCompletion marks open when diff is not visible and no mechanical evidence (remote proxy)", async () => {
   const ledger: IntentLedgerItem[] = [
     {
       id: "I1",
@@ -411,8 +411,9 @@ test("SPB Apex Ledger: judgeCompletion marks done_unverified when diff is not vi
 
   const res = await judgeCompletion(ledger, evidence, "UI updated", mockDispatch);
   assert.equal(modelCalled, false);
-  assert.equal(res.isSatisfied, true);
-  assert.equal(res.items[0].status, "done_unverified");
+  assert.equal(res.isSatisfied, false);
+  assert.equal(res.items[0].status, "open");
+  assert.ok(res.reprompt.includes("not yet completed"));
 });
 
 test("SPB Apex Ledger: judgeCompletion fails open cleanly on judge error or timeout (Requirement C)", async () => {
