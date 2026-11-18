@@ -2508,11 +2508,17 @@ export function isAccountUnavailable(unavailableUntil: string | Date | null | un
   return Number.isFinite(ms) && ms > Date.now();
 }
 
+import { BaseExecutor } from "../executors/base.ts";
+
 /**
- * Calculate unavailable until timestamp
+ * Calculate unavailable until timestamp with jitter to prevent retry thundering herd
  */
-export function getUnavailableUntil(cooldownMs: number): string {
-  return new Date(Date.now() + cooldownMs).toISOString();
+export function getUnavailableUntil(
+  cooldownMs: number,
+  random: () => number = Math.random
+): string {
+  const jitteredMs = BaseExecutor.jitterRetryDelayMs(cooldownMs, random);
+  return new Date(Date.now() + jitteredMs).toISOString();
 }
 
 /**

@@ -1,4 +1,13 @@
 import { formatRetryAfter } from "@omniroute/open-sse/services/accountFallback.ts";
+import { BaseExecutor } from "@omniroute/open-sse/executors/base.ts";
+
+/**
+ * Jitter retry delay using BaseExecutor's standard equal jitter helper:
+ * spreads retries over [baseMs * 0.5, baseMs] to prevent thundering herd.
+ */
+export function jitterCooldownDelayMs(baseMs: number, random: () => number = Math.random): number {
+  return BaseExecutor.jitterRetryDelayMs(baseMs, random);
+}
 import { resolveResilienceSettings } from "@/lib/resilience/settings";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 
@@ -134,25 +143,14 @@ export function getCooldownAwareRetryDecision({
   attempt,
   budgetLeftMs,
   lastErrorCode,
+  random = Math.random,
 }: {
   retryAfter: unknown;
   settings: CooldownAwareRetrySettings;
   attempt: number;
-  /**
-   * Remaining cumulative wait budget (ms) for this request. Defaults to
-   * settings.budgetMs when omitted (single-call-site backward compat) —
-   * pass the caller's tracked remainder once it starts decrementing it
-   * across attempts (#7360 follow-up).
-   */
   budgetLeftMs?: number;
-  /**
-   * errorCode of the connection whose cooldown ends first. An auth cooldown (401) has no
-   * known end: waiting for it re-sends the request into the same 401 and another token
-   * refresh on every retry, turning a ~3 s failure into minutes. With
-   * COOLDOWN_RETRY_SKIP_REFUSALS_ENABLED on, a 403 (access refused) or a 410 (gone) skips
-   * the wait the same way (#16305).
-   */
   lastErrorCode?: unknown;
+  random?: () => number;
 }): {
   shouldRetry: boolean;
   retryAfter: string | null;
@@ -186,11 +184,12 @@ export function getCooldownAwareRetryDecision({
     };
   }
 
+  const jitteredWaitMs = jitterCooldownDelayMs(closest.waitMs, random);
   return {
     shouldRetry: true,
     retryAfter: closest.retryAfter,
     retryAfterHuman: closest.retryAfterHuman,
-    waitMs: closest.waitMs,
+    waitMs: jitteredWaitMs,
   };
 }
 
