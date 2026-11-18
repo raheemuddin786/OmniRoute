@@ -21,7 +21,11 @@ import {
 } from "./rateLimitManager/requestCap.ts";
 import { getAntigravityQuotaFamily } from "./antigravityQuotaFamily.ts";
 import { getCodexRateLimitKey } from "../executors/codex.ts";
-import { awaitProviderDefaultSlot, setProviderQuotaOverrides } from "./providerDefaultRateLimit.ts";
+import {
+  awaitProviderDefaultSlot,
+  setProviderQuotaOverrides,
+  resolveProviderQuotaCooldownMs,
+} from "./providerDefaultRateLimit.ts";
 import {
   DEFAULT_RESILIENCE_SETTINGS,
   resolveResilienceSettings,
@@ -986,12 +990,12 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
     const counts = limiter.counts();
     const limiterKey = getLimiterKey(provider, connectionId, model);
     const parsedWaitMs = retryAfterStr ? parseResetTime(retryAfterStr) : null;
-    const effectiveCooldownMs =
-      parsedWaitMs && parsedWaitMs > 0
-        ? parsedWaitMs
-        : provider === "claude-web" || provider === "claude"
-          ? 60_000
-          : 30_000;
+    const effectiveCooldownMs = resolveProviderQuotaCooldownMs({
+      provider,
+      retryAfterMs: parsedWaitMs,
+      isQuotaExhausted: false,
+      fallbackTransientMs: provider === "claude-web" || provider === "claude" ? 60_000 : 30_000,
+    });
 
     // Record retry-after hint for dynamic queue budget
     if (parsedWaitMs && parsedWaitMs > 0) {
@@ -1333,8 +1337,21 @@ export function updateFromResponseBody(
   if (!enabledConnections.has(connectionId)) return;
 
   const { retryAfterMs, reason } = parseRetryAfterFromBody(responseBody);
+  const isQuota =
+    reason === "quota_exhausted" ||
+    (typeof responseBody === "string"
+      ? responseBody.toLowerCase().includes("usage limit") ||
+        responseBody.toLowerCase().includes("plan limit")
+      : false);
 
-  if (retryAfterMs && retryAfterMs > 0) {
+  const effectiveRetryMs = resolveProviderQuotaCooldownMs({
+    provider,
+    retryAfterMs,
+    isQuotaExhausted: isQuota,
+    fallbackTransientMs: 0,
+  });
+
+  if (effectiveRetryMs && effectiveRetryMs > 0) {
     const key = getLimiterKey(provider, connectionId, model);
     const scopedModel = key === getLimiterKey(provider, connectionId) ? null : model;
     const budgetMs = resolveRequestQueueMaxWaitMs(provider, undefined, connectionId);
@@ -1343,17 +1360,17 @@ export function updateFromResponseBody(
       const pausedAt = Date.now(); // Bottleneck's refresh clock starts when the limiter is built
       const limiter = getLimiter(provider, connectionId, model);
       logRateLimit(
-        `🚫 [RATE-LIMIT] ${provider}:${connectionId.slice(0, 8)} — body-parsed retry: ${Math.ceil(retryAfterMs / 1000)}s (${reason})`
+        `🚫 [RATE-LIMIT] ${provider}:${connectionId.slice(0, 8)} — body-parsed retry: ${Math.ceil(effectiveRetryMs / 1000)}s (${reason})`
       );
       updateLimiterSettings(limiter, {
         reservoir: 0,
         reservoirRefreshAmount: 60,
-        reservoirRefreshInterval: retryAfterMs,
+        reservoirRefreshInterval: effectiveRetryMs,
       });
-      bodyRetryPause.rememberLimiterPause(limiter, pausedAt + retryAfterMs);
+      bodyRetryPause.rememberLimiterPause(limiter, pausedAt + effectiveRetryMs);
     }
     // Record retry-after hint for dynamic queue budget
-    recordUpstreamRetryAfterHint(provider, connectionId, retryAfterMs);
+    recordUpstreamRetryAfterHint(provider, connectionId, effectiveRetryMs);
   }
 
   if (status !== 429) return;

@@ -259,6 +259,7 @@ export const updateResilienceSchema = z
             concurrency: z.number().int().min(1).optional(),
             providerConcurrency: z.number().int().min(0).max(100_000).optional(),
             rateLimitCooldownSeconds: z.number().int().min(1).max(21_600).optional(),
+            quotaWindowSeconds: z.number().int().min(1).max(86_400).optional(),
           })
           .strict()
       )

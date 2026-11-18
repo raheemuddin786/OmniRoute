@@ -502,6 +502,10 @@ function normalizeProviderQuotaOverrideEntry(raw: unknown): ProviderQuotaOverrid
   if (cooldownSeconds !== undefined) {
     out.rateLimitCooldownSeconds = Math.min(cooldownSeconds, 21_600);
   }
+  const quotaWindowSeconds = pickTruncated(record.quotaWindowSeconds, (n) => n >= 1);
+  if (quotaWindowSeconds !== undefined) {
+    out.quotaWindowSeconds = Math.min(quotaWindowSeconds, 86_400);
+  }
   return Object.keys(out).length > 0 ? out : null;
 }
 

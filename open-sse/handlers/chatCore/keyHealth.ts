@@ -33,6 +33,8 @@ import {
 import { isModelUnavailableError } from "../../services/modelFamilyFallback.ts";
 import { hasPerModelQuota } from "../../services/accountFallback.ts";
 import { updateProviderConnection } from "@/lib/db/providers";
+import { resolveProviderQuotaCooldownMs } from "../../services/providerDefaultRateLimit.ts";
+import { isSubscriptionQuotaText } from "../../services/quotaTextCooldowns.ts";
 
 type KeyHealthLog = {
   warn?: (tag: string, message: string) => void;
@@ -168,7 +170,16 @@ export function recordKeyHealthStatus(
     if (hasPerModelQuota(provider429)) {
       return;
     }
-    const cooldownMs = retryAfterMs && retryAfterMs > 0 ? retryAfterMs : DEFAULT_KEY_COOLDOWN_MS;
+    const isQuotaExhausted = isSubscriptionQuotaText(
+      failureDetail ? failureDetail.toLowerCase() : "",
+      provider429
+    );
+    const cooldownMs = resolveProviderQuotaCooldownMs({
+      provider: provider429,
+      retryAfterMs,
+      isQuotaExhausted,
+      fallbackTransientMs: DEFAULT_KEY_COOLDOWN_MS,
+    });
     const updatedHealth = recordKeyCooldown(connId, currentKeyId, cooldownMs);
     log?.warn?.(
       "AUTH",

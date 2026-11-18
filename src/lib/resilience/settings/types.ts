@@ -240,6 +240,11 @@ export interface ProviderQuotaOverrideSettings {
    * `rotationOverrides.rateLimitResetSeconds` still wins. Missing = engine default ("Auto").
    */
   rateLimitCooldownSeconds?: number;
+  /**
+   * Quota window length (seconds) for quota-window / reset-window based providers.
+   * Default is 5 hours (18,000s) for quota-window providers when upstream does not send a reset header.
+   */
+  quotaWindowSeconds?: number;
 }
 
 export interface StreamRecoverySettings {
