@@ -260,7 +260,12 @@ export function markConnectionQuotaExhausted(
   model?: string | null
 ): void {
   try {
-    if (markAntigravityModelQuotaExhausted(connectionId, retryAfterMs, model)) return;
+    if (model) {
+      // Fire-and-forget the family lock; once `accountFallback.ts` has finished
+      // evaluating, `lockModel` runs synchronously within the event loop.
+      void markAntigravityModelQuotaExhausted(connectionId, retryAfterMs, model);
+      return; // family lock installed; skip whole-connection cooldown
+    }
     setConnectionRateLimitUntil(connectionId, Date.now() + retryAfterMs);
   } catch {}
 }

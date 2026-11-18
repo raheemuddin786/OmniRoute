@@ -2,7 +2,6 @@
  * Persist Antigravity/agy quota cooldowns per model family (gemini, claude, argon)
  * on the connection row, without cooling the whole account.
  */
-import { lockModel } from "./accountFallback.ts";
 import {
   type AntigravityQuotaFamily,
   getAntigravityQuotaFamily,
@@ -30,12 +29,13 @@ function dummyModelForFamily(family: Exclude<AntigravityQuotaFamily, "other">): 
   return `${family}-family-lock`;
 }
 
-function lockAntigravityFamilyModel(
+async function lockAntigravityFamilyModel(
   connectionId: string,
   model: string,
   reason: string,
   cooldownMs: number
-): void {
+): Promise<void> {
+  const { lockModel } = await import("./accountFallback.ts");
   lockModel("agy", connectionId, model, reason, cooldownMs);
   lockModel("antigravity", connectionId, model, reason, cooldownMs);
 }
@@ -99,7 +99,12 @@ export async function persistAntigravityPreflightFamilyLock(params: {
   unavailableUntil: string;
 }): Promise<void> {
   const cooldownMs = Math.max(0, Date.parse(params.unavailableUntil) - Date.now());
-  lockAntigravityFamilyModel(params.connectionId, params.model, "quota_exhausted", cooldownMs);
+  await lockAntigravityFamilyModel(
+    params.connectionId,
+    params.model,
+    "quota_exhausted",
+    cooldownMs
+  );
   await persistAntigravityFamilyCooldown({
     connectionId: params.connectionId,
     model: params.model,
@@ -122,11 +127,11 @@ export function getAntigravityFamilyCooldownUntil(
   return family !== "other" && Number.isFinite(untilMs) && untilMs > now ? untilMs : null;
 }
 
-export function rehydrateAntigravityFamilyLocks(
+export async function rehydrateAntigravityFamilyLocks(
   provider: string,
   connectionId: string,
   providerSpecificData: JsonRecord | null | undefined
-): void {
+): Promise<void> {
   if (!isAntigravityQuotaProvider(provider)) return;
   const now = Date.now();
   for (const family of ["gemini", "claude", "argon"] as const) {
@@ -134,17 +139,17 @@ export function rehydrateAntigravityFamilyLocks(
     if (untilMs === null) continue;
     const model = dummyModelForFamily(family);
     const remainingMs = untilMs - now;
-    lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", remainingMs);
+    await lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", remainingMs);
   }
 }
 
-export function rehydrateAntigravityFamilyLocksForConnections(
+export async function rehydrateAntigravityFamilyLocksForConnections(
   provider: string,
   connections: Array<{ id: string; providerSpecificData?: unknown }>
-): void {
+): Promise<void> {
   if (!isAntigravityQuotaProvider(provider)) return;
   for (const conn of connections) {
-    rehydrateAntigravityFamilyLocks(
+    await rehydrateAntigravityFamilyLocks(
       provider,
       conn.id,
       conn.providerSpecificData as JsonRecord | null | undefined
@@ -153,13 +158,13 @@ export function rehydrateAntigravityFamilyLocksForConnections(
 }
 
 /** Family lock for executor quota exhaustion. Returns false when model is absent. */
-export function markAntigravityModelQuotaExhausted(
+export async function markAntigravityModelQuotaExhausted(
   connectionId: string,
   retryAfterMs: number,
   model?: string | null
-): boolean {
+): Promise<boolean> {
   if (!model) return false;
-  lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", retryAfterMs);
+  void lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", retryAfterMs);
   persistAntigravityFamilyCooldownIfQuota({
     provider: "agy",
     connectionId,

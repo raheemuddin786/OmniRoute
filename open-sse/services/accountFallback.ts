@@ -30,7 +30,7 @@ import { getM365FailureScope } from "./m365ErrorPolicy.ts";
 import { isContentPolicyRefusal } from "../utils/contentPolicyError.ts";
 import { isRequestScopedMisalignmentRefusal } from "../utils/providerSafety.ts";
 import { isRegistryPassthroughProvider } from "./passthroughRegistry.ts";
-import { getProviderCategory, isLocalProvider } from "../config/providerRegistry.ts";
+import { getProviderCategory } from "../config/providerRegistry.ts";
 import {
   DEFAULT_RESILIENCE_SETTINGS,
   resolveResilienceSettings,
@@ -52,11 +52,7 @@ import {
   type FailureKind,
 } from "../../src/shared/utils/classify429";
 import { recordProviderSuccess as resetCooldownFailureCount } from "./providerCooldownTracker.ts";
-import {
-  resolveProviderId,
-  isLocalProvider as isLocalProviderId,
-  isSelfHostedChatProvider,
-} from "../../src/shared/constants/providers";
+import { resolveProviderId } from "../../src/shared/constants/providers";
 import { resolveUseUpstream429BreakerHints } from "../../src/shared/utils/providerHints";
 import { getCodexModelScope } from "../config/codexQuotaScopes.ts";
 import {
@@ -81,6 +77,7 @@ import {
 import { googleDailyQuotaCooldownMs } from "./googleDailyQuota.ts";
 import { isMoonshotAccountBalanceExhausted } from "./usage/moonshotOpenPlatform.ts";
 import { isTpdRateLimit, resolveTpdCooldownMs, nextConfiguredResetMs } from "./dailyQuotaReset.ts";
+import { hasPerModelQuota } from "../services/accountFallback.ts";
 
 // Pre-compiled regex constants for hot-path retry parsing (avoid per-call compilation)
 const RETRY_AFTER_RE = /retry\s+after\s+(\d+)\s*s/i;
@@ -539,10 +536,6 @@ export function isOAuthInvalidToken(errorText: string): boolean {
 
 // ─── Resilience Profile Helper ──────────────────────────────────────────────
 
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
-}
-
 function isCompatibleProvider(provider: string | null | undefined): boolean {
   return (
     typeof provider === "string" &&
@@ -970,36 +963,7 @@ function isPassthroughCreditScope(provider: string | null | undefined): boolean 
  * @param connectionPassthroughModels - Optional per-connection override from providerSpecificData.
  *        When provided, takes precedence over registry/provider-level logic.
  */
-export function hasPerModelQuota(
-  provider: string | null | undefined,
-  _model: string | null | undefined = null,
-  connectionPassthroughModels?: boolean
-): boolean {
-  // Connection-level override takes precedence (e.g., user-configured ModelScope)
-  if (typeof connectionPassthroughModels === "boolean") {
-    return connectionPassthroughModels;
-  }
-  if (!provider) return false;
-  const canonicalId = resolveProviderId(provider);
-  if (getCanonicalLockProvider(canonicalId) === "antigravity") return true;
-  if (getCanonicalLockProvider(canonicalId) === "codex") return true;
-  if (canonicalId === "gemini" || canonicalId === "github") return true;
-  if (canonicalId === "antigravity" || canonicalId === "agy") return true;
-  // #18572: Qoder multiplexes every model behind one connection and answers a queued
-  // request with `503 upstream_busy` naming the model that was queued. Treating that as a
-  // connection cooldown parks every sibling model of the account, so it belongs on the
-  // per-model allowlist instead.
-  if (canonicalId === "qoder") return true;
-  // #11071: getPassthroughProviders() reads the open-sse REGISTRY. A provider can declare
-  // passthroughModels:true in the SHARED registry (src/shared/constants/providers/) and be
-  // absent from that set — 40 of them are, and they are neither local nor self-hosted, so the
-  // branch below never reaches them either. Without this lookup a missing-model 404 on one of
-  // those cools the whole connection instead of locking out the single model.
-  if (isRegistryPassthroughProvider(canonicalId)) return true;
-  if (isCompatibleProvider(canonicalId)) return true;
-  if (isLocalProviderId(canonicalId) || isSelfHostedChatProvider(canonicalId)) return true;
-  return false;
-}
+export { hasPerModelQuota } from "./accountFallback/hasPerModelQuota.ts";
 
 /**
  * Lock a model (not connection) for a provider with per-model quotas.

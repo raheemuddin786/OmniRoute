@@ -8,7 +8,7 @@
  * hasPerModelQuota("claude") is false and a 429 stays account-wide.
  */
 import { resolveProviderId } from "../../../src/shared/constants/providers";
-import { hasPerModelQuota } from "../accountFallback.ts";
+import { hasPerModelQuota } from "./hasPerModelQuota.ts";
 import { isModelScopedAccessDenial } from "./modelScopedAccessDenial.ts";
 
 // Bounded quantifiers keep this ReDoS-safe.

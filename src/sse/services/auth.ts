@@ -1040,7 +1040,7 @@ export async function getProviderCredentials(
         );
       }
     }
-    rehydrateAntigravityFamilyLocksForConnections(provider, connections);
+    await rehydrateAntigravityFamilyLocksForConnections(provider, connections);
     // allowedConnections: restrict to specific connection IDs (from API key policy, #363)
     if (allowedConnections && allowedConnections.length > 0) {
       connections = connections.filter((conn) => allowedConnections.includes(conn.id));
