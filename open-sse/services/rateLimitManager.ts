@@ -1432,4 +1432,17 @@ export function isProviderModelRateLimitPaused(
   }
 }
 
+/**
+ * Returns true if a candidate's cooldown wait exceeds the remaining queue budget maxWaitMs,
+ * indicating the router should fail over immediately to the next combo/tier member instead
+ * of throwing the queue-budget error.
+ */
+export function shouldFailoverCandidateWhenCooldownExceedsBudget(params: {
+  cooldownRemainingMs: number;
+  budgetMs: number;
+}): boolean {
+  const { cooldownRemainingMs, budgetMs } = params;
+  return Number.isFinite(cooldownRemainingMs) && cooldownRemainingMs > budgetMs;
+}
+
 setRateLimitPauseChecker(isProviderModelRateLimitPaused);
