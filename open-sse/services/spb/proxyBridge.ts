@@ -21,6 +21,7 @@ import {
   escalateFromStagnation,
 } from "./tieredRegistry.ts";
 import { getTierConfig } from "../tierResolver.ts";
+import { observeChangeProtocol } from "./changeProtocol/observer.ts";
 import { saveCheckpoint, getCheckpoint, recordSpbTelemetry } from "../../../src/lib/db/spbState.ts";
 import {
   maybeCcrReplace,
@@ -287,6 +288,15 @@ export async function processSmartProxyRouting(
 
     // 2. Classify intent with error boundary (using classification messages)
     const intent = classifyIntent(classificationMessages, tools);
+
+    // Observe change protocol (non-blocking, log-only in observe mode)
+    void observeChangeProtocol({
+      sessionId,
+      messages,
+      isToolResultTurn: intent.isToolResultTurn,
+      taskPhase: intent.taskPhase,
+      spbProfile: context.spbProfile,
+    });
 
     // Extract latest user content & detect structured payload format
     let lastUserIndex = -1;
