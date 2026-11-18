@@ -1487,13 +1487,57 @@ async function handleChatImplementation(
     const configuredTargets = tierModels[tierKey] || [];
     let selectedTarget: string | null = null;
 
+    // Helper to check if a model target is available via existing preflight without duplicating logic
+    const checkCandidateAvailable = async (candidateModelStr: string): Promise<boolean> => {
+      try {
+        const { provider, resolvedModel } = getTargetProvider(candidateModelStr);
+        const creds = await getProviderCredentialsWithQuotaPreflight(
+          provider,
+          null,
+          allowedConnections,
+          resolvedModel,
+          {
+            connectionRestrictionSources: restrictions.sources,
+            requireToolCalling: hasQoderCallerTools(body),
+            preferredConnectionIds: apiKeyInfo?.preferredConnections ?? null,
+          }
+        );
+        if (!creds || (typeof creds === "object" && "allRateLimited" in creds)) {
+          return false;
+        }
+        if (typeof creds === "object" && "connectionId" in creds && creds.connectionId) {
+          const connId = String(creds.connectionId);
+          if (
+            "rateLimitedUntil" in creds &&
+            isAccountUnavailable(creds.rateLimitedUntil as string)
+          ) {
+            return false;
+          }
+          if (isModelLocked(provider, connId, resolvedModel)) {
+            return false;
+          }
+        }
+        return true;
+      } catch {
+        return true; // Fail open on resolution errors
+      }
+    };
+
     if (tierMode === "user") {
       // In user mode: strictly select from the user-configured models for this tier.
       // Truthful reporting: do NOT cross-fallback to other tiers or auto-discovered free models.
       if (spbDecision?.selectedModel && configuredTargets.includes(spbDecision.selectedModel)) {
         selectedTarget = spbDecision.selectedModel;
       } else if (configuredTargets.length > 0) {
-        selectedTarget = configuredTargets[0];
+        for (const target of configuredTargets) {
+          if (await checkCandidateAvailable(target)) {
+            selectedTarget = target;
+            break;
+          }
+        }
+        if (!selectedTarget) {
+          selectedTarget = configuredTargets[0];
+        }
       } else {
         log.error(
           "SPB",
@@ -1505,14 +1549,41 @@ async function handleChatImplementation(
         );
       }
     } else {
-      selectedTarget =
-        spbDecision?.selectedModel ||
-        configuredTargets[0] ||
-        (activeTier === "tier_1_apex"
-          ? tierModels.resilient?.[0] || tierModels.local?.[0]
-          : activeTier === "tier_3_local"
-            ? tierModels.resilient?.[0] || tierModels.apex?.[0]
-            : tierModels.apex?.[0] || tierModels.local?.[0]);
+      // Walk configured tier candidates in order, skipping cooled/locked accounts
+      for (const target of configuredTargets) {
+        if (await checkCandidateAvailable(target)) {
+          selectedTarget = target;
+          break;
+        }
+      }
+
+      // If all targets in current tier are cooled, try next tier in priority order
+      if (!selectedTarget) {
+        const nextTierOrder =
+          activeTier === "tier_1_apex"
+            ? (tierModels.resilient || []).concat(tierModels.local || [])
+            : activeTier === "tier_3_local"
+              ? (tierModels.resilient || []).concat(tierModels.apex || [])
+              : (tierModels.apex || []).concat(tierModels.local || []);
+
+        for (const fallbackTarget of nextTierOrder) {
+          if (await checkCandidateAvailable(fallbackTarget)) {
+            selectedTarget = fallbackTarget;
+            break;
+          }
+        }
+      }
+
+      if (!selectedTarget) {
+        selectedTarget =
+          spbDecision?.selectedModel ||
+          configuredTargets[0] ||
+          (activeTier === "tier_1_apex"
+            ? tierModels.resilient?.[0] || tierModels.local?.[0]
+            : activeTier === "tier_3_local"
+              ? tierModels.resilient?.[0] || tierModels.apex?.[0]
+              : tierModels.apex?.[0] || tierModels.local?.[0]);
+      }
 
       // Fallback: If no custom model is configured in the tier, resolve candidates dynamically
       // from free tier models or dynamic provider mapping (e.g. resolveVirtualTierModels)
@@ -2209,6 +2280,7 @@ async function handleChatImplementation(
   if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
     // 1. If SPB is active and recommended alternative tier models, attempt fallback across remaining models
     if (isSpbActive && spbDecision?.tierAssignment?.recommendedModels?.length) {
+      const currentTierConfig = getTierConfig(spbProfileName);
       const activeTierKey =
         spbDecision.tierAssignment.tier === "tier_1_apex"
           ? "apex"
