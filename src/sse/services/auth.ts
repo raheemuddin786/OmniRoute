@@ -91,6 +91,7 @@ import { buildNoAuthModelCooldown, pauseCooldownIfPaused } from "./noAuthModelCo
 import { isRequestShapeError } from "./requestShape.ts";
 import { getCreditsMode } from "@omniroute/open-sse/services/antigravityCredits.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
+import { isQuotaWindowProvider } from "@omniroute/open-sse/services/providerDefaultRateLimit.ts";
 import {
   isAccountUnavailable,
   getUnavailableUntil,
@@ -813,6 +814,39 @@ type DeferredLeaseSelection = {
   commitSelectionSideEffects?: () => Promise<void> | void;
   selectNextLeaseCandidate?: (excludedConnectionId: string) => Promise<unknown>;
 };
+
+/**
+ * Select the connection with the most headroom (lowest recent usage/consecutive count)
+ * among available (non-cooldown) accounts for quota-window providers.
+ */
+export function selectQuotaHeadroomConnection<
+  T extends {
+    id: string;
+    rateLimitedUntil?: string | null;
+    recentRequestCount?: number;
+    consecutiveUseCount?: number | null;
+    lastUsedAt?: string | null;
+    priority?: number | null;
+  },
+>(candidates: T[]): T | undefined {
+  const available = candidates.filter(
+    (c) => !c.rateLimitedUntil || !isAccountUnavailable(c.rateLimitedUntil)
+  );
+  if (available.length === 0) return undefined;
+
+  return [...available].sort((a, b) => {
+    // 1. Explicit recentRequestCount (least used since last reset/window)
+    const aReq = a.recentRequestCount ?? a.consecutiveUseCount ?? 0;
+    const bReq = b.recentRequestCount ?? b.consecutiveUseCount ?? 0;
+    if (aReq !== bReq) return aReq - bReq;
+
+    // 2. Oldest lastUsedAt
+    if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
+    if (!a.lastUsedAt) return -1;
+    if (!b.lastUsedAt) return 1;
+    return new Date(a.lastUsedAt).getTime() - new Date(b.lastUsedAt).getTime();
+  })[0];
+}
 
 function planLastUsedCommit(
   connection: ProviderConnectionView,
@@ -1921,38 +1955,56 @@ export async function getProviderCredentials(
       const idx =
         parseInt(randomUUID().replace(/-/g, "").substring(0, 8), 16) % orderedConnections.length;
       connection = orderedConnections[idx];
-    } else if (strategy === "least-used" || strategy === "expiry-first") {
-      // Least Used: pick the one with oldest lastUsedAt.
-      // #12279: prefer accounts without backoff first, the same tie-break the
-      // round-robin fallback branch applies. Without it the oldest lastUsedAt
-      // could belong to an account that just 429'd, so a failover landed on it
-      // for one request before the next call settled on a healthy account.
-      const sorted = [...orderedConnections].sort((a, b) => {
-        const aBackoff = a.backoffLevel || 0;
-        const bBackoff = b.backoffLevel || 0;
-        if (aBackoff !== bBackoff) return aBackoff - bBackoff; // lower backoff first
-        if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
-        if (!a.lastUsedAt) return -1;
-        if (!b.lastUsedAt) return 1;
-        return new Date(a.lastUsedAt).getTime() - new Date(b.lastUsedAt).getTime();
-      });
-      connection = sorted[0];
-      // expiry-first (#14533) ranks by the quota closest to being lost; see its leaf module.
-      if (strategy === "expiry-first")
-        connection = pickExpiryFirstConnection(orderedConnections, settings, {
-          provider: resolvedId,
-          requestedModel,
-          planWeights: providerOverride.planWeights,
+    } else if (
+      strategy === "least-used" ||
+      strategy === "expiry-first" ||
+      strategy === "headroom" ||
+      (strategy === "fill-first" && isQuotaWindowProvider(resolvedId))
+    ) {
+      if (
+        strategy === "headroom" ||
+        (strategy === "fill-first" && isQuotaWindowProvider(resolvedId))
+      ) {
+        // For quota-window providers, prefer the account with the most headroom
+        // (least used since last reset), avoiding fill-first exhaustion cascades.
+        const headroomPick = selectQuotaHeadroomConnection(orderedConnections);
+        if (headroomPick) {
+          connection = headroomPick;
+        } else {
+          connection = orderedConnections[0];
+        }
+        const nextCount = (connection.consecutiveUseCount || 0) + 1;
+        const commit = planLastUsedCommit(connection, connectionsRaw, nextCount);
+        if (options.lease) commitSelectionSideEffects = commit;
+        else await commit();
+      } else {
+        // Least Used: pick the one with oldest lastUsedAt.
+        // #12279: prefer accounts without backoff first, the same tie-break the
+        // round-robin fallback branch applies. Without it the oldest lastUsedAt
+        // could belong to an account that just 429'd, so a failover landed on it
+        // for one request before the next call settled on a healthy account.
+        const sorted = [...orderedConnections].sort((a, b) => {
+          const aBackoff = a.backoffLevel || 0;
+          const bBackoff = b.backoffLevel || 0;
+          if (aBackoff !== bBackoff) return aBackoff - bBackoff; // lower backoff first
+          if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
+          if (!a.lastUsedAt) return -1;
+          if (!b.lastUsedAt) return 1;
+          return new Date(a.lastUsedAt).getTime() - new Date(b.lastUsedAt).getTime();
         });
-      // Record the use (#10945). This strategy sorts on the very field it was
-      // not writing, so on a pool where every lastUsedAt is null the tie-break
-      // fell through to `priority` and returned the SAME connection on every
-      // call, forever — the opposite of the documented behaviour, and silent.
-      // round-robin is the only other strategy that reads lastUsedAt and it has
-      // always committed here; least-used now does the same.
-      const commit = planLastUsedCommit(connection, connectionsRaw, 1);
-      if (options.lease) commitSelectionSideEffects = commit;
-      else await commit();
+        connection = sorted[0];
+        // expiry-first (#14533) ranks by the quota closest to being lost; see its leaf module.
+        if (strategy === "expiry-first")
+          connection = pickExpiryFirstConnection(orderedConnections, settings, {
+            provider: resolvedId,
+            requestedModel,
+            planWeights: providerOverride.planWeights,
+          });
+        // Record the use (#10945).
+        const commit = planLastUsedCommit(connection, connectionsRaw, 1);
+        if (options.lease) commitSelectionSideEffects = commit;
+        else await commit();
+      }
     } else if (strategy === "cost-optimized") {
       // Cost Optimized: sort by priority ascending (lower = cheaper/preferred)
       // Future: can be enhanced with actual cost data per provider
