@@ -12,6 +12,10 @@
 
 import { RateLimitReason } from "../config/constants.ts";
 import { parseDayGranularityResetMs } from "./quotaResetParsing.ts";
+import {
+  isQuotaWindowProvider,
+  resolveProviderQuotaCooldownMs,
+} from "./providerDefaultRateLimit.ts";
 
 type RateLimitReasonValue = (typeof RateLimitReason)[keyof typeof RateLimitReason];
 
@@ -45,6 +49,7 @@ function isClaudeSubscriptionQuotaText(lower: string, provider?: string | null):
 }
 
 export function isSubscriptionQuotaText(lower: string, provider?: string | null): boolean {
+  if (isQuotaWindowProvider(provider)) return true;
   return (
     lower.includes("usage limit reached") ||
     lower.includes("usage limit has been") ||
@@ -84,9 +89,15 @@ export function buildSubscriptionQuotaFallback(
   if (!isSubscriptionQuotaText(errorStr.toLowerCase(), provider)) return null;
   const hintMs = getUpstreamRetryHintMs();
   const bodyHint = parseRetryFromErrorText(errorStr, provider);
+  const cooldownMs = resolveProviderQuotaCooldownMs({
+    provider,
+    retryAfterMs: hintMs ?? bodyHint,
+    isQuotaExhausted: true,
+    fallbackTransientMs: SUBSCRIPTION_QUOTA_COOLDOWN_MS,
+  });
   return {
     shouldFallback: true,
-    cooldownMs: hintMs ?? SUBSCRIPTION_QUOTA_COOLDOWN_MS,
+    cooldownMs,
     reason: RateLimitReason.QUOTA_EXHAUSTED,
     usedUpstreamRetryHint: Boolean(hintMs),
     quotaResetHintMs: bodyHint ?? undefined,

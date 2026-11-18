@@ -25,6 +25,7 @@ import {
   awaitProviderDefaultSlot,
   setProviderQuotaOverrides,
   resolveProviderQuotaCooldownMs,
+  isQuotaWindowProvider,
 } from "./providerDefaultRateLimit.ts";
 import {
   DEFAULT_RESILIENCE_SETTINGS,
@@ -990,10 +991,11 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
     const counts = limiter.counts();
     const limiterKey = getLimiterKey(provider, connectionId, model);
     const parsedWaitMs = retryAfterStr ? parseResetTime(retryAfterStr) : null;
+    const isQuotaExhausted = !parsedWaitMs && isQuotaWindowProvider(provider);
     const effectiveCooldownMs = resolveProviderQuotaCooldownMs({
       provider,
       retryAfterMs: parsedWaitMs,
-      isQuotaExhausted: false,
+      isQuotaExhausted,
       fallbackTransientMs: provider === "claude-web" || provider === "claude" ? 60_000 : 30_000,
     });
 

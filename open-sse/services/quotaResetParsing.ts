@@ -5,6 +5,7 @@ import { looksLikeQuotaExhausted } from "../../src/shared/utils/classify429";
 // a new open-sse → src boundary edge (check:boundary:ratchet).
 export { looksLikeConcurrencyLimit } from "../../src/shared/utils/classify429";
 import { getProviderCategory, getRegistryEntry } from "../config/providerRegistry.ts";
+import { isQuotaWindowProvider } from "./providerDefaultRateLimit.ts";
 
 const ZAI_PATTERNS = [/\[1308\]/, /\[1310\]/, /\bz\.ai\b/i, /\bbigmodel\.cn\b/i];
 
@@ -51,7 +52,7 @@ export function shouldPreserveQuotaSignals(
   errorText?: string | null
 ): boolean {
   if (!provider) return true;
-  if (getProviderCategory(provider) === "oauth") return true;
+  if (getProviderCategory(provider) === "oauth" || isQuotaWindowProvider(provider)) return true;
   return Boolean(errorText) && looksLikeQuotaExhausted(errorText);
 }
 
