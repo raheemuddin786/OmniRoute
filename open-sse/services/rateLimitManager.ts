@@ -956,6 +956,21 @@ export async function withRateLimit(
   }
 }
 
+/** Deterministic per-connection stagger within [0, jitterMs). Pure fn of connectionId. */
+function staggerCooldownMs(baseMs: number, connectionId: string): number {
+  if (baseMs <= 0) return baseMs;
+  const jitterMs = Math.min(15_000, Math.floor(baseMs * 0.25)); // up to 15s or 25%
+  if (jitterMs <= 0) return baseMs;
+  // FNV-1a-ish hash of the connection id -> stable 0..1 offset per account.
+  let hash = 2166136261;
+  for (let i = 0; i < connectionId.length; i++) {
+    hash ^= connectionId.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const offset = Math.abs(hash) % (jitterMs + 1);
+  return Math.max(0, baseMs - offset);
+}
+
 /**
  * Update rate limiter based on API response headers.
  * Called after every successful or failed response from a provider.
@@ -993,12 +1008,20 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
     const parsedWaitMs = retryAfterStr ? parseResetTime(retryAfterStr) : null;
     const isQuotaExhausted =
       !parsedWaitMs && isQuotaWindowProvider(provider) && provider !== "claude-web";
-    const effectiveCooldownMs = resolveProviderQuotaCooldownMs({
+    const baseCooldownMs = resolveProviderQuotaCooldownMs({
       provider,
       retryAfterMs: parsedWaitMs,
       isQuotaExhausted,
       fallbackTransientMs: provider === "claude-web" || provider === "claude" ? 60_000 : 30_000,
     });
+    // Stagger sibling connections under the same provider so a shared upstream
+    // 429 does not pause every account at the same instant. Keeps at least one
+    // account available while others cool down. No-op for upstream-provided
+    // retry-after values (they are authoritative and left untouched).
+    const effectiveCooldownMs =
+      parsedWaitMs && parsedWaitMs > 0
+        ? baseCooldownMs
+        : staggerCooldownMs(baseCooldownMs, connectionId);
 
     // Record retry-after hint for dynamic queue budget
     if (parsedWaitMs && parsedWaitMs > 0) {

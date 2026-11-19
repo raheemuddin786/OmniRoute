@@ -128,8 +128,15 @@ export function resolveProviderQuotaCooldownMs(params: {
   retryAfterMs?: number | null;
   isQuotaExhausted?: boolean;
   fallbackTransientMs?: number;
+  consecutive429Count?: number;
 }): number {
-  const { provider, retryAfterMs, isQuotaExhausted, fallbackTransientMs = 60_000 } = params;
+  const {
+    provider,
+    retryAfterMs,
+    isQuotaExhausted,
+    fallbackTransientMs = 60_000,
+    consecutive429Count = 0,
+  } = params;
 
   if (retryAfterMs && retryAfterMs > 0) {
     return retryAfterMs;
@@ -144,6 +151,13 @@ export function resolveProviderQuotaCooldownMs(params: {
     }
   }
 
+  // Transient 429s without an upstream retry-after: back off progressively so
+  // a sustained throttle does not re-trip at a fixed 60s interval forever.
+  if (consecutive429Count > 0) {
+    const base = fallbackTransientMs;
+    const backoff = Math.min(base * 8, base * Math.pow(2, Math.min(consecutive429Count, 6)));
+    return Math.min(300_000, backoff); // hard cap 5min
+  }
   return fallbackTransientMs;
 }
 
