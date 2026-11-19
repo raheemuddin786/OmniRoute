@@ -1026,6 +1026,12 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
       reservoirRefreshAmount: 60,
       reservoirRefreshInterval: effectiveCooldownMs,
     });
+    // Register the pause on the replacement limiter (as updateFromResponseBody does)
+    // so withRateLimit's checkLimiterPause fails fast and the combo fails over to the
+    // next account instead of queueing until maxWaitMs and returning 503.
+    const pausedAt = Date.now(); // the reservoir refresh clock starts when the limiter is built
+    const pausedLimiter = getLimiter(provider, connectionId, model);
+    bodyRetryPause.rememberLimiterPause(pausedLimiter, pausedAt + effectiveCooldownMs);
     return;
   }
 
