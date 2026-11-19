@@ -50,7 +50,7 @@ import {
 } from "./rateLimitManager/errors";
 import { LimiterWedgeWatchdog, WATCHDOG_INTERVAL_MS } from "./rateLimitManager/wedgeWatchdog";
 import { createCancellableJob } from "./rateLimitManager/queuedJobCancel";
-import { CLAUDE_WEB_COOLDOWN_JITTER_MS } from "../config/constants.ts";
+import { CLAUDE_WEB_COOLDOWN_JITTER_MS, CLAUDE_WEB_TRANSIENT_429_MS } from "../config/constants.ts";
 import * as bodyRetryPause from "./rateLimitManager/bodyRetryPause";
 import { errorRateLimit, logRateLimit, warnRateLimit } from "./rateLimitManager/log";
 import { toNumber } from "../utils/numeric.ts";
