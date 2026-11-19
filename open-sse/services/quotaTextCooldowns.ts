@@ -12,10 +12,7 @@
 
 import { RateLimitReason } from "../config/constants.ts";
 import { parseDayGranularityResetMs } from "./quotaResetParsing.ts";
-import {
-  isQuotaWindowProvider,
-  resolveProviderQuotaCooldownMs,
-} from "./providerDefaultRateLimit.ts";
+import { resolveProviderQuotaCooldownMs } from "./providerDefaultRateLimit.ts";
 
 type RateLimitReasonValue = (typeof RateLimitReason)[keyof typeof RateLimitReason];
 
@@ -49,7 +46,6 @@ function isClaudeSubscriptionQuotaText(lower: string, provider?: string | null):
 }
 
 export function isSubscriptionQuotaText(lower: string, provider?: string | null): boolean {
-  if (isQuotaWindowProvider(provider)) return true;
   return (
     lower.includes("usage limit reached") ||
     lower.includes("usage limit has been") ||

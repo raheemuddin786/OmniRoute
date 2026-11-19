@@ -991,7 +991,8 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
     const counts = limiter.counts();
     const limiterKey = getLimiterKey(provider, connectionId, model);
     const parsedWaitMs = retryAfterStr ? parseResetTime(retryAfterStr) : null;
-    const isQuotaExhausted = !parsedWaitMs && isQuotaWindowProvider(provider);
+    const isQuotaExhausted =
+      !parsedWaitMs && isQuotaWindowProvider(provider) && provider !== "claude-web";
     const effectiveCooldownMs = resolveProviderQuotaCooldownMs({
       provider,
       retryAfterMs: parsedWaitMs,
