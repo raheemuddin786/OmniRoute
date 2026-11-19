@@ -50,6 +50,7 @@ import {
 } from "./rateLimitManager/errors";
 import { LimiterWedgeWatchdog, WATCHDOG_INTERVAL_MS } from "./rateLimitManager/wedgeWatchdog";
 import { createCancellableJob } from "./rateLimitManager/queuedJobCancel";
+import { CLAUDE_WEB_COOLDOWN_JITTER_MS } from "../config/constants.ts";
 import * as bodyRetryPause from "./rateLimitManager/bodyRetryPause";
 import { errorRateLimit, logRateLimit, warnRateLimit } from "./rateLimitManager/log";
 import { toNumber } from "../utils/numeric.ts";
@@ -959,7 +960,7 @@ export async function withRateLimit(
 /** Deterministic per-connection stagger within [0, jitterMs). Pure fn of connectionId. */
 function staggerCooldownMs(baseMs: number, connectionId: string): number {
   if (baseMs <= 0) return baseMs;
-  const jitterMs = Math.min(15_000, Math.floor(baseMs * 0.25)); // up to 15s or 25%
+  const jitterMs = Math.min(CLAUDE_WEB_COOLDOWN_JITTER_MS, Math.floor(baseMs * 0.25)); // up to CLAUDE_WEB_COOLDOWN_JITTER_MS or 25%
   if (jitterMs <= 0) return baseMs;
   // FNV-1a-ish hash of the connection id -> stable 0..1 offset per account.
   let hash = 2166136261;
@@ -1012,7 +1013,12 @@ export function updateFromHeaders(provider, connectionId, headers, status, model
       provider,
       retryAfterMs: parsedWaitMs,
       isQuotaExhausted,
-      fallbackTransientMs: provider === "claude-web" || provider === "claude" ? 60_000 : 30_000,
+      fallbackTransientMs:
+        provider === "claude-web"
+          ? CLAUDE_WEB_TRANSIENT_429_MS
+          : provider === "claude"
+            ? 60_000
+            : 30_000,
     });
     // Stagger sibling connections under the same provider so a shared upstream
     // 429 does not pause every account at the same instant. Keeps at least one

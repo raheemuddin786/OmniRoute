@@ -17,6 +17,7 @@
  * atomically.
  */
 import { SlidingWindowLimiter, type RateLimitWindow } from "./slidingWindowLimiter.ts";
+import { CLAUDE_WEB_429_BACKOFF_CAP_MS } from "../config/constants.ts";
 import {
   markLocalRateLimitError,
   LEGACY_RATE_LIMIT_QUEUE_TIMEOUT_CODE,
@@ -156,7 +157,7 @@ export function resolveProviderQuotaCooldownMs(params: {
   if (consecutive429Count > 0) {
     const base = fallbackTransientMs;
     const backoff = Math.min(base * 8, base * Math.pow(2, Math.min(consecutive429Count, 6)));
-    return Math.min(300_000, backoff); // hard cap 5min
+    return Math.min(CLAUDE_WEB_429_BACKOFF_CAP_MS, backoff); // hard cap (configurable)
   }
   return fallbackTransientMs;
 }
