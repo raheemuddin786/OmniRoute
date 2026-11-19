@@ -3,6 +3,8 @@
  * Classifies incoming request payloads, prompt structures, and tool definitions
  * into task phases and computes token depth profiles for intelligent routing.
  */
+import { classifyPromptIntent, type IntentType } from "../intentClassifier.ts";
+import { mapIntentToTaskFitnessKey } from "../autoCombo/intentTaskFitnessMap.ts";
 
 import { getTierConfig } from "../tierResolver.ts";
 
@@ -280,6 +282,33 @@ export function classifyIntent(
 
   const targetText = activeHumanText;
 
+  // MULTILINGUAL INTENT CLASSIFICATION (first pass) - Use multilingual classifier for accurate intent detection
+  // This runs BEFORE keyword-based classification to inform/override English-only keyword logic
+  const multilingualIntent: IntentType = classifyPromptIntent(targetText);
+  const multilingualTaskType = mapIntentToTaskFitnessKey(multilingualIntent);
+  const multilingualPhaseHint = (() => {
+    switch (multilingualTaskType) {
+      case "coding":
+        return "CODE_GENERATION";
+      case "analysis":
+        return "ARCHITECTURAL_PLANNING";
+      case "planning":
+        return "ARCHITECTURAL_PLANNING";
+      case "review":
+        return "TESTING_AND_VERIFICATION";
+      case "debugging":
+        return "TESTING_AND_VERIFICATION";
+      case "documentation":
+        return "INSPECTION_SYNTHESIS";
+      case "default":
+        return null;
+    }
+  })();
+
+  // MULTILINGUAL INTENT CLASSIFICATION END
+
+  // Detect code modification / mutation tools from tool results, tool names, or user text
+
   // Detect code modification / mutation tools from tool results, tool names, or user text
   // 1. Check if the tool executed was an explicit mutation tool (Edit, Write, write_file, edit_file, patch)
   const mutationToolNameRegex =
@@ -474,7 +503,15 @@ export function classifyIntent(
     }
   }
 
-  if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
+  // MULTILINGUAL INTENT OVERRIDE: Use multilingual classification as strong signal
+  if (multilingualPhaseHint) {
+    taskPhase = multilingualPhaseHint;
+    complexityScore = 0.7;
+    // Still allow keyword-based refinements for specific cases
+  } else if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
+    taskPhase = "ARCHITECTURAL_PLANNING";
+    complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
+  } else if (isDuplicateFileRead) {
     taskPhase = "ARCHITECTURAL_PLANNING";
     complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
   } else if (isDuplicateFileRead) {
