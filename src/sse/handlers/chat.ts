@@ -386,6 +386,95 @@ function logBreakerStateChange(name: string, from: string, to: string): void {
 
 export { shouldTripProviderBreakerForResult } from "./chatPredicates";
 
+function createLiveStreamRepetitionGuard(): TransformStream<Uint8Array, Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const recentLines: string[] = [];
+  let lineBuffer = "";
+  let isAnthropic = false;
+  let terminated = false;
+
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      if (terminated) return;
+
+      const text = decoder.decode(chunk, { stream: true });
+      if (text.includes("content_block_delta") || text.includes("message_delta")) {
+        isAnthropic = true;
+      }
+
+      const lines = text.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const dataStr = trimmed.slice(5).trim();
+        if (!dataStr || dataStr === "[DONE]") continue;
+
+        try {
+          const parsed = JSON.parse(dataStr) as Record<string, unknown>;
+          const choices = parsed.choices as Array<{ delta?: Record<string, unknown> }> | undefined;
+          const delta = parsed.delta as Record<string, unknown> | undefined;
+          const piece =
+            (typeof choices?.[0]?.delta?.content === "string" ? choices[0].delta.content : "") ||
+            (typeof choices?.[0]?.delta?.reasoning_content === "string"
+              ? choices[0].delta.reasoning_content
+              : "") ||
+            (typeof delta?.text === "string" ? delta.text : "") ||
+            (typeof delta?.thinking === "string" ? delta.thinking : "");
+
+          if (piece) {
+            lineBuffer += piece;
+            if (lineBuffer.includes("\n")) {
+              const parts = lineBuffer.split(/\r?\n/);
+              lineBuffer = parts.pop() || "";
+              for (const completedLine of parts) {
+                const sl = completedLine.trim();
+                if (sl.length >= 15) {
+                  recentLines.push(sl);
+                  if (recentLines.length > 20) recentLines.shift();
+
+                  if (recentLines.length >= 4) {
+                    const target = recentLines[recentLines.length - 1];
+                    let count = 0;
+                    for (let i = recentLines.length - 1; i >= 0; i--) {
+                      if (recentLines[i] === target) count++;
+                      else break;
+                    }
+
+                    if (count >= 4) {
+                      terminated = true;
+                      log.warn(
+                        "SPB",
+                        `Degenerative repetition circuit breaker tripped on repeated line: "${target.slice(0, 50)}". Terminating stream cleanly.`
+                      );
+                      controller.enqueue(chunk);
+                      if (isAnthropic) {
+                        const stopEvent =
+                          `event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n` +
+                          `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":0}}\n\n` +
+                          `event: message_stop\ndata: {"type":"message_stop"}\n\n`;
+                        controller.enqueue(encoder.encode(stopEvent));
+                      } else {
+                        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                      }
+                      controller.terminate();
+                      return;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore non-JSON SSE frames
+        }
+      }
+
+      controller.enqueue(chunk);
+    },
+  });
+}
+
 function withSpbHeaders(res: Response, spbDecision: SpbRoutingDecision | null): Response {
   if (!spbDecision || !res) return res;
 
@@ -408,7 +497,11 @@ function withSpbHeaders(res: Response, spbDecision: SpbRoutingDecision | null): 
       );
     }
     headers.set("X-OmniRoute-SPB-ZeroLoss", "verified");
-    return new Response(res.body, {
+    const bodyStream =
+      res.body instanceof ReadableStream
+        ? res.body.pipeThrough(createLiveStreamRepetitionGuard())
+        : res.body;
+    return new Response(bodyStream, {
       status: res.status,
       statusText: res.statusText,
       headers,
