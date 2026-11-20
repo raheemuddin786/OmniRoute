@@ -457,47 +457,61 @@ export function classifyIntent(
   const fileReadCounts = new Map<string, number>();
   for (const msg of messages) {
     if (msg.role === "assistant") {
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        for (const part of content) {
+      const rawTools: Array<{ name: string; args?: Record<string, unknown> }> = [];
+      if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
           if (
             part &&
             typeof part === "object" &&
             (part as Record<string, unknown>).type === "tool_use"
           ) {
-            const toolUse = part as { name?: string; input?: Record<string, unknown> };
-            const toolName = (toolUse.name || "").toLowerCase();
-            if (toolName === "read" || toolName === "file_read" || toolName === "view") {
-              const filePath = (
-                (toolUse.input?.file_path as string) ||
-                (toolUse.input?.path as string) ||
-                ""
-              ).trim();
-              if (filePath) {
-                const count = (fileReadCounts.get(filePath) || 0) + 1;
-                fileReadCounts.set(filePath, count);
-                if (count >= duplicateReadThreshold) {
-                  isDuplicateFileRead = true;
-                  duplicateFilePath = filePath;
-                }
+            const t = part as { name?: string; input?: Record<string, unknown> };
+            if (t.name) rawTools.push({ name: t.name, args: t.input });
+          }
+        }
+      }
+      const toolCalls = (msg as Record<string, unknown>).tool_calls;
+      if (Array.isArray(toolCalls)) {
+        for (const tc of toolCalls) {
+          if (tc && typeof tc === "object") {
+            const fn = (tc as { function?: { name?: string; arguments?: unknown } }).function;
+            if (fn?.name) {
+              let parsedArgs: Record<string, unknown> = {};
+              if (typeof fn.arguments === "string") {
+                try {
+                  parsedArgs = JSON.parse(fn.arguments);
+                } catch {}
+              } else if (typeof fn.arguments === "object" && fn.arguments !== null) {
+                parsedArgs = fn.arguments as Record<string, unknown>;
               }
-            } else if (
-              toolName === "write" ||
-              toolName === "edit" ||
-              toolName === "file_write" ||
-              toolName === "patch"
-            ) {
-              // Mutation occurred: reset counter for this file
-              const filePath = (
-                (toolUse.input?.file_path as string) ||
-                (toolUse.input?.path as string) ||
-                ""
-              ).trim();
-              if (filePath) {
-                fileReadCounts.delete(filePath);
-              }
+              rawTools.push({ name: fn.name, args: parsedArgs });
             }
           }
+        }
+      }
+
+      for (const tool of rawTools) {
+        const toolName = (tool.name || "").toLowerCase();
+        const args = tool.args || {};
+        const filePath = String(
+          args.file_path || args.filePath || args.path || args.filename || ""
+        ).trim();
+        const isReadTool =
+          /^(read|read_file|view|readlocalfile|cat)$/i.test(toolName) || toolName.includes("read");
+        const isMutationTool =
+          /^(write|edit|file_write|patch|update|apply_patch)$/i.test(toolName) ||
+          toolName.includes("write") ||
+          toolName.includes("edit");
+
+        if (isReadTool && filePath) {
+          const count = (fileReadCounts.get(filePath) || 0) + 1;
+          fileReadCounts.set(filePath, count);
+          if (count >= duplicateReadThreshold) {
+            isDuplicateFileRead = true;
+            duplicateFilePath = filePath;
+          }
+        } else if (isMutationTool && filePath) {
+          fileReadCounts.delete(filePath);
         }
       }
     }
@@ -509,9 +523,6 @@ export function classifyIntent(
     complexityScore = 0.7;
     // Still allow keyword-based refinements for specific cases
   } else if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
-    taskPhase = "ARCHITECTURAL_PLANNING";
-    complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
-  } else if (isDuplicateFileRead) {
     taskPhase = "ARCHITECTURAL_PLANNING";
     complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
   } else if (isDuplicateFileRead) {

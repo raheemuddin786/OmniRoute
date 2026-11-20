@@ -232,6 +232,7 @@ export async function processSmartProxyRouting(
 ): Promise<SpbRoutingDecision> {
   const startTime = Date.now();
   const sessionId = context.sessionId || "default_session_" + Date.now();
+  let existingCheckpoint: ReturnType<typeof getCheckpoint> = null;
 
   try {
     // 1. Defensive payload validation & CCR ingress hydration
@@ -332,7 +333,6 @@ export async function processSmartProxyRouting(
     const tierConfig = getTierConfig(context.spbProfile);
     let autoRecoveryDirective: string | undefined;
     let checkpointRestored = false;
-    let existingCheckpoint = null;
     let restoredModel: string | null = null;
     try {
       existingCheckpoint = getCheckpoint(sessionId);
@@ -769,17 +769,12 @@ export async function processSmartProxyRouting(
 
         if (!isToolTurn) {
           const mode = tierConfig?.spbConfig?.intentLedgerMode || "off";
-          if (mode === "apex_guided" || mode === "apex_shadow") {
+          if ((mode === "apex_guided" || mode === "apex_shadow") && context.dispatchModel) {
             const apexCtx = gatherApexContext({
               workspaceRoot: context.workspaceRoot,
               prompt: lastUserText || rootTaskSpecification,
               conversationMessages: messages,
             });
-            if (!context.dispatchModel) {
-              throw new Error(
-                "dispatchModel required for apex_guided/apex_shadow mode but not provided"
-              );
-            }
             const expansion = await expandLedgerWithApex(
               lastUserText || rootTaskSpecification,
               apexCtx,
@@ -795,7 +790,12 @@ export async function processSmartProxyRouting(
             activeGuidanceContract.intents = expansion.intents;
             activeGuidanceContract.nonGoals = expansion.nonGoals;
             activeGuidanceContract.contextSource = expansion.contextSource;
-          } else if (mode === "heuristic" || intent.complexityScore >= 0.6) {
+          } else if (
+            mode === "heuristic" ||
+            mode === "apex_guided" ||
+            mode === "apex_shadow" ||
+            intent.complexityScore >= 0.6
+          ) {
             activeGuidanceContract.intents = decomposeRequestIntoLedger(
               lastUserText || rootTaskSpecification,
               tierConfig?.spbConfig?.maxLedgerItems ?? 8
@@ -1023,6 +1023,24 @@ export async function processSmartProxyRouting(
           ...m,
           content: Array.isArray(m.content) ? [...m.content] : m.content,
         }));
+      }
+
+      // On tool turns, append directive to the latest tool message so the agent receives the mandate
+      const lastMsg = enhancedMessages[enhancedMessages.length - 1];
+      if (
+        lastMsg &&
+        (lastMsg.role === "tool" ||
+          (Array.isArray(lastMsg.content) &&
+            lastMsg.content.some((p) => p && p.type === "tool_result")))
+      ) {
+        if (typeof lastMsg.content === "string") {
+          lastMsg.content = `${lastMsg.content}\n\n[EXECUTION MANDATE: ${autoRecoveryDirective}]`;
+        } else if (Array.isArray(lastMsg.content)) {
+          lastMsg.content = [
+            ...lastMsg.content,
+            { type: "text", text: `[EXECUTION MANDATE: ${autoRecoveryDirective}]` },
+          ];
+        }
       }
 
       // 1. If enhancement produced an enhanced prompt, prepend the directive
