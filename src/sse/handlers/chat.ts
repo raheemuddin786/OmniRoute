@@ -1221,6 +1221,12 @@ async function handleChatImplementation(
                   : spbDecision.tierAssignment.reasoningEffort,
               }
             : {}),
+          ...(body.temperature === undefined &&
+          spbDecision.tierAssignment?.temperature !== undefined
+            ? {
+                temperature: spbDecision.tierAssignment.temperature,
+              }
+            : {}),
         };
 
         // Fast-path enforcement for harness safety classifier: enforce a strict 5-second

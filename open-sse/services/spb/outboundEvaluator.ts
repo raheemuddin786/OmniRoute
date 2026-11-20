@@ -691,9 +691,32 @@ export async function extractResponseContent(
               if (parsed.choices?.[0]?.delta?.content) {
                 accumulatedText += parsed.choices[0].delta.content;
               }
-              // Anthropic delta
-              else if (parsed.type === "content_block_delta" && parsed.delta?.text) {
-                accumulatedText += parsed.delta.text;
+              // Anthropic delta (text and extended thinking)
+              else if (
+                parsed.type === "content_block_delta" &&
+                (parsed.delta?.text || parsed.delta?.thinking)
+              ) {
+                const deltaPiece = parsed.delta.text || parsed.delta.thinking || "";
+                accumulatedText += deltaPiece;
+                // Repetition circuit breaker: detect degenerate loops in thinking or content
+                if (accumulatedText.length > 200) {
+                  const tail = accumulatedText.slice(-300);
+                  const lines = tail
+                    .split(/\r?\n/)
+                    .map((l) => l.trim())
+                    .filter((l) => l.length >= 15);
+                  if (lines.length >= 5) {
+                    const lastLine = lines[lines.length - 1];
+                    const matches = lines.filter((l) => l === lastLine);
+                    if (matches.length >= 5) {
+                      console.warn(
+                        `[SPB Outbound] Degenerative repetition circuit breaker tripped on: "${lastLine.slice(0, 40)}...". Aborting runaway stream.`
+                      );
+                      await reader.cancel();
+                      break;
+                    }
+                  }
+                }
               }
               // Gemini candidate
               else if (parsed.candidates?.[0]?.content?.parts?.[0]?.text) {
