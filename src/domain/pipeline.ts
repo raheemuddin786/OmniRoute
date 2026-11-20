@@ -13,7 +13,17 @@ import { type StageName, renderPrompt } from "./prompts";
 // Types
 // ---------------------------------------------------------------------------
 
-export type TaskType = "code" | "math" | "reasoning" | "creative" | "medium" | "simple";
+export type TaskType =
+  | "code"
+  | "math"
+  | "reasoning"
+  | "creative"
+  | "medium"
+  | "simple"
+  | "planning"
+  | "debugging"
+  | "documentation"
+  | "review";
 
 export type FitnessTier = "best-reasoning" | "cheapest" | "moderate";
 
@@ -102,6 +112,24 @@ const TASK_STAGES: Record<TaskType, Array<{ name: StageName; fitnessTier: Fitnes
   ],
   medium: [{ name: "execute", fitnessTier: "moderate" }],
   simple: [{ name: "execute", fitnessTier: "cheapest" }],
+  planning: [
+    { name: "plan", fitnessTier: "best-reasoning" },
+    { name: "execute", fitnessTier: "moderate" },
+    { name: "reflect", fitnessTier: "best-reasoning" },
+  ],
+  debugging: [
+    { name: "execute", fitnessTier: "best-reasoning" },
+    { name: "reflect", fitnessTier: "moderate" },
+    { name: "fix", fitnessTier: "cheapest" },
+  ],
+  documentation: [
+    { name: "execute", fitnessTier: "moderate" },
+    { name: "reflect", fitnessTier: "best-reasoning" },
+  ],
+  review: [
+    { name: "execute", fitnessTier: "moderate" },
+    { name: "reflect", fitnessTier: "moderate" },
+  ],
 };
 
 /**
