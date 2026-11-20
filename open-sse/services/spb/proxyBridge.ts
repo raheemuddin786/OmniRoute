@@ -490,6 +490,18 @@ export async function processSmartProxyRouting(
       }
     }
 
+    // On explicit tool execution error turns, inject targeted diagnostic guidance so the agent
+    // accurately inspects the reported failure rather than hallucinating or repeating blind commands.
+    if (intent.isToolExecutionError) {
+      const toolDiagnosticDirective =
+        "[SPB Diagnostic Guidance: A tool operation reported a failure or error output. " +
+        "Examine the exact error message, verify file paths and permissions, and address the root cause directly before executing further actions. " +
+        "Do not assume nonexistent contents or repeat the same failing command without modification.]";
+      autoRecoveryDirective = autoRecoveryDirective
+        ? `${toolDiagnosticDirective}\n\n${autoRecoveryDirective}`
+        : toolDiagnosticDirective;
+    }
+
     // Hard Duplicate File Read Blocker:
     // If the agent read the exact same file >= 3 times, inject an explicit halt directive
     if (intent.isDuplicateFileRead && intent.duplicateFilePath) {
@@ -546,11 +558,11 @@ export async function processSmartProxyRouting(
       `[SPB Bridge] Session ${sessionId} | TaskPhase: ${intent.taskPhase} | Selected Tier: ${tierAssignment.tier} | GuidanceContract present: ${!!intent.guidanceContract}`
     );
 
-    if (existingCheckpoint && existingCheckpoint.promptAnchorHash === intent.promptAnchorHash) {
-      // Model continuity: preserve model continuity when the active turn is within the same tier.
-      // ALSO allow cross-tier restoration when the prior checkpoint achieved high satisfaction
-      // (>= 0.9), indicating the response was complete and correct. This prevents rework
-      // when stagnation recovery escalates to a higher tier after a successful lower-tier result.
+    if (existingCheckpoint) {
+      // Model continuity: preserve model continuity when the active turn is within the same tier
+      // or when the prompt anchor hash matches.
+      // ALSO allow cross-tier restoration when the prior checkpoint achieved satisfactory results
+      // or when continuing an established session checkpoint across escalation boundaries.
       const priorSatisfaction = existingCheckpoint.statePayload
         ? (() => {
             try {
@@ -562,10 +574,12 @@ export async function processSmartProxyRouting(
           })()
         : null;
 
+      const sameAnchor = existingCheckpoint.promptAnchorHash === intent.promptAnchorHash;
       const sameTier = existingCheckpoint.modelTier === tierAssignment.tier;
-      const highSatisfactionCrossTier = priorSatisfaction !== null && priorSatisfaction >= 0.9;
+      const highSatisfactionCrossTier =
+        priorSatisfaction !== null ? priorSatisfaction >= 0.8 : true;
 
-      if (sameTier || highSatisfactionCrossTier) {
+      if ((sameAnchor && sameTier) || highSatisfactionCrossTier) {
         checkpointRestored = true;
         if (existingCheckpoint.statePayload) {
           try {
@@ -582,7 +596,7 @@ export async function processSmartProxyRouting(
         }
         if (highSatisfactionCrossTier && !sameTier) {
           console.log(
-            `[SPB Bridge] Session ${sessionId} | Cross-tier checkpoint restored (prior satisfaction: ${priorSatisfaction}, prior tier: ${existingCheckpoint.modelTier}, current tier: ${tierAssignment.tier})`
+            `[SPB Bridge] Session ${sessionId} | Cross-tier checkpoint restored (prior satisfaction: ${priorSatisfaction ?? "baseline"}, prior tier: ${existingCheckpoint.modelTier}, current tier: ${tierAssignment.tier})`
           );
         }
       }

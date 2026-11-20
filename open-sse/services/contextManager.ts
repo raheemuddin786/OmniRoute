@@ -696,28 +696,67 @@ export function compressContext(
 // ─── Layer 1: Trim Tool Messages ────────────────────────────────────────────
 
 function trimToolMessages(messages: Record<string, unknown>[], maxChars: number) {
-  return messages.map((msg) => {
-    if (msg.role === "tool" && typeof msg.content === "string" && msg.content.length > maxChars) {
-      return {
-        ...msg,
-        content: msg.content.slice(0, maxChars) + "\n... [truncated]",
-      };
+  // Identify the last 3 tool results to preserve recency fidelity for active execution
+  let toolCount = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    const isTool =
+      msg.role === "tool" ||
+      (msg.role === "user" &&
+        Array.isArray(msg.content) &&
+        msg.content.some(
+          (b) => b && typeof b === "object" && (b as Record<string, unknown>).type === "tool_result"
+        ));
+    if (isTool) {
+      toolCount++;
     }
-    // Handle array content (Claude format with tool_result blocks)
-    if (msg.role === "user" && Array.isArray(msg.content)) {
-      return {
-        ...msg,
-        content: msg.content.map((block) => {
-          if (
-            block.type === "tool_result" &&
-            typeof block.content === "string" &&
-            block.content.length > maxChars
-          ) {
-            return { ...block, content: block.content.slice(0, maxChars) + "\n... [truncated]" };
-          }
-          return block;
-        }),
-      };
+  }
+
+  let toolIndex = 0;
+  return messages.map((msg) => {
+    const isTool =
+      msg.role === "tool" ||
+      (msg.role === "user" &&
+        Array.isArray(msg.content) &&
+        msg.content.some(
+          (b) => b && typeof b === "object" && (b as Record<string, unknown>).type === "tool_result"
+        ));
+
+    if (isTool) {
+      toolIndex++;
+      // Older tool results beyond the last 3 are aggressively trimmed to 600 chars to prevent massive context bloat
+      const effectiveMaxChars = toolIndex <= toolCount - 3 ? Math.min(maxChars, 600) : maxChars;
+
+      if (
+        msg.role === "tool" &&
+        typeof msg.content === "string" &&
+        msg.content.length > effectiveMaxChars
+      ) {
+        return {
+          ...msg,
+          content: msg.content.slice(0, effectiveMaxChars) + "\n... [truncated]",
+        };
+      }
+
+      // Handle array content (Claude format with tool_result blocks)
+      if (msg.role === "user" && Array.isArray(msg.content)) {
+        return {
+          ...msg,
+          content: msg.content.map((block) => {
+            if (
+              block.type === "tool_result" &&
+              typeof block.content === "string" &&
+              block.content.length > effectiveMaxChars
+            ) {
+              return {
+                ...block,
+                content: block.content.slice(0, effectiveMaxChars) + "\n... [truncated]",
+              };
+            }
+            return block;
+          }),
+        };
+      }
     }
     return msg;
   });
