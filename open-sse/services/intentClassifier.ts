@@ -8,7 +8,17 @@
  * Execution: purely synchronous, <1ms, no I/O.
  */
 
-export type IntentType = "code" | "math" | "reasoning" | "creative" | "simple" | "medium";
+export type IntentType =
+  | "code"
+  | "math"
+  | "reasoning"
+  | "creative"
+  | "simple"
+  | "medium"
+  | "planning"
+  | "debugging"
+  | "documentation"
+  | "review";
 
 export interface ClassificationResult {
   type: IntentType;
@@ -521,6 +531,261 @@ export const CREATIVE_KEYWORDS: readonly string[] = [
   "مقالة",
 ];
 
+export const PLANNING_KEYWORDS: readonly string[] = [
+  // English
+  "plan",
+  "planning",
+  "roadmap",
+  "strategy",
+  "design",
+  "architecture",
+  "blueprint",
+  "architect",
+  "redesign",
+  "workflow",
+  "multi-step",
+  "multi-page",
+  "system architecture",
+  "end-to-end",
+  "feature planning",
+  // Português
+  "planejar",
+  "planejamento",
+  "estratégia",
+  "design",
+  "arquitetura",
+  "projeto",
+  "fluxo de trabalho",
+  // Español
+  "planificar",
+  "planificación",
+  "estrategia",
+  "diseño",
+  "arquitectura",
+  "flujo de trabajo",
+  // 中文
+  "规划",
+  "计划",
+  "策略",
+  "设计",
+  "架构",
+  "工作流",
+  // 日本語
+  "計画",
+  "プラン",
+  "設計",
+  "アーキテクチャ",
+  // Русский
+  "планирование",
+  "планировать",
+  "стратегия",
+  "архитектура",
+  // Deutsch
+  "planen",
+  "planung",
+  "strategie",
+  "architektur",
+  // 한국어
+  "계획",
+  "기획",
+  "전략",
+  "설계",
+  // العربية
+  "تخطيط",
+  "خطة",
+  "استراتيجية",
+  "هندسة",
+];
+
+export const DEBUGGING_KEYWORDS: readonly string[] = [
+  // English
+  "debug",
+  "debugging",
+  "fix bug",
+  "fix error",
+  "troubleshoot",
+  "trace",
+  "stack trace",
+  "error",
+  "exception",
+  "crash",
+  "breakpoint",
+  // Português
+  "depurar",
+  "depuração",
+  "corrigir bug",
+  "corrigir erro",
+  "rastrear",
+  "stack trace",
+  "erro",
+  "exceção",
+  "falha",
+  // Español
+  "depurar",
+  "depuración",
+  "corregir error",
+  "rastrear",
+  "traza",
+  "error",
+  "excepción",
+  "fallo",
+  // 中文
+  "调试",
+  "修复bug",
+  "修复错误",
+  "排查",
+  "堆栈跟踪",
+  "错误",
+  "异常",
+  "崩溃",
+  // 日本語
+  "デバッグ",
+  "デバッギング",
+  "バグ修正",
+  "エラー修正",
+  "スタックトレース",
+  "エラー",
+  "例外",
+  // Русский
+  "отладка",
+  "исправить ошибку",
+  "трассировка",
+  "ошибка",
+  "исключение",
+  // Deutsch
+  "debuggen",
+  "fehler beheben",
+  "stack trace",
+  "fehler",
+  "ausnahme",
+  // 한국어
+  "디버깅",
+  "버그 수정",
+  "오류 수정",
+  "스택 트레이스",
+  // العربية
+  "تصحيح الأخطاء",
+  "إصلاح خطأ",
+  "تتبع المكدس",
+  "خطأ",
+  "استثناء",
+];
+
+export const DOCUMENTATION_KEYWORDS: readonly string[] = [
+  // English
+  "document",
+  "documentation",
+  "docs",
+  "readme",
+  "comment",
+  "comments",
+  "docstring",
+  "docstrings",
+  "write docs",
+  "api docs",
+  "technical documentation",
+  // Português
+  "documentar",
+  "documentação",
+  "comentário",
+  "comentários",
+  "docstring",
+  "escrever docs",
+  // Español
+  "documentar",
+  "documentación",
+  "comentario",
+  "comentarios",
+  "docstring",
+  "escribir docs",
+  // 中文
+  "文档",
+  "注释",
+  "注释文档",
+  "编写文档",
+  // 日本語
+  "ドキュメント",
+  "ドキュメンテーション",
+  "コメント",
+  "ドックストリング",
+  // Русский
+  "документировать",
+  "документация",
+  "комментарий",
+  // Deutsch
+  "dokumentieren",
+  "dokumentation",
+  "kommentar",
+  // 한국어
+  "문서화",
+  "주석",
+  // العربية
+  "توثيق",
+  "تعليق",
+];
+
+export const REVIEW_KEYWORDS: readonly string[] = [
+  // English
+  "review",
+  "code review",
+  "review code",
+  "pull request",
+  "pr review",
+  "audit",
+  "inspect",
+  "inspection",
+  "peer review",
+  // Português
+  "revisar",
+  "revisão de código",
+  "code review",
+  "pull request",
+  "auditoria",
+  "inspecionar",
+  // Español
+  "revisar",
+  "revisión de código",
+  "code review",
+  "pull request",
+  "auditoría",
+  "inspección",
+  // 中文
+  "代码审查",
+  "审查代码",
+  "拉取请求",
+  "审计",
+  "检查",
+  // 日本語
+  "レビュー",
+  "コードレビュー",
+  "プルリクエスト",
+  "監査",
+  "検査",
+  // Русский
+  "обзор",
+  "код-ревью",
+  "pull request",
+  "аудит",
+  "инспекция",
+  // Deutsch
+  "review",
+  "code review",
+  "pull request",
+  "audit",
+  "inspektion",
+  // 한국어
+  "리뷰",
+  "코드 리뷰",
+  "풀 리퀘스트",
+  "감사",
+  // العربية
+  "مراجعة",
+  "مراجعة الكود",
+  "سحب طلب",
+  "تدقيق",
+  "فحص",
+];
+
 export const SIMPLE_KEYWORDS: readonly string[] = [
   // English
   "what is",
@@ -589,12 +854,24 @@ export const SIMPLE_KEYWORDS: readonly string[] = [
 
 /**
  * Classify a prompt's intent using multilingual keyword matching.
- * Priority: code > math > reasoning > creative > simple > medium (default)
+ * Priority: code > planning > debugging > documentation > review > math > reasoning > creative > simple > medium (default)
  */
 export function classifyPromptIntent(prompt: string, systemPrompt?: string): IntentType {
   const fullText = `${systemPrompt ?? ""} ${prompt}`.toLowerCase();
   const wordCount = prompt.trim().split(/\s+/).length;
 
+  for (const kw of PLANNING_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "planning";
+  }
+  for (const kw of DEBUGGING_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "debugging";
+  }
+  for (const kw of DOCUMENTATION_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "documentation";
+  }
+  for (const kw of REVIEW_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "review";
+  }
   for (const kw of CODE_KEYWORDS) {
     if (fullText.includes(kw.toLowerCase())) return "code";
   }

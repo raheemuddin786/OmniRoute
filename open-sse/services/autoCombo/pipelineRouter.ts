@@ -46,6 +46,10 @@ const INTENT_TO_TASK: Record<IntentType, TaskType> = {
   creative: "creative",
   medium: "medium",
   simple: "simple",
+  planning: "planning",
+  debugging: "debugging",
+  documentation: "documentation",
+  review: "review",
 };
 
 // ---------------------------------------------------------------------------
