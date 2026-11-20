@@ -442,7 +442,9 @@ export async function processSmartProxyRouting(
     // When the agent is diagnosing a crash screenshot, test failure, or stack trace, it must be granted
     // diagnostic latitude to inspect the relevant error line or visual artifact before editing code blindly.
     const isDiagnosticOrVisualTurn = Boolean(
-      intent.hasVisualOrCrashData || intent.hasTestOrDiagnosticFailure
+      intent.hasVisualOrCrashData ||
+      intent.hasTestOrDiagnosticFailure ||
+      intent.isToolExecutionError
     );
 
     const isInspectionPhase =
@@ -494,9 +496,9 @@ export async function processSmartProxyRouting(
       isStagnant = true;
       stagnationDetected = true;
       stagnationRecovered = true;
-      const duplicateBlockDirective =
-        `[SPB Guidance: The file '${intent.duplicateFilePath}' has already been inspected multiple times. ` +
-        `Context from this file has been acquired. Proceed to applying edits (Write/Edit) or executing tests.]`;
+      const duplicateBlockDirective = intent.isToolExecutionError
+        ? `[SPB Diagnostic Guidance: A tool operation on '${intent.duplicateFilePath}' failed. Verify the file path, request workspace access if needed, or diagnose the underlying error before proceeding. Do not assume file contents or hallucinate.]`
+        : `[SPB Guidance: The file '${intent.duplicateFilePath}' has already been inspected multiple times. Context from this file has been acquired. Proceed to applying edits (Write/Edit) or executing tests.]`;
       autoRecoveryDirective = autoRecoveryDirective
         ? `${autoRecoveryDirective}\n\n${duplicateBlockDirective}`
         : duplicateBlockDirective;

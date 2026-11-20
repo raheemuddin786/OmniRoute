@@ -429,11 +429,11 @@ function createLiveStreamRepetitionGuard(): TransformStream<Uint8Array, Uint8Arr
               lineBuffer = parts.pop() || "";
               for (const completedLine of parts) {
                 const sl = completedLine.trim();
-                if (sl.length >= 15) {
+                if (sl.length >= 25) {
                   recentLines.push(sl);
                   if (recentLines.length > 20) recentLines.shift();
 
-                  if (recentLines.length >= 4) {
+                  if (recentLines.length >= 5) {
                     const target = recentLines[recentLines.length - 1];
                     let count = 0;
                     for (let i = recentLines.length - 1; i >= 0; i--) {
@@ -441,7 +441,7 @@ function createLiveStreamRepetitionGuard(): TransformStream<Uint8Array, Uint8Arr
                       else break;
                     }
 
-                    if (count >= 4) {
+                    if (count >= 5) {
                       terminated = true;
                       log.warn(
                         "SPB",
@@ -457,7 +457,7 @@ function createLiveStreamRepetitionGuard(): TransformStream<Uint8Array, Uint8Arr
                       } else {
                         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                       }
-                      controller.terminate();
+                      controller.close();
                       return;
                     }
                   }

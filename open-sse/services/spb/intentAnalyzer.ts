@@ -72,6 +72,7 @@ export interface IntentProfile {
   promptAnchorHash: string;
   isToolResultTurn: boolean;
   isCodeMutationToolResult?: boolean;
+  isToolExecutionError?: boolean;
   isDuplicateFileRead?: boolean;
   duplicateFilePath?: string;
   guidanceContract?: GuidanceContract;
@@ -86,6 +87,7 @@ interface ExtractedContent {
   toolResultText: string;
   hasVisualOrCrashData: boolean;
   hasTestOrDiagnosticFailure: boolean;
+  hasToolExecutionError?: boolean;
 }
 
 function extractMessageContent(msg: { role: string; content?: unknown }): ExtractedContent {
@@ -119,6 +121,7 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
   let hasToolResult = false;
   let hasVisualOrCrashData = false;
   let hasTestOrDiagnosticFailure = false;
+  let hasToolExecutionError = false;
 
   if (Array.isArray(content)) {
     for (const part of content) {
@@ -139,11 +142,19 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
 
         if (item.type === "tool_result" || item.tool_use_id) {
           hasToolResult = true;
+          const isExplicitError = item.is_error === true || item.status === "error";
           const res =
             typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? "");
           toolResultText += " " + res;
           if (crashKeywordsRegex.test(res)) hasVisualOrCrashData = true;
           if (testFailureRegex.test(res)) hasTestOrDiagnosticFailure = true;
+          const isToolErrorPattern =
+            /(?:PreToolUse.*?error|\[tool_error:\s*true\]|tool_error|outside this session|ENOENT|EACCES|command not found|exit code [1-9]|fatal:)/i.test(
+              res
+            );
+          if (isExplicitError || isToolErrorPattern) {
+            hasToolExecutionError = true;
+          }
         } else if (typeof item.text === "string") {
           userText += " " + item.text;
           if (crashKeywordsRegex.test(item.text)) hasVisualOrCrashData = true;
@@ -190,6 +201,7 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
     toolResultText: toolResultText.trim(),
     hasVisualOrCrashData,
     hasTestOrDiagnosticFailure,
+    hasToolExecutionError,
   };
 }
 
@@ -565,6 +577,7 @@ export function classifyIntent(
     promptAnchorHash,
     isToolResultTurn,
     isCodeMutationToolResult: !!isCodeMutationToolResult,
+    isToolExecutionError: Boolean(latestExtracted.hasToolExecutionError),
     isDuplicateFileRead,
     duplicateFilePath,
     originalPrompt: originalPromptText || "",
