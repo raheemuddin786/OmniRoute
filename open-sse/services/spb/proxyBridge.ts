@@ -436,6 +436,7 @@ export async function processSmartProxyRouting(
     // 2. Inspection phases (INSPECTION_SYNTHESIS, DETERMINISTIC_ROUTING, TESTING_AND_VERIFICATION) increment
     // 3. Only an actual code mutation tool result resets the counter to 0.
     const priorConsecutiveReads = existingCheckpoint?.consecutiveReads ?? 0;
+    const _priorStagnationRecovered = existingCheckpoint?.stagnationRecovered ?? false;
     const isNonMutatingToolResult = intent.isToolResultTurn && !intent.isCodeMutationToolResult;
     // Visual crash inspection or active diagnostic error turns should NOT count as passive stagnation.
     // When the agent is diagnosing a crash screenshot, test failure, or stack trace, it must be granted
@@ -470,8 +471,10 @@ export async function processSmartProxyRouting(
       consecutiveReads,
       existingCheckpoint
     );
-
+    // tieredRegistry now returns reset counter + stagnationRecovered flag + updatedCheckpoint
     isStagnant = stagnationRecovery.isStagnant;
+    // Use updated checkpoint for saving (contains reset consecutiveReads and stagnationRecovered flag)
+    const updatedCheckpoint = stagnationRecovery.updatedCheckpoint;
     if (isStagnant) {
       stagnationDetected = true;
       stagnationRecovered = true;
@@ -830,8 +833,14 @@ export async function processSmartProxyRouting(
         taskPhase: intent.taskPhase,
         modelTier: tierAssignment.tier,
         guidanceContract: activeGuidanceContract,
-        consecutiveReads,
-        stagnationRecovered: stagnationRecovered ? 1 : 0,
+        consecutiveReads:
+          updatedCheckpoint?.consecutiveReads ??
+          (stagnationRecovery.isStagnant ? 0 : consecutiveReads),
+        stagnationRecovered: updatedCheckpoint?.stagnationRecovered
+          ? 1
+          : stagnationRecovery.isStagnant
+            ? 1
+            : 0,
         statePayload: JSON.stringify({
           messagesCount: messages.length,
           timestamp: Date.now(),

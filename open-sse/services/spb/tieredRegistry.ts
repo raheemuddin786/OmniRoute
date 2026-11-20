@@ -296,6 +296,12 @@ export function detectAndRecoverFromStagnation(
   recoveryDirective?: string;
   newTaskPhase?: TaskPhase;
   escalationTier?: "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
+  updatedCheckpoint?: {
+    consecutiveReads?: number;
+    modelTier?: string;
+    guidanceContract?: GuidanceContract;
+    stagnationRecovered?: boolean;
+  };
 } {
   const currentConfig = getTierConfig();
   const stagnationThreshold = currentConfig?.spbConfig?.stagnationThreshold ?? 2;
@@ -303,6 +309,12 @@ export function detectAndRecoverFromStagnation(
   let recoveryDirective: string | undefined;
   let newTaskPhase: TaskPhase | undefined;
   let escalationTier: "tier_1_apex" | "tier_2_resilient" | "tier_3_local" | undefined;
+
+  // If previous turn already applied recovery, don't re-detect immediately.
+  // Require additional non-mutating turns before re-triggering.
+  if (existingCheckpoint?.stagnationRecovered) {
+    return { isStagnant: false, escalationTier: undefined };
+  }
 
   // Detect stagnation based on cumulative non-mutating turns.
   // The counter now increments on ANY non-mutating tool result regardless of
@@ -333,19 +345,22 @@ export function detectAndRecoverFromStagnation(
         "[Auto-Recovery Directive: APEX REASONING ESCALATION]\n" +
         "Repeated non-mutating tool cycles detected on execution tier. Re-evaluating strategy with architectural guidance. " +
         "Synthesize gathered context and formulate a direct file-modification action plan.";
+    } else if (currentTier === "tier_3_local") {
+      // Tier 3 stagnation -> escalate to Tier 2
+      escalationTier = "tier_2_resilient";
     } else {
       escalationTier = "tier_2_resilient";
     }
 
-    // CRITICAL FIX: Do NOT reset consecutiveReads to 0 upon detection.
-    // Resetting here causes an alternating-turn amnesia loop (turn 2 detected -> reset to 0 ->
-    // turn 3 has count 1 so undetected -> turn 4 detected -> repeat indefinitely).
-    // The counter must persist until an actual code-mutating turn occurs (Write/Edit/patch).
-    // We update the checkpoint preserving the active count so downstream tracking sees it.
+    // RESET consecutiveReads to 0 when recovery triggers.
+    // The recovery directive is injected into the prompt - agent MUST act on it next turn.
+    // If agent ignores and reads again, counter will increment from 0 and re-detect.
+    // This prevents infinite loop where same count triggers same directive repeatedly.
     if (existingCheckpoint) {
       existingCheckpoint = {
         ...existingCheckpoint,
-        consecutiveReads,
+        consecutiveReads: 0,
+        stagnationRecovered: true,
       };
     }
   }
@@ -355,6 +370,7 @@ export function detectAndRecoverFromStagnation(
     recoveryDirective,
     newTaskPhase,
     escalationTier,
+    updatedCheckpoint: existingCheckpoint,
   };
 }
 
