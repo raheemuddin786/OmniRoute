@@ -2396,8 +2396,8 @@ async function handleChatImplementation(
     false
   );
 
-  // If a single model attempt failed with 429 (quota/rate-limit) or 5xx, try fallback:
-  if (!response.ok && [429, 500, 502, 503, 504].includes(response.status)) {
+  // If a single model attempt failed with 404 (model not found/unsupported), 429 (quota/rate-limit) or 5xx, try fallback:
+  if (!response.ok && [404, 429, 500, 502, 503, 504].includes(response.status)) {
     // 1. If SPB is active and recommended alternative tier models, attempt fallback across remaining models
     if (isSpbActive && spbDecision?.tierAssignment?.recommendedModels?.length) {
       const currentTierConfig = getTierConfig(spbProfileName);
