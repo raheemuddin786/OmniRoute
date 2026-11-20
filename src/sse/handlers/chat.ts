@@ -1658,11 +1658,22 @@ async function handleChatImplementation(
         );
       }
     } else {
+      // Prioritize the bridge-selected model if available in this tier (e.g. anti-stagnation model rotation)
+      if (
+        spbDecision?.selectedModel &&
+        configuredTargets.includes(spbDecision.selectedModel) &&
+        (await checkCandidateAvailable(spbDecision.selectedModel))
+      ) {
+        selectedTarget = spbDecision.selectedModel;
+      }
+
       // Walk configured tier candidates in order, skipping cooled/locked accounts
-      for (const target of configuredTargets) {
-        if (await checkCandidateAvailable(target)) {
-          selectedTarget = target;
-          break;
+      if (!selectedTarget) {
+        for (const target of configuredTargets) {
+          if (await checkCandidateAvailable(target)) {
+            selectedTarget = target;
+            break;
+          }
         }
       }
 

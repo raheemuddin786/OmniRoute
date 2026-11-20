@@ -836,11 +836,16 @@ export async function processSmartProxyRouting(
         consecutiveReads:
           updatedCheckpoint?.consecutiveReads ??
           (stagnationRecovery.isStagnant ? 0 : consecutiveReads),
-        stagnationRecovered: updatedCheckpoint?.stagnationRecovered
-          ? 1
-          : stagnationRecovery.isStagnant
-            ? 1
-            : 0,
+        stagnationRecovered:
+          updatedCheckpoint?.stagnationRecovered !== undefined
+            ? updatedCheckpoint.stagnationRecovered
+              ? 1
+              : 0
+            : stagnationRecovery.isStagnant
+              ? 1
+              : existingCheckpoint?.stagnationRecovered
+                ? 1
+                : 0,
         statePayload: JSON.stringify({
           messagesCount: messages.length,
           timestamp: Date.now(),

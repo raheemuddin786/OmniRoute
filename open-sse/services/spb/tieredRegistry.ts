@@ -311,9 +311,17 @@ export function detectAndRecoverFromStagnation(
   let escalationTier: "tier_1_apex" | "tier_2_resilient" | "tier_3_local" | undefined;
 
   // If previous turn already applied recovery, don't re-detect immediately.
-  // Require additional non-mutating turns before re-triggering.
-  if (existingCheckpoint?.stagnationRecovered) {
-    return { isStagnant: false, escalationTier: undefined };
+  // Require consecutiveReads to re-accumulate to at least stagnationThreshold before re-triggering.
+  if (existingCheckpoint?.stagnationRecovered && consecutiveReads < stagnationThreshold) {
+    return {
+      isStagnant: false,
+      escalationTier: undefined,
+      updatedCheckpoint: {
+        ...existingCheckpoint,
+        consecutiveReads,
+        stagnationRecovered: true,
+      },
+    };
   }
 
   // Detect stagnation based on cumulative non-mutating turns.
