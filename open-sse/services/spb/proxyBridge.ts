@@ -723,6 +723,34 @@ export async function processSmartProxyRouting(
       tierAssignment.guidanceContract = activeGuidanceContract;
     }
 
+    // Tier 3 (local) execution ALWAYS requires GuidanceContract from supervisor tier
+    // Per architecture: Tier 3 (FAST_REFACTOR, DETERMINISTIC_ROUTING, INSPECTION_SYNTHESIS)
+    // must have GuidanceContract from Tier 1/2 supervisor
+    if (!activeGuidanceContract && tierAssignment.tier === "tier_3_local") {
+      const cleanInstruction = cleanUserInstruction(lastUserText) || "Tier 3 execution";
+      const mergedInstructions = Array.from(
+        new Set([...priorInstructions, rootTaskSpecification, cleanInstruction].filter(Boolean))
+      );
+      activeGuidanceContract = {
+        supervisorTier: "tier_2_resilient",
+        taskSpecification: rootTaskSpecification,
+        constraints: [
+          "Tier 3 execution under Tier 2 supervision",
+          "Proceed with deterministic/refactor/inspection tasks using available tools",
+          "All changes must be verified against existing tests and contracts",
+        ],
+        instructions: mergedInstructions,
+        targetFiles:
+          (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.targetFiles || [],
+        verificationCriteria: [
+          "All test and verification suites must pass with zero errors",
+          "No architectural changes without Tier 1/2 approval",
+        ],
+        createdAt: Date.now(),
+      };
+      tierAssignment.guidanceContract = activeGuidanceContract;
+    }
+
     // Ensure active guidance contract has an initialized Intent Ledger
     if (activeGuidanceContract) {
       if (
@@ -744,15 +772,15 @@ export async function processSmartProxyRouting(
               prompt: lastUserText || rootTaskSpecification,
               conversationMessages: messages,
             });
+            if (!context.dispatchModel) {
+              throw new Error(
+                "dispatchModel required for apex_guided/apex_shadow mode but not provided"
+              );
+            }
             const expansion = await expandLedgerWithApex(
               lastUserText || rootTaskSpecification,
               apexCtx,
-              context.dispatchModel ||
-                (async () => {
-                  throw new Error(
-                    "No live dispatch model provided to SPB proxyBridge; falling back to heuristic decomposer"
-                  );
-                }),
+              context.dispatchModel,
               {
                 maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
                 promptAnchorHash: intent.promptAnchorHash,
