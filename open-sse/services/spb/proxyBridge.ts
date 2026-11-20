@@ -47,6 +47,8 @@ import {
   gatherApexContext,
   type ModelDispatchFn,
 } from "./apexLedger.ts";
+import { containsMediaKind } from "../../utils/mediaParts.ts";
+import { getResolvedModelCapabilities } from "../modelCapabilities.ts";
 import {
   enhanceInboundPrompt,
   evaluateRequestNecessity,
@@ -610,6 +612,21 @@ export async function processSmartProxyRouting(
       normalizedGuidanceContract = intent.guidanceContract;
     }
 
+    // When request contains images, filter candidates to ensure native vision capability
+    const payloadHasImages = containsMediaKind(
+      context.messages as Parameters<typeof containsMediaKind>[0],
+      "image"
+    );
+    if (payloadHasImages && tierAssignment.recommendedModels?.length) {
+      const visionCompatible = tierAssignment.recommendedModels.filter((modelStr) => {
+        const caps = getResolvedModelCapabilities(modelStr);
+        return caps.supportsVision === true;
+      });
+      if (visionCompatible.length > 0) {
+        tierAssignment.recommendedModels = visionCompatible;
+      }
+    }
+
     // When stagnant, do not reuse restoredModel if it is the model that became stagnant;
     // rotate or alternate models within the tier if multiple models are configured.
     let selectedModel = restoredModel;
@@ -626,6 +643,16 @@ export async function processSmartProxyRouting(
           `[SPB Bridge] Session ${sessionId} | Stagnation model rotated from ${restoredModel} to ${selectedModel}`
         );
       }
+    } else if (
+      payloadHasImages &&
+      selectedModel &&
+      getResolvedModelCapabilities(selectedModel).supportsVision !== true
+    ) {
+      // If the restoredModel lacks vision support, rotate to a vision-compatible model in the tier
+      const visionCandidate = tierAssignment.recommendedModels?.find(
+        (m) => getResolvedModelCapabilities(m).supportsVision === true
+      );
+      selectedModel = visionCandidate || tierAssignment.recommendedModels?.[0] || null;
     } else if (!selectedModel) {
       selectedModel =
         tierAssignment.recommendedModels && tierAssignment.recommendedModels.length > 0
