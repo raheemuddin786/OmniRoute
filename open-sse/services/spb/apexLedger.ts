@@ -254,8 +254,8 @@ export const ApexIntentItemSchema = z
     text: z.string(),
     kind: z.enum(["explicit", "required-implied", "optional"]),
     parentId: z.string().nullable().optional(),
-    reason: z.string().optional(),
-    promptRef: z.string().optional(),
+    reason: z.string().nullable().optional(),
+    promptRef: z.string().nullable().optional(),
     layer: z.enum(["ui", "api", "data", "test", "config", "docs"]),
     targetFiles: z.array(z.string()).default([]),
     acceptance: z.string(),
@@ -336,8 +336,8 @@ export const ApexIntentItemSchema = z
   });
 
 export const ApexLedgerExpansionSchema = z.object({
-  isActionable: z.boolean(),
-  intents: z.array(ApexIntentItemSchema),
+  isActionable: z.boolean().default(true),
+  intents: z.array(ApexIntentItemSchema).default([]),
   nonGoals: z.array(z.string()).default([]),
   constraints: z.array(z.string()).default([]),
 });
@@ -892,9 +892,10 @@ export async function expandLedgerWithApex(
 
     // Retry ONCE with the specific validation error before falling back
     if (!parseResult.success) {
+      const initialError = parseResult.error;
       retryCount++;
       console.warn(
-        `[SPB ApexLedger] Initial expansion failed validation (${parseResult.error}). Retrying with validation feedback...`
+        `[SPB ApexLedger] Initial expansion failed validation (${initialError}). Retrying with validation feedback...`
       );
       try {
         const retryRaw = await withTimeout(
@@ -907,7 +908,7 @@ export async function expandLedgerWithApex(
                 {
                   role: "user",
                   content:
-                    `SCHEMA VALIDATION ERROR:\nYour previous response failed validation:\n${parseResult.error}\n\n` +
+                    `SCHEMA VALIDATION ERROR:\nYour previous response failed validation:\n${initialError}\n\n` +
                     `Please fix the errors and output ONLY valid JSON adhering strictly to the schema and rules:\n` +
                     `- "constraints": repo conventions (worktree, base-green, PR rules) and note on required env vars belong in "constraints", NOT in "intents".\n` +
                     `- "explicit" items MUST have non-empty "promptRef" quoting/paraphrasing the user's words.\n` +
@@ -930,7 +931,9 @@ export async function expandLedgerWithApex(
           raw = retryRaw;
           parseResult = retryParse;
         } else {
-          console.warn(`[SPB ApexLedger] Retry also failed validation: ${retryParse.error}`);
+          console.warn(
+            `[SPB ApexLedger] Retry also failed validation: ${!retryParse.success ? retryParse.error : ""}`
+          );
         }
       } catch (retryErr) {
         console.warn(`[SPB ApexLedger] Retry dispatch error:`, retryErr);
