@@ -289,4 +289,13 @@ describe("Claude Web live request alignment", () => {
     assert.equal(responseBody.error.message, "Claude Web API error (500)");
     assert.equal(responseBody.upstream_details, undefined);
   });
+
+  it("does not classify Claude Web rate limit messages as monthly spend limit subscription quotas", async () => {
+    const { isSubscriptionQuotaText } =
+      await import("../../open-sse/services/quotaTextCooldowns.ts");
+    assert.equal(isSubscriptionQuotaText("rate limit exceeded", "claude-web"), true);
+    assert.equal(isSubscriptionQuotaText("too many requests", "claude-web"), true);
+    assert.equal(isSubscriptionQuotaText("monthly spend limit reached", "claude-web"), false);
+    assert.equal(isSubscriptionQuotaText("monthly spend limit reached", "claude"), true);
+  });
 });

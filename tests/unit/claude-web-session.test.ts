@@ -87,15 +87,13 @@ describe("Claude Web conversation sessions", () => {
     );
 
     assert.notEqual(recovered.payload.prompt, "new question");
-    for (const expected of [
-      "system rules",
-      "old question",
-      "old answer",
-      "tool result",
-      "new question",
-    ]) {
+    for (const expected of ["old question", "old answer", "tool result", "new question"]) {
       assert.match(recovered.payload.prompt, new RegExp(expected));
     }
+    // System prompt is now injected into personalized_styles, not the recovery prompt
+    assert.ok(recovered.payload.personalized_styles);
+    const stylePrompt = recovered.payload.personalized_styles?.[0]?.prompt || "";
+    assert.match(stylePrompt, /system rules/);
     assert.ok(recovered.payload.create_conversation_params);
   });
 
@@ -287,5 +285,51 @@ describe("Claude Web conversation sessions", () => {
       })
     );
     assert.equal(leftFollowUp.conversationId, first.conversationId);
+  });
+
+  it("handles continuation messages without explicit user role (e.g. tool output fallback)", () => {
+    const turn = prepareClaudeWebTurn(
+      input({
+        messages: [
+          { role: "user", content: "perform action" },
+          { role: "assistant", content: "calling tool..." },
+          { role: "tool", content: "result: action completed" },
+        ],
+      })
+    );
+    assert.ok(turn.payload.prompt.includes("result: action completed"));
+    assert.equal(turn.operation, "completion");
+  });
+
+  it("handles image or tool_result tool outputs without throwing empty message error", () => {
+    const turn = prepareClaudeWebTurn(
+      input({
+        messages: [
+          { role: "user", content: "please read image" },
+          { role: "assistant", content: "reading..." },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_read_img_123",
+                content: [
+                  {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: "image/png",
+                      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+    );
+    assert.ok(turn.payload.prompt.includes("[Image]"));
+    assert.equal(turn.operation, "completion");
   });
 });

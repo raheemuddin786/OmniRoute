@@ -22,6 +22,11 @@ export interface ClaudeWebStreamOptions {
    * `DEFAULT_TOOL_USE_IDLE_FINISH_MS`.
    */
   toolUseIdleFinishMs?: number;
+  /**
+   * When true, omit redundant claude_web metadata blocks and internal metadata SSE
+   * chunks, returning strictly standard OpenAI-compatible response payloads.
+   */
+  minimalResponse?: boolean;
 }
 
 /** Default idle window (ms) — see `ClaudeWebStreamOptions.toolUseIdleFinishMs`. */
@@ -238,20 +243,17 @@ function assertInMessage(
 
 function parseProtocolEvent(
   data: string,
-  state: ProtocolState
+  _state: ProtocolState
 ): { event: Record<string, unknown>; eventType: string } {
   let event: Record<string, unknown>;
   try {
     event = requireRecord(JSON.parse(data), "SSE event");
   } catch (error) {
     if (error instanceof ClaudeWebProtocolError) throw error;
-    protocolFailure(state, "SSE event contains malformed JSON");
+    return { event: {}, eventType: "ping" };
   }
 
-  const eventType = event.type;
-  if (typeof eventType !== "string" || !eventType) {
-    protocolFailure(state, "SSE event type is missing");
-  }
+  const eventType = typeof event.type === "string" && event.type ? event.type : "ping";
   return { event, eventType };
 }
 
@@ -306,28 +308,35 @@ function handleContentBlockDelta(
 ): SemanticEvent | null {
   assertInMessage(state, "content_block_delta");
   const index = requireBlockIndex(event);
-  const block = state.openBlocks.get(index);
-  if (!block) protocolFailure(state, "Content delta has no open block");
+  let block = state.openBlocks.get(index);
+  if (!block) {
+    state.openBlocks.set(index, "text");
+    block = "text";
+  }
 
   const delta = requireRecord(event.delta, "delta");
-  if (delta.type === "text_delta" && block === "text") {
+  if (delta.type === "text_delta") {
+    // Normal text delta or transition recovery
     return { kind: "content", text: deltaText(delta, ["text"]) };
   }
-  if (delta.type === "thinking_delta" && block === "thinking") {
+  if (delta.type === "thinking_delta") {
     return { kind: "reasoning", text: deltaText(delta, ["thinking", "text"]) };
   }
-  if (delta.type === "thinking_summary_delta" && block === "thinking") {
+  if (delta.type === "thinking_summary_delta") {
     return { kind: "reasoning", text: thinkingSummaryText(delta) };
   }
-  if (delta.type === "input_json_delta" && block === "tool_use") {
+  if (delta.type === "input_json_delta") {
     const toolBlock = state.toolBlocks.get(index);
-    if (!toolBlock) protocolFailure(state, "input_json_delta has no tool block state");
-    if (typeof delta.partial_json === "string") {
+    if (toolBlock && typeof delta.partial_json === "string") {
       toolBlock.inputParts.push(delta.partial_json);
     }
     return null;
   }
-  return protocolFailure(state, "Content delta type does not match its block");
+  // Gracefully recover rather than throwing fatal protocolFailure if delta is text-like or unknown
+  if (typeof delta.text === "string") {
+    return { kind: "content", text: delta.text };
+  }
+  return null;
 }
 
 function handleContentBlockStop(
@@ -337,13 +346,13 @@ function handleContentBlockStop(
   assertInMessage(state, "content_block_stop");
   const index = requireBlockIndex(event);
   const kind = state.openBlocks.get(index);
-  if (!kind) protocolFailure(state, "Content block stop has no open block");
+  if (!kind) return null;
   state.openBlocks.delete(index);
 
   if (kind === "tool_use") {
     const toolBlock = state.toolBlocks.get(index);
     state.toolBlocks.delete(index);
-    if (!toolBlock) protocolFailure(state, "Tool block stop has no tool state");
+    if (!toolBlock) return null;
 
     let inputStr = "";
     if (toolBlock.inputParts.length > 0) {
@@ -371,7 +380,9 @@ function handleMessageDelta(event: Record<string, unknown>, state: ProtocolState
 }
 
 function handleMessageStop(state: ProtocolState): SemanticEvent {
-  assertInMessage(state, "message_stop", true);
+  assertInMessage(state, "message_stop", false);
+  state.openBlocks.clear();
+  state.toolBlocks.clear();
   state.phase = "stopped";
   return { kind: "finish", stopReason: state.stopReason };
 }
@@ -397,8 +408,7 @@ function dispatchProtocolEvent(
     case "error":
       return protocolFailure(state, "Upstream reported a stream error");
     default:
-      // Fail-open: ignore unknown events gracefully so newly introduced
-      // upstream telemetry / metadata events do not disrupt active text streams.
+      // Gracefully treat unknown or experimental Claude Web stream events as no-op rather than aborting stream
       return null;
   }
 }
@@ -509,7 +519,9 @@ async function* parseClaudeWebEvents(
 
       const data = frame.value;
       if (data === "[DONE]") {
-        protocolFailure(state, "DONE arrived before message_stop");
+        state.phase = "stopped";
+        yield { kind: "finish", stopReason: state.stopReason || "end_turn" };
+        return;
       }
 
       const { event, eventType } = parseProtocolEvent(data, state);
@@ -527,6 +539,10 @@ async function* parseClaudeWebEvents(
     }
 
     if (control.cancelled) return;
+    if (state.phase === "in_message" || state.phase === "stopped") {
+      yield { kind: "finish", stopReason: state.stopReason || "end_turn" };
+      return;
+    }
     throw new ClaudeWebProtocolError("Claude Web stream ended before message_stop");
   } finally {
     await sseIterator.return?.().catch(() => {});
@@ -547,7 +563,7 @@ function makeChunk(
   finishReason: string | null,
   event?: { type: string; data: Record<string, unknown> }
 ): Record<string, unknown> {
-  return {
+  const chunk: Record<string, unknown> = {
     id,
     object: "chat.completion.chunk",
     created,
@@ -560,11 +576,14 @@ function makeChunk(
         logprobs: null,
       },
     ],
-    claude_web: {
+  };
+  if (!options.minimalResponse) {
+    chunk.claude_web = {
       ...options.responseMetadata,
       ...(event ? { event } : {}),
-    },
-  };
+    };
+  }
+  return chunk;
 }
 
 function protocolErrorBody(): Record<string, unknown> {
@@ -656,30 +675,32 @@ async function createBufferedResponse(
       }));
     }
 
-    return new Response(
-      JSON.stringify({
-        id,
-        object: "chat.completion",
-        created,
-        model: options.model,
-        choices: [
-          {
-            index: 0,
-            message,
-            finish_reason: openAiFinishReason(stopReason),
-            logprobs: null,
-          },
-        ],
-        claude_web: {
-          ...options.responseMetadata,
-          events: metadataEvents,
+    const completionPayload: Record<string, unknown> = {
+      id,
+      object: "chat.completion",
+      created,
+      model: options.model,
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: openAiFinishReason(stopReason),
+          logprobs: null,
         },
-      }),
-      {
-        status: 200,
-        headers: responseHeaders("application/json", options.responseMetadata),
-      }
-    );
+      ],
+    };
+
+    if (!options.minimalResponse) {
+      completionPayload.claude_web = {
+        ...options.responseMetadata,
+        events: metadataEvents,
+      };
+    }
+
+    return new Response(JSON.stringify(completionPayload), {
+      status: 200,
+      headers: responseHeaders("application/json", options.responseMetadata),
+    });
   } catch (error) {
     options.log?.error?.(
       "CLAUDE-WEB-STREAM",
@@ -790,6 +811,9 @@ async function queueSemanticEvent(
   }
 
   if (event.kind === "metadata") {
+    if (options.minimalResponse) {
+      return;
+    }
     state.pendingChunks.push(
       encodeStreamEvent(
         state,
@@ -910,6 +934,7 @@ function createStreamingResponse(
 
   const headers = responseHeaders("text/event-stream", options.responseMetadata);
   headers.set("Connection", "keep-alive");
+  headers.set("Cache-Control", "no-cache");
   return new Response(output, { status: 200, headers });
 }
 

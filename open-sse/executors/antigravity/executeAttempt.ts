@@ -30,12 +30,9 @@ import { sanitizeAntigravityToolPayload } from "../../config/toolCloaking.ts";
 import {
   applyAntigravityClientProfileHeaders,
   removeHeaderCaseInsensitive,
+  markProjectHeaderRejected,
 } from "../../services/antigravityClientProfile.ts";
 import * as prl from "../../utils/providerRequestLogging.ts";
-import { withAntigravityTiming, timeAntigravityFetch } from "../../services/antigravityTiming.ts";
-import * as timingLog from "@/sse/utils/logger";
-import { getCachedSettings } from "@/lib/db/readCache";
-import { resolveAntigravityTimingTelemetryEnabled } from "../../services/antigravityTimingConfig.ts";
 import { generateAntigravityRequestId } from "../../services/antigravityIdentity.ts";
 import {
   createCreditsExtractionTransform as createCreditsExtractionTransformImpl,
@@ -154,39 +151,6 @@ export function isAbortError(error: unknown): boolean {
   );
 }
 
-type PhysicalSendTiming = { correlationId: string | null; ordinal: number };
-
-async function observeTimedAntigravitySend(
-  metadata: HttpAttemptMetadata,
-  send: () => Promise<Response>,
-  signal?: AbortSignal | null,
-  timing?: PhysicalSendTiming
-): Promise<Response> {
-  // Resolve cached operator preferences before the HTTP-attempt timer starts:
-  // settings I/O must not be counted as upstream header latency.
-  const envEnabled = process.env.OMNIROUTE_ANTIGRAVITY_TIMING_TELEMETRY === "true";
-  const enabled = metadata.connectionId
-    ? await getCachedSettings()
-        .then((saved) => resolveAntigravityTimingTelemetryEnabled(saved, envEnabled))
-        .catch(() => envEnabled)
-    : false;
-  return prl.observeProviderHttpSend(metadata, () => {
-    if (!enabled || !metadata.connectionId) return send();
-    return withAntigravityTiming(
-      {
-        enabled: true,
-        connectionId: metadata.connectionId,
-        model: metadata.model,
-        correlationId: timing?.correlationId,
-        physicalSendOrdinal: timing?.ordinal,
-        emit: (event) =>
-          timingLog.info("ANTIGRAVITY_TIMING", "Antigravity physical-send timing", event),
-      },
-      () => timeAntigravityFetch(send, signal)
-    );
-  });
-}
-
 /**
  * `fetch()` wrapper that aborts if the upstream never returns response headers
  * within `timeoutMs` (default FETCH_TIMEOUT_MS, the global startup budget).
@@ -197,21 +161,18 @@ export async function fetchAntigravityWithReadinessTimeout(
   url: string,
   init: RequestInit,
   timeoutMs = FETCH_TIMEOUT_MS,
-  metadata?: HttpAttemptMetadata,
-  timing?: PhysicalSendTiming
+  metadata?: HttpAttemptMetadata
 ): Promise<Response> {
   const boundedTimeoutMs = Math.max(0, Math.floor(timeoutMs));
   if (boundedTimeoutMs <= 0) {
-    return observeTimedAntigravitySend(
+    return prl.observeProviderHttpSend(
       metadata ?? {
         provider: "antigravity",
         model: "unknown",
         connectionId: null,
         endpoint: "antigravity_generate",
       },
-      () => fetch(url, init),
-      init.signal,
-      timing
+      () => fetch(url, init)
     );
   }
 
@@ -226,16 +187,14 @@ export async function fetchAntigravityWithReadinessTimeout(
     : timeoutController.signal;
 
   try {
-    return await observeTimedAntigravitySend(
+    return await prl.observeProviderHttpSend(
       metadata ?? {
         provider: "antigravity",
         model: "unknown",
         connectionId: null,
         endpoint: "antigravity_generate",
       },
-      () => fetch(url, { ...init, signal: combinedSignal }),
-      combinedSignal,
-      timing
+      () => fetch(url, { ...init, signal: combinedSignal })
     );
   } catch (error) {
     if (
@@ -447,14 +406,15 @@ export async function sendAntigravityRequest(
       model: getRequestTargetModel(transformedBody),
       connectionId: credentials.connectionId ?? null,
       endpoint: "antigravity_generate",
-    },
-    { correlationId, ordinal: physicalSendOrdinal }
+    }
   );
 
   if (response.status === HTTP_STATUS.FORBIDDEN && finalHeaders["x-goog-user-project"]) {
     const retryHeaders = { ...finalHeaders };
     removeHeaderCaseInsensitive(retryHeaders, "x-goog-user-project");
     log.debug("RETRY", "403 with x-goog-user-project, retrying once without it");
+    // Mark this account as having rejected the header so future requests skip it
+    markProjectHeaderRejected(credentials);
     await prl.captureCurrentProviderBody(url, retryHeaders, serializedRequest.bodyString, log);
     const retryPhysicalSendOrdinal = ++physicalSendCounter.value;
     log.debug(
@@ -476,8 +436,7 @@ export async function sendAntigravityRequest(
         connectionId: credentials.connectionId ?? null,
         endpoint: "antigravity_generate",
         retryReason: "quota_header_removed_after_403",
-      },
-      { correlationId, ordinal: retryPhysicalSendOrdinal }
+      }
     );
     finalHeaders = retryHeaders;
   }
@@ -541,8 +500,7 @@ export async function sendAntigravityRequest(
               model: reResolvedModel,
               connectionId: credentials.connectionId ?? null,
               endpoint: "antigravity_generate",
-            },
-            { correlationId, ordinal: syncRetryPhysicalSendOrdinal }
+            }
           );
           finalHeaders = retryHeaders;
         }
@@ -644,8 +602,7 @@ export async function tryCreditsRetry(
         model: getRequestTargetModel(creditsBody),
         connectionId: credentials.connectionId ?? null,
         endpoint: "antigravity_generate",
-      },
-      { correlationId, ordinal: creditsPhysicalSendOrdinal }
+      }
     );
     if (creditsResp.ok || creditsResp.status !== HTTP_STATUS.RATE_LIMITED) {
       log.info("AG_CREDITS", `Credits retry succeeded: ${creditsResp.status}`);

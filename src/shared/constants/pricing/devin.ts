@@ -93,6 +93,11 @@ export const DEVIN_MODEL_PRICING: Record<string, DevinTokenPricing> = {
     cached: 1,
     output: 12.5,
   }),
+  ...priced(["swe-1-6-slow"], {
+    input: 0.5,
+    cached: 0.2,
+    output: 2.5,
+  }),
   adaptive: { input: 0.5, cached: 0.1, output: 2 },
   ...priced(variantIds("grok-4-6", ["xhigh", "high", "medium", "low"]), {
     input: 2,

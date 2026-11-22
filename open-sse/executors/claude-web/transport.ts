@@ -62,7 +62,9 @@ export function isClaudeWebChallenge(result: ClaudeWebTransportResult): boolean 
   return (
     /<title>\s*Just a moment/i.test(body) ||
     /<title>\s*Attention Required/i.test(body) ||
-    /\b(?:cf-chl|challenge-platform)\b/i.test(body)
+    /\b(?:cf-chl|challenge-platform)\b/i.test(body) ||
+    /error[\s_-]?code[\\"':=\s]{0,12}1010/i.test(body) ||
+    /browser_signature_banned/i.test(body)
   );
 }
 

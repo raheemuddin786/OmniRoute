@@ -103,7 +103,14 @@ function normalizeContent(content: unknown): string {
     if (content && typeof content === "object") {
       const record = content as Record<string, unknown>;
       if (typeof record.text === "string") return record.text;
-      if ("content" in record) return normalizeContent(record.content);
+      if (record.type === "image" || record.type === "image_url" || record.type === "input_image") {
+        return "[Image]";
+      }
+      if ("content" in record) {
+        const nested = normalizeContent(record.content);
+        if (nested.trim()) return nested;
+        if (record.type === "tool_result") return "[Tool Result]";
+      }
     }
     return "";
   }
@@ -114,7 +121,14 @@ function normalizeContent(content: unknown): string {
       if (!part || typeof part !== "object" || Array.isArray(part)) return "";
       const record = part as Record<string, unknown>;
       if (typeof record.text === "string") return record.text;
-      if ("content" in record) return normalizeContent(record.content);
+      if (record.type === "image" || record.type === "image_url" || record.type === "input_image") {
+        return "[Image]";
+      }
+      if ("content" in record) {
+        const nested = normalizeContent(record.content);
+        if (nested.trim()) return nested;
+        if (record.type === "tool_result") return "[Tool Result]";
+      }
       return "";
     })
     .filter(Boolean)
@@ -128,8 +142,11 @@ function normalizeMessages(body: Record<string, unknown>): NormalizedMessage[] {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
     const message = candidate as Record<string, unknown>;
     if (typeof message.role !== "string" || !message.role.trim()) continue;
+    const role = message.role.trim().toLowerCase();
+    // Skip system messages - they are handled via personalized_styles in payload
+    if (role === "system") continue;
     normalized.push({
-      role: message.role.trim().toLowerCase(),
+      role,
       content: normalizeContent(message.content),
     });
   }
@@ -241,6 +258,10 @@ function readLegacyConversationId(credentials: ProviderCredentials): string | un
 function latestUserIndex(messages: ReadonlyArray<NormalizedMessage>): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === "user") return index;
+  }
+  // Fallback: accept tool or non-assistant messages if no explicit user role is found
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== "assistant" && messages[index].content.trim()) return index;
   }
   return -1;
 }
@@ -451,6 +472,13 @@ export function invalidateClaudeWebTurn(
 }
 
 export function __resetClaudeWebSessionForTesting(): void {
+  conversationCache.clear();
+}
+
+/**
+ * Resets all cached Claude Web state across session conversation tracking.
+ */
+export function resetClaudeWebCaches(): void {
   conversationCache.clear();
 }
 

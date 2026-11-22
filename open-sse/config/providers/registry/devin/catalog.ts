@@ -107,6 +107,7 @@ export const DEVIN_MODEL_CATALOG: RegistryModel[] = [
   model("swe-1-7-medium", "SWE-1.7 Medium", 128_000, 262_000),
   model("swe-1-7-lightning", "SWE-1.7 Lightning Max", 96_000, 202_752),
   model("swe-1-7-lightning-medium", "SWE-1.7 Lightning Medium", 96_000, 202_752),
+  model("swe-1-6-slow", "SWE-1.6 Slow", 128_000, 262_000),
   model("adaptive", "Adaptive"),
 
   ...effortModels("grok-4-6", "Grok 4.6", 100_000, 500_000, [
