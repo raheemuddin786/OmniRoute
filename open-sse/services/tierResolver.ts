@@ -11,6 +11,76 @@ const lazyRequire = createRequire(import.meta.url);
 
 const tierCache = new Map<string, TierAssignment>();
 let currentConfig: TierConfig = DEFAULT_TIER_CONFIG;
+let configLoadedFromDb = false;
+let lastConfigLoadTime = 0;
+const CONFIG_CACHE_TTL_MS = 2000; // 2-second TTL for config reload across processes
+
+function ensureConfigLoaded(force = false): void {
+  const now = Date.now();
+  if (!force && configLoadedFromDb && now - lastConfigLoadTime < CONFIG_CACHE_TTL_MS) {
+    return;
+  }
+  lastConfigLoadTime = now;
+  configLoadedFromDb = true;
+  try {
+    const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
+    currentConfig = loadTierConfig();
+  } catch {
+    try {
+      const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+      const db = getDbInstance();
+      const row = db.prepare("SELECT value FROM tier_config WHERE key = 'tier_config'").get() as
+        { value: string } | undefined;
+      if (row?.value) {
+        currentConfig = mergeTierConfig(JSON.parse(row.value));
+      } else {
+        currentConfig = DEFAULT_TIER_CONFIG;
+      }
+    } catch {
+      currentConfig = DEFAULT_TIER_CONFIG;
+    }
+  }
+}
+
+/**
+ * Recursively expand a combo from the SQLite combos table into concrete model strings.
+ * Supports direct models, nested combos, and kind="combo-ref".
+ */
+export function expandComboModelsFromDb(comboName: string, visited = new Set<string>()): string[] {
+  if (!comboName || visited.has(comboName)) return [];
+  visited.add(comboName);
+
+  try {
+    const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+    const db = getDbInstance();
+    const row = db.prepare("SELECT data FROM combos WHERE name = ?").get(comboName) as
+      { data: string } | undefined;
+    if (!row?.data) return [];
+
+    const comboData = JSON.parse(row.data);
+    const models = Array.isArray(comboData.models) ? comboData.models : [];
+    const resolved: string[] = [];
+
+    for (const entry of models) {
+      const modelStr = typeof entry === "string" ? entry : entry?.comboName || entry?.model;
+      if (!modelStr || typeof modelStr !== "string") continue;
+
+      const trimmed = modelStr.trim();
+      if (!trimmed) continue;
+
+      // If it exists as another combo in DB, expand recursively
+      const nested = expandComboModelsFromDb(trimmed, new Set(visited));
+      if (nested.length > 0) {
+        resolved.push(...nested);
+      } else {
+        resolved.push(trimmed);
+      }
+    }
+    return resolved;
+  } catch {
+    return [];
+  }
+}
 
 type DbPrice = { input: number; output: number };
 const tierPricingSnapshot = new Map<string, DbPrice>();
@@ -162,6 +232,7 @@ function matchGlob(pattern: string, text: string): boolean {
 }
 
 export function classifyTier(provider: string, model: string): TierAssignment {
+  ensureConfigLoaded();
   const key = cacheKey(provider, model);
 
   if (tierCache.has(key)) {
@@ -268,21 +339,231 @@ export function classifyTier(provider: string, model: string): TierAssignment {
 }
 
 export function setTierConfig(config?: Partial<TierConfig> | null): void {
+  lastConfigLoadTime = Date.now();
   if (config === null || config === undefined) {
     try {
-      const { loadTierConfig } = require("../../src/lib/db/tierConfig");
+      const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
       currentConfig = loadTierConfig();
+      configLoadedFromDb = true;
     } catch {
-      currentConfig = DEFAULT_TIER_CONFIG;
+      try {
+        const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+        const db = getDbInstance();
+        const row = db.prepare("SELECT value FROM tier_config WHERE key = 'tier_config'").get() as
+          { value: string } | undefined;
+        if (row?.value) {
+          currentConfig = mergeTierConfig(JSON.parse(row.value));
+        } else {
+          currentConfig = DEFAULT_TIER_CONFIG;
+        }
+      } catch {
+        currentConfig = DEFAULT_TIER_CONFIG;
+      }
+      configLoadedFromDb = true;
     }
   } else {
     currentConfig = mergeTierConfig(config);
+    configLoadedFromDb = true;
   }
   tierCache.clear();
 }
 
-export function getTierConfig(): TierConfig {
+const namedProfileConfigs = new Map<string, TierConfig>();
+
+export function getTierConfig(profileName?: string): TierConfig {
+  if (profileName && profileName !== "default" && profileName !== "spb") {
+    const cached = namedProfileConfigs.get(profileName);
+    if (cached) return { ...cached };
+    try {
+      const { loadTierConfig } = lazyRequire("../../src/lib/db/tierConfig");
+      const loaded = loadTierConfig(profileName);
+      if (loaded) {
+        namedProfileConfigs.set(profileName, loaded);
+        return { ...loaded };
+      }
+    } catch {
+      // Fallback via getDbInstance
+      try {
+        const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+        const db = getDbInstance();
+        const row = db
+          .prepare("SELECT value FROM tier_config WHERE key = ?")
+          .get(`tier_config:${profileName}`) as { value: string } | undefined;
+        if (row?.value) {
+          const loaded = mergeTierConfig(JSON.parse(row.value));
+          namedProfileConfigs.set(profileName, loaded);
+          return { ...loaded };
+        }
+      } catch {
+        // Fallback via direct SQLite DatabaseSync
+        try {
+          const sqlite3 = lazyRequire("node:sqlite");
+          const path = lazyRequire("node:path");
+          const os = lazyRequire("node:os");
+          const dataDir =
+            process.env.OMNIROUTE_DATA_DIR ||
+            process.env.DATA_DIR ||
+            path.join(os.homedir(), ".omniroute");
+          const dbFile = path.join(dataDir, "storage.sqlite");
+          const db = new sqlite3.DatabaseSync(dbFile, { open: true, readOnly: true });
+          const row = db
+            .prepare("SELECT value FROM tier_config WHERE key = ?")
+            .get(`tier_config:${profileName}`) as { value: string } | undefined;
+          db.close();
+          if (row?.value) {
+            const loaded = mergeTierConfig(JSON.parse(row.value));
+            namedProfileConfigs.set(profileName, loaded);
+            return { ...loaded };
+          }
+        } catch {
+          // Fall through to default tier config
+        }
+      }
+    }
+  }
+  ensureConfigLoaded();
   return { ...currentConfig };
+}
+
+export function setNamedTierConfig(profileName: string, config: TierConfig): void {
+  namedProfileConfigs.set(profileName, config);
+}
+
+export function deleteNamedTierConfig(profileName: string): void {
+  namedProfileConfigs.delete(profileName);
+}
+
+let cachedProfileNames: string[] = ["default"];
+let lastProfileNamesFetch = 0;
+const PROFILE_NAMES_TTL_MS = 2000;
+
+export function listConfiguredSpbProfiles(): string[] {
+  const now = Date.now();
+  if (now - lastProfileNamesFetch < PROFILE_NAMES_TTL_MS && cachedProfileNames.length > 0) {
+    return cachedProfileNames;
+  }
+  try {
+    const { listTierConfigProfiles } = lazyRequire("../../src/lib/db/tierConfig");
+    const profiles = listTierConfigProfiles();
+    if (Array.isArray(profiles) && profiles.length > 0) {
+      cachedProfileNames = profiles;
+      lastProfileNamesFetch = now;
+      return cachedProfileNames;
+    }
+  } catch {
+    // Try via getDbInstance fallback
+    try {
+      const { getDbInstance } = lazyRequire("../../src/lib/db/core");
+      const db = getDbInstance();
+      const rows = db.prepare("SELECT key FROM tier_config").all() as Array<{ key: string }>;
+      const profiles = new Set<string>(["default"]);
+      for (const r of rows) {
+        if (r.key === "tier_config") {
+          profiles.add("default");
+        } else if (r.key.startsWith("tier_config:")) {
+          const name = r.key.slice("tier_config:".length);
+          if (name) profiles.add(name);
+        }
+      }
+      cachedProfileNames = Array.from(profiles);
+      lastProfileNamesFetch = now;
+      return cachedProfileNames;
+    } catch {
+      // Direct SQLite DatabaseSync fallback for standalone/bundled environments
+      try {
+        const sqlite3 = lazyRequire("node:sqlite");
+        const path = lazyRequire("node:path");
+        const os = lazyRequire("node:os");
+        const dataDir =
+          process.env.OMNIROUTE_DATA_DIR ||
+          process.env.DATA_DIR ||
+          path.join(os.homedir(), ".omniroute");
+        const dbFile = path.join(dataDir, "storage.sqlite");
+        const db = new sqlite3.DatabaseSync(dbFile, { open: true, readOnly: true });
+        const rows = db.prepare("SELECT key FROM tier_config").all() as Array<{ key: string }>;
+        db.close();
+        const profiles = new Set<string>(["default"]);
+        for (const r of rows) {
+          if (r.key === "tier_config") {
+            profiles.add("default");
+          } else if (r.key.startsWith("tier_config:")) {
+            const name = r.key.slice("tier_config:".length);
+            if (name) profiles.add(name);
+          }
+        }
+        cachedProfileNames = Array.from(profiles);
+        lastProfileNamesFetch = now;
+        return cachedProfileNames;
+      } catch {
+        // Fallback to in-memory registered configs
+      }
+    }
+  }
+  const set = new Set<string>(["default", ...namedProfileConfigs.keys()]);
+  cachedProfileNames = Array.from(set);
+  lastProfileNamesFetch = now;
+  return cachedProfileNames;
+}
+
+/**
+ * Checks whether an incoming model string matches any configured SPB instance
+ * (e.g. "auto/spb", "auto/spb1", "auto/spb:ag-spb3", "auto/ag-spb3", "spb", "spb1", "ag-spb3").
+ */
+export function isSpbProfileTarget(modelStr: string): boolean {
+  if (!modelStr || typeof modelStr !== "string") return false;
+  const s = modelStr.trim();
+  if (s === "auto/spb" || s === "auto/smart-proxy-bridge" || s === "spb") return true;
+  if (/^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(s) || /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(s)) {
+    return true;
+  }
+  const profiles = listConfiguredSpbProfiles();
+  const lower = s.toLowerCase();
+  for (const p of profiles) {
+    if (p === "default") continue;
+    const pLower = p.toLowerCase();
+    if (lower === `auto/${pLower}` || lower === `auto/spb:${pLower}` || lower === pLower) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Extracts the SPB profile name from a target model string.
+ * Returns undefined for the default profile ("default" / "spb"), or the profile name string.
+ */
+export function extractSpbProfileName(modelStr: string): string | undefined {
+  if (!modelStr || typeof modelStr !== "string") return undefined;
+  const s = modelStr.trim();
+  if (
+    s === "auto/spb" ||
+    s === "auto/smart-proxy-bridge" ||
+    s === "spb" ||
+    s === "auto" ||
+    s === "default"
+  ) {
+    return undefined;
+  }
+  const matchNamed = s.match(/^(?:auto\/)?spb(?::([a-zA-Z0-9_-]+)|(\d+))$/i);
+  if (matchNamed) {
+    return matchNamed[1] || `spb${matchNamed[2]}`;
+  }
+  const profiles = listConfiguredSpbProfiles();
+  const lower = s.toLowerCase();
+  for (const p of profiles) {
+    if (p === "default") continue;
+    const pLower = p.toLowerCase();
+    if (lower === `auto/${pLower}` || lower === `auto/spb:${pLower}` || lower === pLower) {
+      return p;
+    }
+  }
+  if (s.startsWith("auto/")) {
+    const candidate = s.slice(5);
+    for (const p of profiles) {
+      if (p.toLowerCase() === candidate.toLowerCase()) return p;
+    }
+  }
+  return undefined;
 }
 
 export function clearTierCache(): void {
@@ -304,6 +585,182 @@ export function getTierStats(): Record<ProviderTier, number> {
     stats[assignment.tier]++;
   }
   return stats;
+}
+
+/**
+ * Resolve a virtual tier identifier (e.g. 'resilient/spb-tier-2', 'spb-tier-2', 'tier_2_resilient')
+ * to concrete candidate models configured for that tier, avoiding self-referential loops.
+ * Complies with Hard Rule #24 (Canonical Model Resolution).
+ */
+export function resolveVirtualTierModels(virtualIdentifier: string): string[] {
+  ensureConfigLoaded();
+  const lower = virtualIdentifier.toLowerCase().trim();
+
+  // Map virtual identifier to tier key
+  let tierKey: "apex" | "resilient" | "local" | null = null;
+  if (lower.includes("apex") || lower.includes("tier-1") || lower.includes("tier_1")) {
+    tierKey = "apex";
+  } else if (
+    lower.includes("resilient") ||
+    lower.includes("tier-2") ||
+    lower.includes("tier_2") ||
+    lower === "auto/spb" ||
+    lower.startsWith("auto/spb") ||
+    lower.startsWith("spb") ||
+    lower === "auto/smart-proxy-bridge" ||
+    lower === "auto" ||
+    lower === "default"
+  ) {
+    tierKey = "resilient";
+  } else if (
+    lower.includes("local") ||
+    lower.includes("tier-3") ||
+    lower.includes("tier_3") ||
+    lower.includes("edge")
+  ) {
+    tierKey = "local";
+  }
+
+  if (!tierKey) return [];
+
+  const tierModels = currentConfig.tierModels?.[tierKey] || [];
+  const tierProviders = currentConfig.tierProviders?.[tierKey] || [];
+  const onlyFree = currentConfig.onlyFreeTierModels === true;
+  const tierMode = currentConfig.tierModes?.[tierKey] || (onlyFree ? "free" : "both");
+
+  // Incorporate free-tier auto-candidates or dynamic provider mapping if configured
+  let effectiveTierModels = [...tierModels];
+  if (onlyFree || tierMode === "free" || tierMode === "both" || tierProviders.length > 0) {
+    try {
+      const { resolveTierCandidateModels } = lazyRequire("./spbFreeTierAutoConfig.ts");
+      effectiveTierModels = resolveTierCandidateModels(tierKey, tierModels, {
+        onlyFreeTierModels: onlyFree,
+        tierMode,
+        tierProviders,
+      });
+    } catch {
+      // Fail-open: keep tierModels
+    }
+  }
+
+  const concreteModels: string[] = [];
+
+  for (const model of effectiveTierModels) {
+    if (!model || typeof model !== "string") continue;
+    const trimmed = model.trim();
+    if (!trimmed) continue;
+
+    // 1. Expand combo models configured for the tier from the SQLite combos table
+    const expandedCombo = expandComboModelsFromDb(trimmed);
+    if (expandedCombo.length > 0) {
+      concreteModels.push(...expandedCombo);
+      continue;
+    }
+
+    // 2. Check if model is self-referential or a bare virtual alias that doesn't exist as a DB combo
+    const m = trimmed.toLowerCase();
+    const isSelfReferential =
+      m === lower ||
+      m.startsWith("apex/") ||
+      m.startsWith("resilient/") ||
+      m.startsWith("local/") ||
+      m.startsWith("spb-") ||
+      m.startsWith("tier_") ||
+      m.includes("spb-tier");
+
+    if (!isSelfReferential) {
+      concreteModels.push(trimmed);
+    }
+  }
+
+  // Deduplicate while preserving resolution priority
+  let uniqueConcrete = Array.from(new Set(concreteModels));
+
+  // Filter out models with persistent terminal 404s/deprecations so SPB never hangs on dead endpoints
+  try {
+    const getDbInstance = lazyRequire("../../src/lib/db/core").getDbInstance;
+    const db = getDbInstance();
+    // Query recent terminal 404s within the last 6 hours
+    const staleRows = db
+      .prepare(
+        `SELECT DISTINCT provider || '/' || model AS full_id
+         FROM call_logs
+         WHERE (error_type = 'model_not_found' OR error_summary LIKE '%404%' OR error_summary LIKE '%Function%Not found%')
+           AND timestamp >= datetime('now', '-6 hours')
+         GROUP BY provider, model
+         HAVING count(*) >= 2`
+      )
+      .all() as Array<{ full_id: string }>;
+
+    if (staleRows.length > 0) {
+      const staleSet = new Set(staleRows.map((r) => r.full_id.toLowerCase()));
+      // Only prune if we have alternative healthy models available in this tier
+      const pruned = uniqueConcrete.filter((m) => !staleSet.has(m.toLowerCase()));
+      if (pruned.length > 0) {
+        uniqueConcrete = pruned;
+      }
+    }
+  } catch {
+    // Fail-open: keep models if SQLite check fails
+  }
+
+  // If onlyFreeTierModels is active or tier mode is "free", strictly filter out any paid models
+  if (onlyFree || tierMode === "free") {
+    try {
+      const { isFreeModelTarget } = lazyRequire("./spbFreeTierAutoConfig.ts");
+      uniqueConcrete = uniqueConcrete.filter((m: string) => isFreeModelTarget(m));
+    } catch {
+      // ignore
+    }
+  }
+
+  if (uniqueConcrete.length > 0) {
+    return uniqueConcrete;
+  }
+
+  // Dynamic fallback: discover active models from database provider connections and provider registry
+  try {
+    const getDbInstance = lazyRequire("../../src/lib/db/core").getDbInstance;
+    const db = getDbInstance();
+    const activeRows = db
+      .prepare("SELECT DISTINCT provider FROM provider_connections WHERE is_active = 1")
+      .all() as Array<{ provider: string }>;
+    const activeProviders = activeRows.map((r) => r.provider.toLowerCase());
+
+    const { PROVIDER_MODELS } = lazyRequire("../config/providerModels.ts");
+    const discovered: string[] = [];
+
+    for (const [providerId, models] of Object.entries(PROVIDER_MODELS)) {
+      if (activeProviders.length === 0 || activeProviders.includes(providerId.toLowerCase())) {
+        if (Array.isArray(models)) {
+          for (const m of models) {
+            const modelId = typeof m === "string" ? m : (m as { id?: string })?.id;
+            if (modelId) {
+              discovered.push(modelId);
+            }
+          }
+        }
+      }
+    }
+
+    let finalDiscovered = discovered;
+    if (onlyFree || tierMode === "free") {
+      try {
+        const { isFreeModelTarget } = lazyRequire("./spbFreeTierAutoConfig.ts");
+        finalDiscovered = finalDiscovered.filter((m: string) => isFreeModelTarget(m));
+      } catch {
+        // ignore
+      }
+    }
+
+    if (finalDiscovered.length > 0) {
+      return finalDiscovered.slice(0, 10);
+    }
+  } catch {
+    // ignore dynamic discovery errors
+  }
+
+  return [];
 }
 
 export let tierAsyncFallbackTotal = 0; // exported for testability
