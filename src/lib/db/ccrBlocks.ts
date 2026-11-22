@@ -136,3 +136,28 @@ export function countCcrBlocks(principalId?: string): number {
   ) as { n: number } | undefined;
   return row?.n ?? 0;
 }
+
+/**
+ * Loads the raw content of a CCR block by its content-addressed hash.
+ * If principalId is supplied, attempts to load that principal's row first.
+ * If not found or principalId is not supplied, searches across all entries by hash.
+ */
+export function loadCcrBlockContent(hash: string, principalId?: string): string | null {
+  try {
+    const db = getDbInstance();
+    if (principalId) {
+      const row = db
+        .prepare(`SELECT content FROM ccr_blocks WHERE principal_id = ? AND hash = ?`)
+        .get(principalId, hash) as { content: string } | undefined;
+      if (row?.content) return row.content;
+    }
+    const row = db
+      .prepare(
+        `SELECT content FROM ccr_blocks WHERE hash = ? ORDER BY last_accessed_at DESC LIMIT 1`
+      )
+      .get(hash) as { content: string } | undefined;
+    return row?.content ?? null;
+  } catch {
+    return null;
+  }
+}

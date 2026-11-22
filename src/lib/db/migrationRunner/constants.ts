@@ -738,6 +738,115 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toVersion: "235",
     toName: "usage_history_agent_session_id",
   },
+  // SPB & Workspace migrations renumbered 213..240 -> 242..250 to resolve collisions with upstream v3.8.55
+  {
+    fromVersion: "219",
+    fromName: "call_logs_workspace_project_link",
+    toVersion: "20261120100001",
+    toName: "call_logs_workspace_project_link",
+  },
+  {
+    fromVersion: "232",
+    fromName: "call_logs_workspace_project_link",
+    toVersion: "20261120100001",
+    toName: "call_logs_workspace_project_link",
+  },
+  {
+    fromVersion: "213",
+    fromName: "spb_session_branching",
+    toVersion: "20261120100002",
+    toName: "spb_session_branching",
+  },
+  {
+    fromVersion: "234",
+    fromName: "spb_session_branching",
+    toVersion: "20261120100002",
+    toName: "spb_session_branching",
+  },
+  {
+    fromVersion: "218",
+    fromName: "project_registry_analytics_in_memory_relevance",
+    toVersion: "20261120100003",
+    toName: "project_registry_analytics_in_memory_relevance",
+  },
+  {
+    fromVersion: "235",
+    fromName: "project_registry_analytics_in_memory_relevance",
+    toVersion: "20261120100003",
+    toName: "project_registry_analytics_in_memory_relevance",
+  },
+  {
+    fromVersion: "215",
+    fromName: "spb_checkpoints_guidance_contract",
+    toVersion: "20261120100004",
+    toName: "spb_checkpoints_guidance_contract",
+  },
+  {
+    fromVersion: "236",
+    fromName: "spb_checkpoints_guidance_contract",
+    toVersion: "20261120100004",
+    toName: "spb_checkpoints_guidance_contract",
+  },
+  {
+    fromVersion: "216",
+    fromName: "spb_stagnation_telemetry",
+    toVersion: "20261120100005",
+    toName: "spb_stagnation_telemetry",
+  },
+  {
+    fromVersion: "237",
+    fromName: "spb_stagnation_telemetry",
+    toVersion: "20261120100005",
+    toName: "spb_stagnation_telemetry",
+  },
+  {
+    fromVersion: "217",
+    fromName: "project_registry_and_analytics",
+    toVersion: "20261120100006",
+    toName: "project_registry_and_analytics",
+  },
+  {
+    fromVersion: "238",
+    fromName: "project_registry_and_analytics",
+    toVersion: "20261120100006",
+    toName: "project_registry_and_analytics",
+  },
+  {
+    fromVersion: "220",
+    fromName: "project_registry_provenance_status",
+    toVersion: "20261120100007",
+    toName: "project_registry_provenance_status",
+  },
+  {
+    fromVersion: "239",
+    fromName: "project_registry_provenance_status",
+    toVersion: "20261120100007",
+    toName: "project_registry_provenance_status",
+  },
+  {
+    fromVersion: "240",
+    fromName: "spb_telemetry_open_items",
+    toVersion: "20261120100008",
+    toName: "spb_telemetry_open_items",
+  },
+  {
+    fromVersion: "214",
+    fromName: "spb_intelligence_layer",
+    toVersion: "20261120100009",
+    toName: "spb_intelligence_layer",
+  },
+  {
+    fromVersion: "227",
+    fromName: "spb_intelligence_layer",
+    toVersion: "20261120100009",
+    toName: "spb_intelligence_layer",
+  },
+  {
+    fromVersion: "229",
+    fromName: "spb_intelligence_layer",
+    toVersion: "20261120100009",
+    toName: "spb_intelligence_layer",
+  },
 ] as const;
 
 export const LEGACY_VERSION_SLOT_MIGRATIONS = [

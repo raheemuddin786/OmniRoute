@@ -763,6 +763,40 @@ function isSchemaAlreadyApplied(
         hasColumn(db, "usage_history", "billing_quantity") &&
         hasColumn(db, "usage_history", "billing_unit_price_usd")
       );
+    case "20261120100000":
+      return hasTable(db, "spb_state_checkpoints") && hasTable(db, "spb_telemetry_audit");
+    case "20261120100001":
+    case "242":
+      return (
+        hasColumn(db, "call_logs", "workspace_root") && hasColumn(db, "call_logs", "project_id")
+      );
+    case "20261120100002":
+    case "243":
+      return (
+        hasTable(db, "spb_branch_checkpoints") &&
+        hasColumn(db, "agentic_conversations", "parent_conversation_id")
+      );
+    case "20261120100003":
+    case "244":
+      return hasTable(db, "project_analytics_relevance");
+    case "20261120100004":
+    case "245":
+      return hasColumn(db, "spb_state_checkpoints", "guidance_contract");
+    case "20261120100005":
+    case "246":
+      return hasColumn(db, "spb_telemetry_audit", "stagnation_detected");
+    case "20261120100006":
+    case "247":
+      return hasTable(db, "project_registry");
+    case "20261120100007":
+    case "248":
+      return hasColumn(db, "project_registry", "provenance");
+    case "20261120100008":
+    case "249":
+      return hasColumn(db, "spb_telemetry_audit", "open_items_count");
+    case "20261120100009":
+    case "250":
+      return hasTable(db, "spb_learned_optimizations") && hasTable(db, "spb_intent_evaluations");
     default:
       return false;
   }

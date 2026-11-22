@@ -17,12 +17,15 @@ export function initTierConfigTable(): void {
   `);
 }
 
-export function saveTierConfig(config: TierConfig): void {
+export type { TierConfig } from "../../../open-sse/services/tierTypes";
+
+export function saveTierConfig(config: TierConfig, profileKey: string = "tier_config"): void {
   const db = getDbInstance();
   const serialized = JSON.stringify(config);
+  const key = profileKey.startsWith("tier_config") ? profileKey : `tier_config:${profileKey}`;
   db.prepare(
-    `INSERT OR REPLACE INTO ${TABLE} (key, value, updated_at) VALUES ('tier_config', ?, datetime('now'))`
-  ).run(serialized);
+    `INSERT OR REPLACE INTO ${TABLE} (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+  ).run(key, serialized);
 }
 
 /**
@@ -40,21 +43,12 @@ function previewCorruptedValue(value: unknown): string {
 /**
  * Load the persisted tier config from SQLite. Returns `null` when no row exists
  * OR when the stored value is unreadable (invalid JSON, fails Zod validation).
- *
- * The function NEVER throws on parse failure — instead it logs a structured
- * warning so operators can spot the corruption in logs and either:
- *   1. Manually delete the bad row:
- *        DELETE FROM tier_config WHERE key = 'tier_config';
- *   2. Re-save a clean config via the dashboard's Tier settings page.
- *
- * The caller (`loadTierConfig()`) then falls back to `DEFAULT_TIER_CONFIG`,
- * so a corrupted row never silently feeds invalid pricing into the router.
  */
-export function loadTierConfigFromDb(): TierConfig | null {
+export function loadTierConfigFromDb(profileKey: string = "tier_config"): TierConfig | null {
   const db = getDbInstance();
-  const row = db.prepare(`SELECT value FROM ${TABLE} WHERE key = 'tier_config'`).get() as
-    | { value: string }
-    | undefined;
+  const key = profileKey.startsWith("tier_config") ? profileKey : `tier_config:${profileKey}`;
+  const row = db.prepare(`SELECT value FROM ${TABLE} WHERE key = ?`).get(key) as
+    { value: string } | undefined;
   if (!row) return null;
 
   const raw = row.value;
@@ -64,7 +58,7 @@ export function loadTierConfigFromDb(): TierConfig | null {
   } catch (err) {
     log.warn(
       { err: err instanceof Error ? err.message : String(err), value: previewCorruptedValue(raw) },
-      "tier_config JSON.parse failed; falling back to DEFAULT_TIER_CONFIG"
+      `tier_config JSON.parse failed for key '${key}'; falling back to DEFAULT_TIER_CONFIG`
     );
     return null;
   }
@@ -77,12 +71,45 @@ export function loadTierConfigFromDb(): TierConfig | null {
         err: err instanceof Error ? err.message : String(err),
         value: previewCorruptedValue(raw),
       },
-      "tier_config Zod validation failed; falling back to DEFAULT_TIER_CONFIG"
+      `tier_config Zod validation failed for key '${key}'; falling back to DEFAULT_TIER_CONFIG`
     );
     return null;
   }
 }
 
-export function loadTierConfig(): TierConfig {
-  return loadTierConfigFromDb() || DEFAULT_TIER_CONFIG;
+export function loadTierConfig(profileKey: string = "tier_config"): TierConfig {
+  return loadTierConfigFromDb(profileKey) || DEFAULT_TIER_CONFIG;
+}
+
+/**
+ * List all configured SPB profile names stored in tier_config table.
+ * Returns default "default" profile plus any named profiles (e.g. "spb1", "spb2").
+ */
+export function listTierConfigProfiles(): string[] {
+  const db = getDbInstance();
+  const rows = db.prepare(`SELECT key FROM ${TABLE}`).all() as Array<{ key: string }>;
+  const profiles = new Set<string>(["default"]);
+  for (const r of rows) {
+    if (r.key === "tier_config") {
+      profiles.add("default");
+    } else if (r.key.startsWith("tier_config:")) {
+      const name = r.key.slice("tier_config:".length);
+      if (name) profiles.add(name);
+    }
+  }
+  return Array.from(profiles);
+}
+
+/**
+ * Delete a named SPB profile from tier_config table.
+ * Returns true if deleted, false if default or not found.
+ */
+export function deleteTierConfigProfile(profileName: string): boolean {
+  if (!profileName || profileName === "default" || profileName === "spb") {
+    return false; // Cannot delete the default profile
+  }
+  const db = getDbInstance();
+  const key = profileName.startsWith("tier_config:") ? profileName : `tier_config:${profileName}`;
+  const res = db.prepare(`DELETE FROM ${TABLE} WHERE key = ?`).run(key);
+  return res.changes > 0;
 }

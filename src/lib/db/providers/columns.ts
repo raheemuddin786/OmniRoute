@@ -85,6 +85,9 @@ export interface ConnectionRateLimitOverrides {
   maxConcurrent?: number;
   maxWaitMs?: number;
   executionMaxWaitMs?: number;
+  request_timeout_ms?: number;
+  connect_timeout_ms?: number;
+  read_timeout_ms?: number;
   modelConcurrency?: ModelConcurrencyMap;
 }
 
@@ -121,6 +124,9 @@ export function sanitizeRateLimitOverrides(value: unknown): SanitizeOverridesRes
     "maxConcurrent",
     "maxWaitMs",
     "executionMaxWaitMs",
+    "request_timeout_ms",
+    "connect_timeout_ms",
+    "read_timeout_ms",
   ]);
   const rejected: string[] = [];
   const map: ConnectionRateLimitOverrides = {};
