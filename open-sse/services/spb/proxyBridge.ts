@@ -682,6 +682,13 @@ export async function processSmartProxyRouting(
       const mergedInstructions = Array.from(
         new Set([...priorInstructions, rootTaskSpecification, cleanInstruction].filter(Boolean))
       );
+      const anchors = extractContextAnchors(messages);
+      const priorTargetFiles =
+        (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.targetFiles || [];
+      const combinedTargetFiles = Array.from(
+        new Set([...priorTargetFiles, ...anchors.referencedFiles].filter(Boolean))
+      );
+
       activeGuidanceContract = {
         supervisorTier: "tier_2_resilient",
         taskSpecification: rootTaskSpecification,
@@ -692,8 +699,7 @@ export async function processSmartProxyRouting(
           "Preserve existing architecture and contracts during modifications",
         ],
         instructions: mergedInstructions,
-        targetFiles:
-          (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.targetFiles || [],
+        targetFiles: combinedTargetFiles,
         verificationCriteria: [
           "All test and verification suites must pass with zero errors",
           "No pending read-only inspection cycles remain",
@@ -702,11 +708,16 @@ export async function processSmartProxyRouting(
       };
       tierAssignment.guidanceContract = activeGuidanceContract;
 
-      // Inject auto-recovery directive into the inbound prompt to override passive exploration (Operator requirement 4)
+      // Inject targeted resume directive rather than restarting task execution
+      const targetSummary =
+        combinedTargetFiles.length > 0
+          ? `Target files: ${combinedTargetFiles.slice(0, 3).join(", ")}. `
+          : "";
       autoRecoveryDirective =
         "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
-        "Exploration checkpoint reached. You have gathered sufficient repository context for this task. " +
-        "Proceed to implement the solution using editing tools (Write/Edit) or execute verification tests.";
+        `Exploration checkpoint reached. ${targetSummary}` +
+        "Resume and complete ongoing implementation using editing tools (Write/Edit) or execute verification tests. " +
+        "Do not repeat exploratory read cycles or restart task formulation.";
     } else if (
       (intent.taskPhase === "ARCHITECTURAL_PLANNING" && !activeGuidanceContract) ||
       (!activeGuidanceContract &&

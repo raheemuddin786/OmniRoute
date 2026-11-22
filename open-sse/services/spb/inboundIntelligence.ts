@@ -113,7 +113,7 @@ export function extractContextAnchors(
   const recentToolActions: string[] = [];
 
   const filePathRegex =
-    /(?:[a-zA-Z0-9_\-./]+\/)?(?:src|open-sse|tests|scripts|electron|lib|app|components)\/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g;
+    /(?:[a-zA-Z0-9_\-./]+\/)?(?:src|open-sse|tests|scripts|electron|lib|app|apps|packages|components|config)\/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g;
   const errorRegex =
     /(?:(?:Error|Exception|TypeError|ReferenceError|SyntaxError|AssertionError):\s*[^\n\r]+)/g;
 
@@ -121,14 +121,49 @@ export function extractContextAnchors(
     const content =
       typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content || "");
 
-    // Extract file references
+    // Extract file references from text content
     const fileMatches = content.match(filePathRegex);
     if (fileMatches) {
       for (const f of fileMatches) {
-        if (!f.includes("node_modules") && referencedFilesSet.size < 10) {
+        if (!f.includes("node_modules") && referencedFilesSet.size < 15) {
           referencedFilesSet.add(f);
         }
       }
+    }
+
+    // Extract file references directly from structured tool calls or tool inputs
+    if (typeof msg.content === "object" && msg.content !== null) {
+      const inspectObjectForPaths = (obj: unknown): void => {
+        if (!obj || typeof obj !== "object") return;
+        if (Array.isArray(obj)) {
+          for (const item of obj) inspectObjectForPaths(item);
+          return;
+        }
+        const record = obj as Record<string, unknown>;
+        const rawPath =
+          record.path ||
+          record.Path ||
+          record.filePath ||
+          record.file_path ||
+          record.filename ||
+          (record.input && typeof record.input === "object"
+            ? (record.input as Record<string, unknown>).path ||
+              (record.input as Record<string, unknown>).Path ||
+              (record.input as Record<string, unknown>).filePath ||
+              (record.input as Record<string, unknown>).file_path
+            : undefined);
+        if (typeof rawPath === "string" && rawPath.trim().length > 0) {
+          const clean = rawPath.trim();
+          if (
+            !clean.includes("node_modules") &&
+            clean.includes(".") &&
+            referencedFilesSet.size < 15
+          ) {
+            referencedFilesSet.add(clean);
+          }
+        }
+      };
+      inspectObjectForPaths(msg.content);
     }
 
     // Extract error traces
