@@ -41,6 +41,20 @@ test("SPB Apex Ledger: gatherApexContext and cleanAndParseJson handle inputs cor
   assert.ok(parsed);
   assert.equal(parsed.isActionable, true);
 
+  // Test robust JSON parsing for noisy model responses
+  const noisyModelOutput =
+    "Here is the result based on your analysis:\n```json\n" +
+    '{"isActionable": true, "intents": [], "nonGoals": [],}\n```\nHope this helps!';
+  const parsedNoisy = cleanAndParseJson(noisyModelOutput, ApexLedgerExpansionSchema);
+  assert.ok(parsedNoisy);
+  assert.equal(parsedNoisy.isActionable, true);
+
+  const proseWrapped =
+    'Sure thing! {"isActionable": true, "intents": [], "nonGoals": []} Let me know if you need anything else.';
+  const parsedProse = cleanAndParseJson(proseWrapped, ApexLedgerExpansionSchema);
+  assert.ok(parsedProse);
+  assert.equal(parsedProse.isActionable, true);
+
   const fallbackItems = heuristicFallback("1. Fix UI\n2. Add test", 4);
   assert.ok(fallbackItems.length >= 2);
 });

@@ -25,8 +25,14 @@ import { decomposeRequestIntoLedger } from "./contextPartition.ts";
 export const APEX_LEDGER_PROMPT_VERSION = "v2";
 export const APEX_LEDGER_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-const DEFAULT_EXPAND_TIMEOUT_MS = 60_000;
-const DEFAULT_FOLLOWUP_TIMEOUT_MS = 30_000;
+const DEFAULT_EXPAND_TIMEOUT_MS =
+  Number(process.env.OMNIROUTE_SPB_EXPAND_TIMEOUT_MS) > 0
+    ? Number(process.env.OMNIROUTE_SPB_EXPAND_TIMEOUT_MS)
+    : 60_000;
+const DEFAULT_FOLLOWUP_TIMEOUT_MS =
+  Number(process.env.OMNIROUTE_SPB_FOLLOWUP_TIMEOUT_MS) > 0
+    ? Number(process.env.OMNIROUTE_SPB_FOLLOWUP_TIMEOUT_MS)
+    : 30_000;
 const MAX_WALK_ENTRIES = 3000;
 const MAX_FILE_READ_BYTES = 256 * 1024;
 
@@ -466,28 +472,94 @@ export function trimTree(tree: string, maxChars = BUDGET_LIMITS.MAX_REPO_TREE_CH
 // JSON Parser & Validator Helper
 // ============================================================================
 
+// Bounded balanced JSON extractor for model outputs that wrap JSON in explanatory text
+function extractBalancedJsonObject(text: string): string | null {
+  const firstBrace = text.indexOf("{");
+  if (firstBrace === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  let startIndex = -1;
+
+  for (let i = firstBrace; i < text.length; i++) {
+    const char = text[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (!inString) {
+      if (char === "{") {
+        if (depth === 0) startIndex = i;
+        depth++;
+      } else if (char === "}") {
+        depth--;
+        if (depth === 0 && startIndex !== -1) {
+          return text.slice(startIndex, i + 1);
+        }
+      }
+    }
+  }
+
+  // Fallback if brackets were unbalanced
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return text.slice(firstBrace, lastBrace + 1);
+  }
+
+  return null;
+}
+
+function stripTrailingCommas(jsonStr: string): string {
+  // Strip trailing commas before closing braces or brackets (common LLM JSON syntax error)
+  return jsonStr.replace(/,\s*([}\]])/g, "$1");
+}
+
 export function parseAndValidateJson<T>(
   raw: string,
   schema: z.ZodType<T>
 ): { success: true; data: T } | { success: false; error: string } {
   try {
     let cleaned = (raw ?? "").trim();
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+
+    // Check if wrapped in markdown code fence anywhere in the output
+    const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fenceMatch && fenceMatch[1]) {
+      cleaned = fenceMatch[1].trim();
+    } else if (cleaned.startsWith("```")) {
+      cleaned = cleaned
+        .replace(/^```(?:json)?\s*\n?/, "")
+        .replace(/\n?```\s*$/, "")
+        .trim();
     }
-    const firstBrace = cleaned.indexOf("{");
-    const lastBrace = cleaned.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      cleaned = cleaned.slice(firstBrace, lastBrace + 1);
-    }
+
+    const candidate = extractBalancedJsonObject(cleaned) ?? cleaned;
+
     let parsed: unknown;
     try {
-      parsed = JSON.parse(cleaned);
-    } catch (jsonErr) {
-      return {
-        success: false,
-        error: `JSON syntax error: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`,
-      };
+      parsed = JSON.parse(candidate);
+    } catch {
+      // Retry after cleaning common syntax defects like trailing commas
+      try {
+        parsed = JSON.parse(stripTrailingCommas(candidate));
+      } catch (jsonErr) {
+        return {
+          success: false,
+          error: `JSON syntax error: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`,
+        };
+      }
     }
     const validated = schema.safeParse(parsed);
     if (validated.success) {
@@ -1199,6 +1271,7 @@ export async function classifyFollowUp(
     `- SCHEMA COMPLIANCE: Every explicit item MUST include a non-empty "promptRef" quoting or paraphrasing the user prompt justifying it. Every required-implied item MUST include a non-empty "parentId" referencing an active explicit item and a non-empty "reason".\n` +
     `- Append newly requested items with new IDs (e.g. I_new, I6, I7).\n` +
     `- Cap at ${maxItems} total items.\n\n` +
+    `IMPORTANT: Output MUST be a single raw JSON object strictly adhering to the schema below without any preceding or trailing text or explanations.\n\n` +
     `JSON Schema:\n` +
     `{\n` +
     `  "relation": "continuation" | "amendment" | "new_task",\n` +
