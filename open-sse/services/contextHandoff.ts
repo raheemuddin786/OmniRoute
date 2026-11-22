@@ -8,6 +8,7 @@ import {
 import { estimateTokens } from "./contextManager.ts";
 import { stripMarkdownCodeFence } from "../utils/aiSdkCompat.ts";
 import { isFeatureFlagEnabled } from "../../src/shared/utils/featureFlags.ts";
+import { repairJsonString } from "../governance/toolSchemaValidator.ts";
 
 export const HANDOFF_WARNING_THRESHOLD = 0.85;
 export const HANDOFF_EXHAUSTION_THRESHOLD = 0.95;
@@ -295,32 +296,71 @@ function normalizeStringArray(value: unknown, maxItems: number, maxLength = 240)
 }
 
 function sanitizeJsonCandidate(content: string): string {
-  return content.replace(OMNI_MODEL_TAG_PATTERN, "").trim();
+  return content
+    .replace(OMNI_MODEL_TAG_PATTERN, "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*/gi, "")
+    .trim();
 }
 
-function extractJsonCandidate(content: string): string {
-  const stripped = sanitizeJsonCandidate(String(stripMarkdownCodeFence(content) || ""));
-  if (!stripped) return "";
-
+function parseJsonCandidateObject(candidate: string): Record<string, unknown> | null {
+  if (!candidate) return null;
   try {
-    JSON.parse(stripped);
-    return stripped;
-  } catch {
-    const firstBrace = stripped.indexOf("{");
-    const lastBrace = stripped.lastIndexOf("}");
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-      return stripped.slice(firstBrace, lastBrace + 1);
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
     }
-    return stripped;
+  } catch {
+    const repaired = repairJsonString(candidate);
+    if (repaired && typeof repaired === "object" && !Array.isArray(repaired)) {
+      return repaired as Record<string, unknown>;
+    }
   }
+  return null;
+}
+
+function extractJsonCandidate(content: string): Record<string, unknown> | null {
+  const sanitized = sanitizeJsonCandidate(content);
+  if (!sanitized) return null;
+
+  // 1. Direct parse attempt on stripped code fences
+  const stripped = String(stripMarkdownCodeFence(sanitized) || "").trim();
+  const directObj = parseJsonCandidateObject(stripped);
+  if (directObj) return directObj;
+
+  // 2. Fenced code block embedded within conversational text
+  const fencedMatch = sanitized.match(
+    /```(?:json|javascript|typescript|js|ts)?\s*\n?([\s\S]*?)\n?```/i
+  );
+  if (fencedMatch && fencedMatch[1]) {
+    const fencedObj = parseJsonCandidateObject(fencedMatch[1].trim());
+    if (fencedObj) return fencedObj;
+  }
+
+  // 3. Balanced or outer brace extraction from first '{' to last '}'
+  const firstBrace = sanitized.indexOf("{");
+  const lastBrace = sanitized.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const sliceCandidate = sanitized.slice(firstBrace, lastBrace + 1);
+    const sliceObj = parseJsonCandidateObject(sliceCandidate);
+    if (sliceObj) return sliceObj;
+  }
+
+  // 4. Truncated JSON starting at first '{' (e.g. model output cut off by max_tokens)
+  if (firstBrace >= 0) {
+    const truncatedCandidate = sanitized.slice(firstBrace);
+    const truncatedObj = parseJsonCandidateObject(truncatedCandidate);
+    if (truncatedObj) return truncatedObj;
+  }
+
+  return null;
 }
 
 export function parseHandoffJSON(content: string): ParsedHandoffContent | null {
-  const candidate = extractJsonCandidate(content);
-  if (!candidate) return null;
+  const parsed = extractJsonCandidate(content);
+  if (!parsed) return null;
 
   try {
-    const parsed = JSON.parse(candidate) as Record<string, unknown>;
     const summary =
       typeof parsed.summary === "string" ? parsed.summary.trim().slice(0, MAX_SUMMARY_LENGTH) : "";
     const taskProgress =

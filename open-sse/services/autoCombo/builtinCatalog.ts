@@ -5,6 +5,7 @@ import { VALID_VARIANTS } from "./autoPrefix";
 import type { AutoComboSpec, PreparedVirtualAutoComboInputs } from "./virtualFactory";
 import { parseAutoSuffix, type AutoCategory, type AutoTier } from "./suffixComposition";
 import { isValidModelFamily, AUTO_FAMILY_IDS, type ModelFamily } from "./modelFamily";
+import { isSpbProfileTarget } from "../tierResolver";
 
 export { AUTO_FAMILY_IDS };
 
@@ -53,6 +54,9 @@ export const AUTO_TEMPLATE_VARIANTS: Record<string, AutoVariant | undefined> = {
   // Chaos mode — parallel dispatch to top-N stable models
   "auto/best-chaos": "chaos",
   "auto/chaos": "chaos",
+  // SPB (Smart Proxy Bridge) transparent auto-steering models
+  "auto/spb": undefined,
+  "auto/smart-proxy-bridge": undefined,
 };
 
 /**
@@ -91,6 +95,14 @@ type ResolvedAutoVariant =
 export function resolveAutoVariant(modelStr: string, suffix: string): ResolvedAutoVariant {
   if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, modelStr)) {
     return { recognized: true, variant: AUTO_TEMPLATE_VARIANTS[modelStr] };
+  }
+  // Dynamic named SPB instances: auto/spb1, auto/spb2, auto/spb:<name>, auto/<name>, etc.
+  if (
+    /^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+    isSpbProfileTarget(modelStr)
+  ) {
+    return { recognized: true, variant: undefined };
   }
   if (VALID_AUTO_VARIANTS.has(suffix as AutoVariant)) {
     return { recognized: true, variant: suffix as AutoVariant };

@@ -1,6 +1,6 @@
 import { getAllSyncedAvailableModels } from "@/lib/db/models";
 import { enrichCursorCatalog, getActiveSyncedCatalog } from "@/lib/db/models/activeSyncedCatalog";
-import { isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 
 /**
  * GET /api/synced-available-models?provider=<id>
@@ -8,12 +8,8 @@ import { isAuthenticated } from "@/shared/utils/apiAuth";
  */
 export async function GET(request: Request) {
   try {
-    if (!(await isAuthenticated(request))) {
-      return Response.json(
-        { error: { message: "Authentication required", type: "invalid_api_key" } },
-        { status: 401 }
-      );
-    }
+    const authError = await requireManagementAuth(request);
+    if (authError) return authError;
 
     const { searchParams } = new URL(request.url);
     const provider = searchParams.get("provider");

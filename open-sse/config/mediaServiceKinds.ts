@@ -72,5 +72,17 @@ export function resolveProviderServiceKinds(
   if (Object.prototype.hasOwnProperty.call(OCR_PROVIDERS, providerId)) {
     set.add("imageToText");
   }
+  // Dynamic resolution for compatible provider nodes (openai-compatible-<apiType>-<uuid>)
+  if (providerId.startsWith("openai-compatible-")) {
+    const parts = providerId.split("-");
+    const apiType = parts[2];
+    if (apiType === "embeddings") set.add("embedding");
+    else if (apiType === "images-generations") set.add("image");
+    else if (apiType === "audio-transcriptions") set.add("stt");
+    else if (apiType === "audio-speech") set.add("tts");
+    else if (apiType === "chat" || apiType === "responses") set.add("llm");
+  } else if (providerId.startsWith("anthropic-compatible-")) {
+    set.add("llm");
+  }
   return [...set];
 }

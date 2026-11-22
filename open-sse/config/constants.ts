@@ -293,6 +293,12 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+// Claude Web transient-429 tuning. Read via envInt so behavior stays identical
+// to the hardcoded defaults unless explicitly overridden in .env.
+export const CLAUDE_WEB_COOLDOWN_JITTER_MS = envInt("CLAUDE_WEB_COOLDOWN_JITTER_MS", 15000);
+export const CLAUDE_WEB_TRANSIENT_429_MS = envInt("CLAUDE_WEB_TRANSIENT_429_MS", 60000);
+export const CLAUDE_WEB_429_BACKOFF_CAP_MS = envInt("CLAUDE_WEB_429_BACKOFF_CAP_MS", 300000);
+
 export const PROVIDER_PROFILES = {
   oauth: {
     transientCooldown: 5000, // 5s (session tokens — short recovery)

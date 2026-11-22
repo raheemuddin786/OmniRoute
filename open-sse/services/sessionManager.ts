@@ -6,7 +6,6 @@
  */
 
 import { createHash } from "node:crypto";
-import { resolveTtlMsFromEnv } from "../utils/ttlFromEnv.ts";
 
 interface SessionEntry {
   createdAt: number;
@@ -42,10 +41,8 @@ const sessions = new Map<string, SessionEntry>();
 // Hard cap on active sessions to prevent memory exhaustion
 const MAX_SESSIONS = 200;
 
-// Auto-cleanup sessions older than the TTL (15 minutes by default, reduced from 30).
-// Operators with long agent sessions can raise it via OMNIROUTE_SESSION_TTL_MIN
-// without a rebuild; invalid values (blank/NaN/≤0) keep the default.
-const SESSION_TTL_MS = resolveTtlMsFromEnv("OMNIROUTE_SESSION_TTL_MIN", 15);
+// Auto-cleanup sessions older than 15 minutes (reduced from 30)
+const SESSION_TTL_MS = 15 * 60 * 1000;
 const _cleanupTimer = setInterval(() => {
   const now = Date.now();
   // Evict expired sessions
@@ -342,10 +339,49 @@ export function extractExternalSessionId(
     h.get("x_session_id") ?? // Underscore variant (direct HTTP / custom clients)
     h.get("x-omniroute-session") ?? // OmniRoute-specific form
     h.get("session-id") ?? // Bare session-id
+    h.get("x-conversation-id") ??
+    h.get("x-antigravity-conversation-id") ??
+    h.get("x-antigravity-session-id") ??
+    h.get("x-claude-conversation-id") ??
+    h.get("x-claude-session-id") ??
+    h.get("x-parent-session-id") ??
+    h.get("x-cline-task-id") ??
+    h.get("x-cursor-session-id") ??
+    h.get("x-agent-session-id") ??
+    h.get("x-agent-id") ??
+    h.get("x-task-id") ??
+    h.get("x-worker-id") ??
+    h.get("x-run-id") ??
+    h.get("x-agent-name") ??
     null;
-  if (!raw || !raw.trim()) return null;
-  // Prefix "ext:" to ensure no collision with internal SHA-256 hash IDs
-  return `ext:${raw.trim().slice(0, 64)}`; // max 64 chars to avoid abuse
+
+  const subagent =
+    h.get("x-subagent-id") ??
+    h.get("x_subagent_id") ??
+    h.get("x-subagent-session-id") ??
+    h.get("x-antigravity-subagent") ??
+    h.get("x-antigravity-subagent-id") ??
+    h.get("x-thread-id") ??
+    h.get("x-roo-task-id") ??
+    h.get("x-worker-id") ??
+    null;
+
+  const rawTrimmed = raw?.trim();
+  const subagentTrimmed = subagent?.trim();
+
+  if (rawTrimmed && subagentTrimmed) {
+    if (rawTrimmed.includes(subagentTrimmed)) {
+      return `ext:${rawTrimmed.slice(0, 64)}`;
+    }
+    return `ext:${rawTrimmed.slice(0, 32)}:sub:${subagentTrimmed.slice(0, 30)}`;
+  }
+  if (rawTrimmed) {
+    return `ext:${rawTrimmed.slice(0, 64)}`;
+  }
+  if (subagentTrimmed) {
+    return `ext:sub:${subagentTrimmed.slice(0, 60)}`;
+  }
+  return null;
 }
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────

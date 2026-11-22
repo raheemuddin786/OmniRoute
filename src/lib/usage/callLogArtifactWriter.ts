@@ -46,41 +46,31 @@ function fileExistsAtRuntime(candidate: string): boolean {
 }
 
 type WorkerResolutionContext = {
-  moduleDir?: string | null;
-  moduleUrl?: string;
+  moduleDir?: string;
   cwd?: string;
   entryFile?: string | null;
   fileExists?: (candidate: string) => boolean;
 };
 
-function safeModuleDir(moduleUrl: string): string | null {
-  try {
-    return path.dirname(fileURLToPath(moduleUrl));
-  } catch {
-    return null;
-  }
-}
-
-function resolveModuleDir(context: WorkerResolutionContext): string | null {
-  if (context.moduleDir !== undefined) return context.moduleDir;
-  return safeModuleDir(context.moduleUrl ?? import.meta.url);
-}
-
-function moduleWorkerPath(moduleDir: string | null, fileName: string): string | null {
-  return moduleDir ? path.join(moduleDir, fileName) : null;
-}
-
 export function resolveCallLogArtifactWorker(context: WorkerResolutionContext = {}): {
   workerFile: string;
   execArgv: string[];
 } {
-  const moduleDir = resolveModuleDir(context);
-  const cwd = context.cwd ?? process.cwd();
+  const moduleDir = context.moduleDir ?? path.dirname(fileURLToPath(import.meta.url));
+  const fallbackCwd = path.resolve(moduleDir, "../../..");
+  let cwd = context.cwd;
+  if (!cwd) {
+    try {
+      cwd = process.cwd();
+    } catch {
+      cwd = fallbackCwd;
+    }
+  }
   const entryFile = context.entryFile === undefined ? process.argv[1] : context.entryFile;
   const exists = context.fileExists ?? fileExistsAtRuntime;
 
-  const moduleJs = moduleWorkerPath(moduleDir, "callLogArtifactWorker.js");
-  if (moduleJs && exists(moduleJs)) return { workerFile: moduleJs, execArgv: [] };
+  const moduleJs = path.join(moduleDir, "callLogArtifactWorker.js");
+  if (exists(moduleJs)) return { workerFile: moduleJs, execArgv: [] };
 
   const entryJs = entryFile
     ? path.join(path.dirname(path.resolve(entryFile)), "src/lib/usage/callLogArtifactWorker.js")
@@ -91,8 +81,8 @@ export function resolveCallLogArtifactWorker(context: WorkerResolutionContext = 
   if (exists(cwdJs)) return { workerFile: cwdJs, execArgv: [] };
 
   // Native TypeScript workers avoid esbuild zombies when terminated.
-  const moduleTs = moduleWorkerPath(moduleDir, "callLogArtifactWorker.ts");
-  if (moduleTs && exists(moduleTs)) {
+  const moduleTs = path.join(moduleDir, "callLogArtifactWorker.ts");
+  if (exists(moduleTs)) {
     return { workerFile: moduleTs, execArgv: [] };
   }
 
@@ -176,6 +166,40 @@ function ensureWorker(): Worker {
   if (worker) return worker;
 
   const { workerFile, execArgv } = workerFileOverride ?? resolveCallLogArtifactWorker();
+  // Ensure the process has a valid, existing cwd before instantiating Worker thread.
+  // When the parent's cwd has been removed, Node's worker_threads initialization throws
+  // ENOENT in uv_cwd within the internal worker bootstrap.
+  // We validate cwd before passing to Worker, not inside Worker thread, to give us
+  // control over the fallback and avoid the “process.cwd failed... uv_cwd” crash.
+  // The Worker constructor will call fs.access on the worker file, which re-runs
+  // the cwd check internally, so we preserve the fallback by ensuring cwd exists.
+  try {
+    process.cwd();
+  } catch (cwdErr) {
+    if (
+      cwdErr &&
+      typeof cwdErr === "object" &&
+      "code" in cwdErr &&
+      (cwdErr as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      // Use the directory containing the worker file as a safe cwd fallback.
+      // This works because the worker file exists as a regular file at this point
+      // (resolveCallLogArtifactWorker ensures it).
+      const safeDir = path.dirname(workerFile);
+      try {
+        process.chdir(safeDir);
+      } catch {
+        // Last resort: try root; if that fails, we're stuck but the Worker constructor
+        // will also fail, and the existing error handling will capture it.
+        try {
+          process.chdir("/");
+        } catch {
+          // Ignore fallback chdir failure, the Worker constructor will surface the error.
+        }
+      }
+    }
+  }
+
   // Reflect.construct keeps Next/Turbopack from interpreting the runtime-selected
   // worker path as a build-time glob and tracing tens of thousands of unrelated files.
   const created = Reflect.construct(Worker, [pathToFileURL(workerFile), { execArgv }]) as Worker;

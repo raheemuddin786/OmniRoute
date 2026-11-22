@@ -146,9 +146,27 @@ describe("getCacheAwareStrategy", () => {
   });
 
   it("returns none strategy unchanged", () => {
-    const ctx = { hasCacheControl: false, provider: null, isCachingProvider: false };
+    const ctx = {
+      hasCacheControl: false,
+      provider: null,
+      isCachingProvider: false,
+      targetFormat: null,
+    };
     const result = getCacheAwareStrategy("none", ctx);
     assert.equal(result.strategy, "none");
+    assert.equal(result.skipSystemPrompt, false);
+    assert.equal(result.deterministicOnly, false);
+  });
+
+  it("does not downgrade strategy or skip system prompt for claude-web provider", () => {
+    const ctx = {
+      hasCacheControl: false,
+      provider: "claude-web",
+      isCachingProvider: true,
+      targetFormat: "claude",
+    };
+    const result = getCacheAwareStrategy("aggressive", ctx);
+    assert.equal(result.strategy, "aggressive");
     assert.equal(result.skipSystemPrompt, false);
     assert.equal(result.deterministicOnly, false);
   });

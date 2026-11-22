@@ -24,7 +24,7 @@ const projectRoot = dirname(fileURLToPath(import.meta.url));
 const scriptSrc =
   process.env.NODE_ENV === "development"
     ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://static.cloudflareinsights.com"
-    : "script-src 'self' 'unsafe-inline' blob: https://static.cloudflareinsights.com";
+    : "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://static.cloudflareinsights.com";
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -202,6 +202,7 @@ const nextConfig = {
   // accept for image-bearing requests; tune via env if a deployment needs
   // more.
   experimental: {
+    agentUpgrade: false,
     // macOS development only: avoid the EBADF spawn failures of Next's TypeScript
     // CLI and static-path worker (see scripts/build/macosDevWorkaround.mjs).
     ...macosDevExperimentalOverrides(),
@@ -294,6 +295,10 @@ const nextConfig = {
       "**/.tmp/**",
       "**/electron/**",
       "**/docs/**",
+      "**/*.tgz",
+      "**/_artifacts/**",
+      "**/.artifacts/**",
+      "**/.sandbox/**",
     ],
   },
   serverExternalPackages: [

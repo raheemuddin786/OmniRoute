@@ -687,3 +687,43 @@ test("OpenAI stream: reasoning-only response with thinking:{type:adaptive} is re
   const messageDeltas = result.filter((e) => e?.type === "message_delta");
   assert.equal(messageDeltas[0].delta.stop_reason, "end_turn");
 });
+
+test("OpenAI stream: pure text stream with uninitialized state flushes cleanly without TypeError", () => {
+  // A fresh state without pre-initialized toolCalls (e.g. from stream.ts or callers passing raw state)
+  const state = {};
+  const chunk1 = openaiToClaudeResponse(
+    {
+      id: "chatcmpl-notools-1",
+      choices: [{ delta: { content: "• **The `" } }],
+    },
+    state
+  );
+  assert.ok(chunk1);
+  const chunk2 = openaiToClaudeResponse(
+    {
+      id: "chatcmpl-notools-1",
+      choices: [{ delta: {}, finish_reason: "stop" }],
+    },
+    state
+  );
+  // Finish reason is deferred until usage or flush
+  assert.equal(chunk2, null);
+
+  // Flush with null
+  const flushed = openaiToClaudeResponse(null, state);
+  assert.ok(Array.isArray(flushed), "Flush must return array of events, not throw");
+
+  const flushedDeltas = flushed.filter((e) => e?.type === "content_block_delta");
+  assert.equal(
+    flushedDeltas[0]?.delta?.text,
+    "`",
+    "Markdown delimiter buffered must be emitted on flush"
+  );
+
+  const messageDelta = flushed.find((e) => e?.type === "message_delta");
+  assert.ok(messageDelta, "message_delta must be emitted on flush");
+  assert.equal(messageDelta.delta?.stop_reason, "end_turn");
+
+  const messageStop = flushed.find((e) => e?.type === "message_stop");
+  assert.ok(messageStop, "message_stop must be emitted on flush");
+});

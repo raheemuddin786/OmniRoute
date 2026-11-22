@@ -28,6 +28,10 @@ const INTENT_TO_TASK_FITNESS_KEY: Record<IntentType, string> = {
   creative: "default",
   simple: "default",
   medium: "default",
+  planning: "planning",
+  debugging: "debugging",
+  documentation: "documentation",
+  review: "review",
 };
 
 export function mapIntentToTaskFitnessKey(intent: IntentType): string {

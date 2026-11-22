@@ -449,6 +449,19 @@ test("gives large Codex GPT-6.x Responses requests the codex large-request bump"
   assert.ok(result.reasons.includes("codex_gpt_5_5_large_responses"));
 });
 
+test("gives claude-web provider a 300s readiness budget for extended web turns", () => {
+  const result = resolveStreamReadinessTimeout({
+    baseTimeoutMs: 80_000,
+    provider: "claude-web",
+    model: "claude-sonnet-5",
+    body: { messages: items(5) },
+  });
+
+  assert.equal(result.timeoutMs, 300_000);
+  assert.equal(result.maxTimeoutMs, 300_000);
+  assert.ok(result.reasons.includes("claude_web_long_turn"));
+});
+
 test("does NOT bump small Codex GPT-6.x requests without a high effort tier", () => {
   const result = resolveStreamReadinessTimeout({
     baseTimeoutMs: 80_000,

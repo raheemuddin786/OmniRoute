@@ -9,7 +9,6 @@
  */
 
 import { classifyPromptIntent, type IntentType } from "../intentClassifier.ts";
-import { stripHarnessWrappers } from "../specificityRules.ts";
 import {
   executePipeline,
   buildPipelineConfig,
@@ -47,6 +46,10 @@ const INTENT_TO_TASK: Record<IntentType, TaskType> = {
   creative: "creative",
   medium: "medium",
   simple: "simple",
+  planning: "planning",
+  debugging: "debugging",
+  documentation: "documentation",
+  review: "review",
 };
 
 // ---------------------------------------------------------------------------
@@ -277,8 +280,7 @@ export async function handlePipelineCombo({
   const systemMsg = messages.find((m) => m.role === "system");
   const systemText = typeof systemMsg?.content === "string" ? systemMsg.content : undefined;
 
-  // Classify the user's own words; the stages still get the full promptText.
-  const intent = classifyPromptIntent(stripHarnessWrappers(promptText), systemText);
+  const intent = classifyPromptIntent(promptText, systemText);
   const taskType = INTENT_TO_TASK[intent] ?? "simple";
 
   log.info("PIPELINE", `Intent: ${intent} → task: ${taskType}`);

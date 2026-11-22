@@ -152,6 +152,13 @@ const eslintConfig = [
       "no-restricted-syntax": "off",
     },
   },
+  // TDZ & Use-Before-Define guard on chat handler and SPB services
+  {
+    files: ["src/sse/handlers/chat.ts", "open-sse/services/spb/**/*.ts"],
+    rules: {
+      "no-use-before-define": ["error", { functions: false, classes: true, variables: true }],
+    },
+  },
   // Relaxed rules for TypeScript in open-sse and tests (incremental adoption).
   // eslint-config-next already registers @typescript-eslint for every TS file;
   // registering a second plugin object is rejected by ESLint 10.
@@ -246,11 +253,6 @@ const eslintConfig = [
       "packages/ui-kit/**",
       "_references/**",
       "_mono_repo/**",
-      // _cache/ e _trash/ — caches locais e a lixeira local (gitignored por /_*/). O ESLint 10
-      // não lê o .gitignore; sem estas linhas, `eslint .` no checkout principal desce em cópias
-      // inteiras do repositório guardadas ali.
-      "_cache/**",
-      "_trash/**",
       "review/**",
       // Electron app
       "electron/**",

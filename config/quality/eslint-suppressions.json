@@ -54,11 +54,6 @@
       "count": 1
     }
   },
-  "open-sse/executors/claude-web.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
   "open-sse/executors/cliproxyapi.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -498,11 +493,6 @@
       "count": 4
     }
   },
-  "open-sse/services/tierConfig.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 3
-    }
-  },
   "open-sse/services/tokenLimitCounter.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 1
@@ -536,11 +526,6 @@
   "open-sse/services/v0QuotaFetcher.ts": {
     "no-restricted-syntax": {
       "count": 1
-    }
-  },
-  "open-sse/transformer/responsesTransformer.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 3
     }
   },
   "open-sse/translator/helpers/schemaCoercion.ts": {
@@ -983,11 +968,6 @@
       "count": 1
     }
   },
-  "src/app/api/v1/messages/route.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
   "src/app/api/v1/models/catalog.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 10
@@ -1254,11 +1234,6 @@
     }
   },
   "src/lib/memory/genericBackend.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
-  "src/lib/memory/retrieval.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 1
     }
@@ -2264,11 +2239,6 @@
   "tests/unit/body-timeout-integration.test.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 2
-    }
-  },
-  "tests/unit/build-next-isolated.test.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
     }
   },
   "tests/unit/build/check-licenses.test.ts": {
@@ -4291,11 +4261,6 @@
   },
   "tests/unit/service-combo-metrics.test.ts": {
     "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
-  "tests/unit/service-context-handoff.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },

@@ -374,25 +374,16 @@ Tables created across the migrations (123 total):
 
 ### 3.3 `src/domain/` — Domain layer
 
-Domain services and evaluation contracts. Some modules are called by the live
-request path; others remain standalone contracts. Do not assume this entire directory
-is free of I/O or that changing every module affects production routing.
-
-The live policy surfaces are `src/shared/utils/apiKeyPolicy.ts` and
-`src/sse/handlers/chat/resolvedModelPolicy.ts`. Live combo handling and target
-resolution use `open-sse/services/combo.ts`. The tested `policyEngine.ts` and
-`comboResolver.ts` contracts, together with `src/lib/container.ts`, are not the
-wiring of the inspected chat request path. Keep them separate from those active
-surfaces when planning a routing change.
+Pure business logic, no I/O. Imported by routes and handlers.
 
 | File                                       | Purpose                                           |
 | ------------------------------------------ | ------------------------------------------------- |
-| `policyEngine.ts`                          | Reserved policy-evaluation contract               |
+| `policyEngine.ts`                          | Top-level policy resolver                         |
 | `fallbackPolicy.ts`                        | Fallback decision tree                            |
 | `costRules.ts`                             | Cost calculation rules                            |
 | `lockoutPolicy.ts`                         | Model lockout decisions                           |
 | `tagRouter.ts`                             | Tag-based routing                                 |
-| `comboResolver.ts`                         | Reserved combo-selection contract                 |
+| `comboResolver.ts`                         | Combo resolution from request → target list       |
 | `connectionModelRules.ts`                  | Per-connection model filters                      |
 | `modelAvailability.ts`                     | Model availability check                          |
 | `degradation.ts`                           | Degraded-mode transitions                         |
@@ -468,7 +459,7 @@ open-sse/
 ├── types.d.ts
 ├── config/                 Provider registries, header profiles, identity, …
 ├── handlers/               Request handlers (chat, embeddings, audio, image, …)
-├── executors/              170 provider executor modules (executor classes + per-provider helpers)
+├── executors/              159 provider executor modules (executor classes + per-provider helpers)
 ├── translator/             Format conversion (OpenAI ↔ Claude ↔ Gemini ↔ Cursor ↔ Kiro)
 ├── transformer/            Responses API ↔ Chat Completions stream transformer
 ├── services/               80+ service modules (combos, fallback, quotas, identity, …)
@@ -498,7 +489,7 @@ open-sse/
 
 ### 4.2 `open-sse/executors/`
 
-170 top-level executor modules (`*.ts` minus `base.ts`, `index.ts` and tests — the count
+159 top-level executor modules (`*.ts` minus `base.ts`, `index.ts` and tests — the count
 `npm run check:docs-counts` measures). Every executor class extends `BaseExecutor` (`base.ts`),
 directly or through `DefaultExecutor` or another executor; the remaining modules are per-provider
 helpers (tool schemas, fetch/TTS adapters, quirk handlers). Executors include:
@@ -510,7 +501,7 @@ helpers (tool schemas, fetch/TTS adapters, quirk handlers). Executors include:
 (shared identity helper) and `index.ts` (registry).
 
 > Note: providers not listed here are served by `default.ts` using the generic
-> OpenAI-compatible executor. The full provider catalog (394 providers) lives in
+> OpenAI-compatible executor. The full provider catalog (380 providers) lives in
 > `src/shared/constants/providers.ts`.
 
 ### 4.3 `open-sse/translator/`
@@ -543,7 +534,7 @@ Highlights (full list under `open-sse/services/`):
 
 | Concern              | Files                                                                                                                                                                                                                                                    |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Combo routing        | `combo.ts` (22 strategies), `comboConfig.ts`, `comboMetrics.ts`, `comboManifestMetrics.ts`, `comboAgentMiddleware.ts`                                                                                                                                    |
+| Combo routing        | `combo.ts` (20 strategies), `comboConfig.ts`, `comboMetrics.ts`, `comboManifestMetrics.ts`, `comboAgentMiddleware.ts`                                                                                                                                    |
 | Auto Combo engine    | `autoCombo/` — `engine.ts`, `scoring.ts`, `taskFitness.ts`, `virtualFactory.ts`, `modePacks.ts`, `autoPrefix.ts`, `persistence.ts`, `providerDiversity.ts`, `providerRegistryAccessor.ts`, `routerStrategy.ts`, `selfHealing.ts`, `index.ts`             |
 | Resilience           | `accountFallback.ts` (cooldown + lockout), `errorClassifier.ts`, `requestRejectedStreak.ts`, `emergencyFallback.ts`, `rateLimitManager.ts`, `rateLimitSemaphore.ts`, `accountSemaphore.ts`, `accountSelector.ts`                                         |
 | Quotas               | `quotaMonitor.ts`, `quotaPreflight.ts`, `bailianQuotaFetcher.ts`, `codexQuotaFetcher.ts`, `deepseekQuotaFetcher.ts`, `openrouterQuotaFetcher.ts`, `openrouterFreeWindow.ts`, `llmgatewayQuotaFetcher.ts`, `crofUsageFetcher.ts`, `antigravityCredits.ts` |
@@ -576,7 +567,8 @@ Highlights (full list under `open-sse/services/`):
 Provider registries (`providerRegistry.ts`, `providerModels.ts`,
 `providerHeaderProfiles.ts`), per-format model registries (`audioRegistry.ts`,
 `embeddingRegistry.ts`, `imageRegistry.ts`, `moderationRegistry.ts`,
-`musicRegistry.ts`, `rerankRegistry.ts`, `searchRegistry.ts`, `videoRegistry.ts`),
+`musicRegistry.ts`, `rerankRegistry.ts`, `searchRegistry.ts`, `videoRegistry.ts`,
+`mediaServiceKinds.ts`),
 identity helpers (`codexIdentity.ts`, `codexInstructions.ts`,
 `anthropicHeaders.ts`, `antigravityUpstream.ts`, `antigravityModelAliases.ts`,
 `cliFingerprints.ts`, `toolCloaking.ts`, `defaultThinkingSignature.ts`),
@@ -591,7 +583,7 @@ Streaming primitives and provider helpers: `stream.ts`, `streamHandler.ts`,
 `streamHelpers.ts`, `streamPayloadCollector.ts`, `streamReadiness.ts`,
 `sseHeartbeat.ts`, `proxyFetch.ts`, `proxyDispatcher.ts`, `tlsClient.ts`,
 `networkProxy.ts`, `awsSigV4.ts`, `cacheControlPolicy.ts`,
-`cursorAgentProtobuf.ts`, `cursorVersionDetector.ts`,
+`cursorChecksum.ts`, `cursorAgentProtobuf.ts`, `cursorVersionDetector.ts`,
 `comfyuiClient.ts`, `kieTask.ts`, `bypassHandler.ts`, `aiSdkCompat.ts`,
 `thinkTagParser.ts`, `urlSanitize.ts`, `usageTracking.ts`, `requestLogger.ts`,
 `progressTracker.ts`, `cors.ts`, `error.ts`, `logger.ts`, `sleep.ts`,
@@ -705,10 +697,10 @@ Organized into 6 subfolders by purpose.
 - **`scripts/docs/`** — `generate-docs-index.mjs`, `gen-provider-reference.ts`.
 - **`scripts/i18n/`** — `generate-multilang.mjs`, `run-visual-qa.mjs`,
   `generate-qa-checklist.mjs`, `apply-priority-overrides.mjs`,
-  `validate_translation.py`, `check_translations.py`,
+  `validate_translation.py`, `check_translations.py`, `i18n_autotranslate.py`,
   `untranslatable-keys.json`.
 - **`scripts/ad-hoc/`** — `cursor-tap.cjs`, `sync-cursor-models.mjs`,
-  `dbsetup.js`.
+  `migrate-env.mjs`, `dbsetup.js`.
 
 ---
 
@@ -724,14 +716,13 @@ Client request
      CORS preflight check
      Zod validation (chatCompletionsSchema in shared/validation/schemas.ts)
      Auth (extractApiKey + isValidApiKey OR requireManagementAuth)
-     Route authorization (src/server/authz/pipeline.ts)
-     API-key policy (src/shared/utils/apiKeyPolicy.ts; enforced on the selected path)
+     Policy engine (src/server/authz/pipeline.ts)
      Guardrails (PII masker, prompt injection, vision bridge)
   → handleChatCore() (open-sse/handlers/chatCore.ts)
      Cache check (semantic + read cache)
      Rate limit (rateLimitManager, accountSemaphore)
      Combo routing (if model resolves to a combo)
-       resolveComboTargets (open-sse/services/combo.ts) → per-target dispatch
+       comboResolver → loop per target → handleSingleModel()
      translateRequest()  (open-sse/translator/request/*)
      getExecutor(providerId).execute()  (open-sse/executors/*)
        fetch upstream → retry/backoff via accountFallback
@@ -783,9 +774,8 @@ See [RESILIENCE_GUIDE.md](./RESILIENCE_GUIDE.md) and the dedicated section in
 
 1. Create `src/lib/db/yourModule.ts` and import `getDbInstance()` from `./core.ts`.
 2. Export CRUD functions for your domain.
-3. If new tables: add a migration with `npm run db:new-migration -- <description>` (writes
-   `src/lib/db/migrations/YYYYMMDDHHMMSS_<description>.sql`, UTC; see
-   `docs/ops/DATABASE_GUIDE.md`), idempotent, transactional.
+3. If new tables: add a migration under `src/lib/db/migrations/`, numbered
+   sequentially, idempotent, transactional.
 4. Importers use direct imports from `@/lib/db/yourModule` (no barrel — the old `localDb.ts` re-export layer was removed).
 5. Add tests under `tests/unit/`.
 

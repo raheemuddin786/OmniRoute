@@ -719,6 +719,7 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     comboExecutionKey,
     tokensCompressed,
     cacheSource: cacheSource === "semantic" ? "semantic" : "upstream",
+    headers: clientRawRequest?.headers ?? null,
     apiKeyId: apiKeyInfo?.id || null,
     apiKeyName: apiKeyInfo?.name || null,
     noLog: noLogEnabled,

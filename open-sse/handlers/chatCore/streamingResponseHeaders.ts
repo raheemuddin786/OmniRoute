@@ -10,10 +10,6 @@
  */
 import { OMNIROUTE_RESPONSE_HEADERS } from "@/shared/constants/headers";
 import { buildStreamingResponseHeaders as defaultBuildStreaming } from "./responseHeaders.ts";
-import {
-  shouldStripAnthropicAccountHeaders,
-  type AnthropicAccountHeaderPolicyKeyInfo,
-} from "./upstreamAccountHeaders.ts";
 
 export function assembleStreamingResponseHeaders(
   args: {
@@ -31,9 +27,15 @@ export function assembleStreamingResponseHeaders(
     isCombo?: boolean;
     requestedConnectionId?: string | null;
     selectedConnectionId?: string | null;
-    // The requesting key's upstream anthropic-ratelimit-* / anthropic-organization-id
-    // header policy (see upstreamAccountHeaders.ts). Omitted = forward as before.
-    apiKeyInfo?: AnthropicAccountHeaderPolicyKeyInfo | null;
+    compactionMeta?: {
+      compressed?: boolean;
+      type?: "proactive" | "last-resort" | "both";
+      tokensOriginal?: number;
+      tokensFinal?: number;
+      layers?: string[];
+      toolsTruncated?: number;
+    } | null;
+    toolsTruncated?: number;
   },
   buildStreamingResponseHeaders: typeof defaultBuildStreaming = defaultBuildStreaming
 ): Record<string, string> {
@@ -50,15 +52,35 @@ export function assembleStreamingResponseHeaders(
       isCombo: args.isCombo,
       requestedConnectionId: args.requestedConnectionId,
       selectedConnectionId: args.selectedConnectionId,
-      stripAnthropicAccountHeaders: shouldStripAnthropicAccountHeaders(
-        args.apiKeyInfo,
-        args.provider
-      ),
     }),
     "x-omniroute-request-id": args.pendingRequestId,
   };
   if (args.compressionResponseMeta) {
     responseHeaders[OMNIROUTE_RESPONSE_HEADERS.compression] = args.compressionResponseMeta;
+  }
+  if (args.compactionMeta?.compressed) {
+    responseHeaders[OMNIROUTE_RESPONSE_HEADERS.contextCompressed] = "true";
+    if (args.compactionMeta.type) {
+      responseHeaders[OMNIROUTE_RESPONSE_HEADERS.compactionType] = args.compactionMeta.type;
+    }
+    if (typeof args.compactionMeta.tokensOriginal === "number") {
+      responseHeaders[OMNIROUTE_RESPONSE_HEADERS.tokensOriginal] = String(
+        args.compactionMeta.tokensOriginal
+      );
+    }
+    if (typeof args.compactionMeta.tokensFinal === "number") {
+      responseHeaders[OMNIROUTE_RESPONSE_HEADERS.tokensFinal] = String(
+        args.compactionMeta.tokensFinal
+      );
+    }
+    if (Array.isArray(args.compactionMeta.layers) && args.compactionMeta.layers.length > 0) {
+      responseHeaders[OMNIROUTE_RESPONSE_HEADERS.compactionLayers] =
+        args.compactionMeta.layers.join(",");
+    }
+  }
+  const effectiveToolsTruncated = args.toolsTruncated ?? args.compactionMeta?.toolsTruncated;
+  if (typeof effectiveToolsTruncated === "number" && effectiveToolsTruncated > 0) {
+    responseHeaders[OMNIROUTE_RESPONSE_HEADERS.toolsTruncated] = String(effectiveToolsTruncated);
   }
   return responseHeaders;
 }

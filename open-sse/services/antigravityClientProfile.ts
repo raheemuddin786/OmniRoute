@@ -30,6 +30,37 @@ const ABSENT_CONTENT_IDENTITY_HEADERS = [
   "Client-Metadata",
 ] as const;
 
+// Track accounts that have rejected x-goog-user-project header
+const projectHeaderRejectedAccounts = new Set<string>();
+
+function getAccountKeyFromCredentials(
+  credentials: AntigravityProfileCredentials | null | undefined
+): string | null {
+  if (!credentials) return null;
+  const parts = [
+    credentials.accessToken?.slice(-8) ?? "no-key",
+    credentials.providerSpecificData?.accountEmail ?? "no-email",
+  ];
+  return parts.join("|");
+}
+
+export function markProjectHeaderRejected(
+  credentials: AntigravityProfileCredentials | null | undefined
+): void {
+  const accountKey = getAccountKeyFromCredentials(credentials);
+  if (accountKey) {
+    projectHeaderRejectedAccounts.add(accountKey);
+  }
+}
+
+/** Check if an account has previously rejected x-goog-user-project. */
+export function hasProjectHeaderBeenRejected(
+  credentials: AntigravityProfileCredentials | null | undefined
+): boolean {
+  const accountKey = getAccountKeyFromCredentials(credentials);
+  return accountKey ? projectHeaderRejectedAccounts.has(accountKey) : false;
+}
+
 export function getAntigravityClientProfile(
   credentials?: AntigravityProfileCredentials | null
 ): AntigravityClientProfile {

@@ -74,9 +74,13 @@ export async function GET(request: NextRequest) {
 
     const agentIds = getAvailableAgents();
     const results = await Promise.all(agentIds.map(checkProviderHealth));
+    const data: Record<string, boolean> = {};
+    for (const r of results) {
+      data[r.id] = r.connected;
+    }
 
     return NextResponse.json(
-      { providers: results },
+      { providers: results, data },
       { headers: getCloudAgentCorsHeaders(request) }
     );
   } catch (error) {

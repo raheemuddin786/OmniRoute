@@ -602,70 +602,51 @@ test("mergeInjectedFallbackOwnerNames: no preConversionClientToolNames provided 
   assert.deepEqual(result.builtinToolNames, ["omniroute_web_search"]);
 });
 
-// A Responses-format body declares function tools flat ({type, name, parameters}). Injected
-// memory / skill tools used the Chat shape ({type, function: {...}}) whatever the body format,
-// which only worked while a Responses -> Chat translation normalized them. On a native
-// Responses passthrough (e.g. Mistral /v1/responses) the Chat shape reaches the upstream,
-// which rejects it: 400 "tools.0.FunctionTool.name: Field required".
-test("injectMemoryAndSkills injects Responses-shaped tools into a Responses body", async () => {
+test("claude-web provider suppresses memory and skills tools injection", async () => {
   const { updateSettings } = await import("../../src/lib/db/settings.ts");
-  const { invalidateMemorySettingsCache } = await import("../../src/lib/memory/settings.ts");
-  const { MEMORY_BUILTIN_TOOL_NAMES } = await import("../../src/lib/skills/memoryBuiltins.ts");
-  const { encodeSkillToolName } = await import("../../src/lib/skills/injection.ts");
+  const { invalidateMemorySettingsCache: invCW } = await import("../../src/lib/memory/settings.ts");
 
   await updateSettings({ memoryEnabled: true, memoryMaxTokens: 2000, skillsEnabled: true });
-  invalidateMemorySettingsCache();
+  invCW();
   resetSkillsRegistry();
+
   await skillRegistry.register({
-    name: "responses-skill",
+    name: "claude-web-test-skill",
     version: "1.0.0",
-    description: "skill injected into a Responses body",
-    schema: { input: { type: "object", properties: { q: { type: "string" } } }, output: {} },
-    handler: "responses-skill-handler",
+    description: "test skill",
+    schema: { input: {}, output: {} },
+    handler: "test-handler",
     enabled: true,
-    apiKeyId: "owner-responses",
+    apiKeyId: "owner-claude-web",
     mode: "on",
   });
 
-  const clientTool = {
-    type: "function",
-    name: "client_tool",
-    description: "client",
-    parameters: { type: "object", properties: {} },
-    strict: false,
-  };
   const body: Record<string, unknown> = {
-    model: "labs-leanstral-1-5-1",
-    input: [{ role: "user", content: "hello" }],
-    tools: [clientTool],
+    model: "claude-sonnet-4-6",
+    stream: false,
+    messages: [{ role: "user", content: "test prompt" }],
   };
 
   const result = await injectMemoryAndSkills({
     body,
-    memoryOwnerId: "owner-responses",
-    provider: "mistral",
-    effectiveModel: "labs-leanstral-1-5-1",
-    sourceFormat: FORMATS.OPENAI_RESPONSES,
-    targetFormat: FORMATS.OPENAI_RESPONSES,
+    memoryOwnerId: "owner-claude-web",
+    provider: "claude-web",
+    effectiveModel: "claude-sonnet-4-6",
+    sourceFormat: FORMATS.CLAUDE,
+    targetFormat: FORMATS.CLAUDE,
     backgroundReason: null,
     log: { debug: () => {} },
   });
 
-  const tools = result.body.tools as Record<string, unknown>[];
-  assert.deepEqual(tools[0], clientTool, "client tools are left untouched");
-  for (const tool of tools) {
-    assert.equal(tool.type, "function");
-    assert.equal("function" in tool, false, `tool must be flat: ${JSON.stringify(tool)}`);
-    assert.equal(typeof tool.name, "string");
-    assert.ok(tool.parameters && typeof tool.parameters === "object", `${tool.name} parameters`);
-  }
-  const names = tools.map((tool) => tool.name);
-  for (const memoryTool of MEMORY_BUILTIN_TOOL_NAMES) {
-    assert.ok(names.includes(memoryTool), `expected ${memoryTool}`);
-  }
-  assert.ok(names.includes(encodeSkillToolName("responses-skill", "1.0.0")), "skill injected");
-  assert.deepEqual([...result.builtinToolNames].sort(), [...MEMORY_BUILTIN_TOOL_NAMES].sort());
+  const tools = (result.body.tools as unknown[] | undefined) ?? [];
+  assert.equal(tools.length, 0, "claude-web must not have memory or skill tools injected");
+  assert.equal(result.builtinToolNames.length, 0, "no builtin tools for claude-web");
+  assert.equal(
+    result.injectedCustomSkillNames.length,
+    0,
+    "no custom skills injected for claude-web"
+  );
 
   resetSkillsRegistry();
-  invalidateMemorySettingsCache();
+  invCW();
 });

@@ -94,4 +94,47 @@ export abstract class CloudAgentBase {
   protected generateActivityId(): string {
     return `act_${Date.now()}_${randomBytes(8).toString("hex")}`;
   }
+
+  /**
+   * Normalizes repository URL or slug into a standard format and extracts owner/repo.
+   * Handles https://github.com/owner/repo, git@github.com:owner/repo.git, and owner/repo.
+   */
+  protected normalizeRepository(
+    repoUrl: string,
+    fallbackName?: string
+  ): { owner: string; repo: string; httpsUrl: string } {
+    let raw = repoUrl.trim();
+    // Handle SSH format git@github.com:owner/repo.git
+    if (raw.startsWith("git@") && raw.includes(":")) {
+      const parts = raw.split(":");
+      raw = `https://github.com/${parts[1]}`;
+    }
+    // Handle raw owner/repo slug
+    if (!raw.includes("://") && !raw.startsWith("git@") && raw.includes("/")) {
+      raw = `https://github.com/${raw}`;
+    }
+    try {
+      const parsed = new URL(raw);
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      if (segments.length >= 2) {
+        const owner = segments[0];
+        const repo = segments[1].replace(/\.git$/i, "");
+        return {
+          owner,
+          repo,
+          httpsUrl: `https://${parsed.host}/${owner}/${repo}`,
+        };
+      }
+    } catch {
+      // Fall through to manual split if URL parsing fails
+    }
+    const parts = raw.split("/").filter(Boolean);
+    const owner = parts.length >= 2 ? parts[parts.length - 2] : "";
+    const repo =
+      parts.length >= 2
+        ? parts[parts.length - 1].replace(/\.git$/i, "")
+        : (fallbackName || "").trim();
+    const httpsUrl = owner && repo ? `https://github.com/${owner}/${repo}` : raw;
+    return { owner, repo, httpsUrl };
+  }
 }
