@@ -206,8 +206,14 @@ export function extractFactsFromText(text: string): ExtractedFact[] {
  * @param response - The LLM response text to parse
  * @param apiKeyId - API key owning this memory
  * @param sessionId - Session context for the memory
+ * @param projectContext - Optional projectId and workspaceRoot for project isolation
  */
-export function extractFacts(response: string, apiKeyId: string, sessionId: string): void {
+export function extractFacts(
+  response: string,
+  apiKeyId: string,
+  sessionId: string,
+  projectContext?: { projectId?: string | null; workspaceRoot?: string | null }
+): void {
   if (!response || !apiKeyId || !sessionId) return;
 
   const cappedResponse = capExtractionText(response);
@@ -232,6 +238,8 @@ export function extractFacts(response: string, apiKeyId: string, sessionId: stri
           category: fact.category,
           extractedAt: new Date().toISOString(),
           source: "llm_response",
+          ...(projectContext?.projectId ? { projectId: projectContext.projectId } : {}),
+          ...(projectContext?.workspaceRoot ? { workspaceRoot: projectContext.workspaceRoot } : {}),
         },
         expiresAt: null,
       }).catch((err) => {

@@ -191,7 +191,7 @@ export function toMemorySettingsUpdates(
 
 export function toMemoryRetrievalConfig(
   settings: MemorySettings,
-  extra: { query?: string } = {}
+  extra: { query?: string; projectId?: string | null; workspaceRoot?: string | null } = {}
 ): Partial<MemoryConfig> & { query?: string } {
   const enabled = settings.enabled && settings.maxTokens > 0;
 
@@ -203,6 +203,8 @@ export function toMemoryRetrievalConfig(
     persistAcrossModels: false,
     retentionDays: settings.retentionDays,
     scope: "apiKey",
+    ...(extra.projectId ? { projectId: extra.projectId } : {}),
+    ...(extra.workspaceRoot ? { workspaceRoot: extra.workspaceRoot } : {}),
   };
 
   // Plan 21 FAIL #1 fix: forward the last user message as `query` so that

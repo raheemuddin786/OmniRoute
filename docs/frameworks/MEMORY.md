@@ -291,6 +291,9 @@ routes under `src/app/api/settings/qdrant/` are all wired as of v3.8.6:
 - **Config fields** — the UI exposes `host`, `port`, `collection`, `embeddingModel`,
   `apiKey`. `vectorSize` / `hnswEfConstruct` are env/DB only and `vectorSize` is not
   used for collection creation (dimension comes from the embedding).
+- **Embedding model discovery** — `/api/settings/qdrant/embedding-models` dynamically
+  discovers embedding models from both curated registry providers and active database
+  connections (including custom compatible provider nodes resolved by their routeable prefix).
 
 ### Vector quantization (int8 — opt-in, both backends)
 

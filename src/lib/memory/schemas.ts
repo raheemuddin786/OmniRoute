@@ -12,6 +12,8 @@ export const MemoryConfigSchema = z.object({
   persistAcrossModels: z.boolean(),
   retentionDays: z.number().int().positive(),
   scope: z.enum(["session", "apiKey", "global"]).optional(),
+  projectId: z.string().optional(),
+  workspaceRoot: z.string().optional(),
 });
 
 /**
