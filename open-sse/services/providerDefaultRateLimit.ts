@@ -17,6 +17,7 @@
  * atomically.
  */
 import { SlidingWindowLimiter, type RateLimitWindow } from "./slidingWindowLimiter.ts";
+import { CLAUDE_WEB_429_BACKOFF_CAP_MS } from "../config/constants.ts";
 import {
   markLocalRateLimitError,
   LEGACY_RATE_LIMIT_QUEUE_TIMEOUT_CODE,
@@ -50,6 +51,7 @@ interface ProviderQuotaOverrideEntry {
   rpm?: number;
   concurrency?: number;
   rateLimitCooldownSeconds?: number;
+  quotaWindowSeconds?: number;
 }
 
 let providerQuotaOverrides: Record<string, ProviderQuotaOverrideEntry> | null = null;
@@ -81,6 +83,83 @@ export function getProviderRateLimitCooldownOverrideMs(provider: string): number
   if (!provider) return null;
   const seconds = providerQuotaOverrides?.[provider]?.rateLimitCooldownSeconds;
   return typeof seconds === "number" && seconds > 0 ? seconds * 1000 : null;
+}
+
+/** Default quota window for subscription / quota-window providers (5 hours) */
+export const DEFAULT_QUOTA_WINDOW_MS = 5 * 60 * 60 * 1000;
+
+/**
+ * Resolved operator-configured quota window in ms, or null when unset.
+ */
+export function getProviderQuotaWindowMs(provider: string): number | null {
+  if (!provider) return null;
+  const seconds = providerQuotaOverrides?.[provider]?.quotaWindowSeconds;
+  return typeof seconds === "number" && seconds > 0 ? seconds * 1000 : null;
+}
+
+/**
+ * Resolves whether a provider belongs to a quota-window / reset-window provider class.
+ * Config-driven via provider classification without hardcoded literals in routing paths.
+ */
+export function isQuotaWindowProvider(provider: string | null | undefined): boolean {
+  if (!provider) return false;
+  // Providers configured with explicit quotaWindowSeconds override
+  if (providerQuotaOverrides?.[provider]?.quotaWindowSeconds) return true;
+  // Provider definition checking web-cookie / subscription class
+  try {
+    const { WEB_COOKIE_PROVIDERS } = require("../../src/shared/constants/providers/web-cookie.ts");
+    if (Object.prototype.hasOwnProperty.call(WEB_COOKIE_PROVIDERS, provider.toLowerCase())) {
+      return true;
+    }
+  } catch {
+    // web-cookie constants unavailable in some contexts
+  }
+  return provider.endsWith("-web");
+}
+
+/**
+ * Resolves the cooldown duration for a 429 response.
+ * Single source of truth across keyHealth and rateLimitManager:
+ * - If upstream carries reset time / retryAfterMs, use it.
+ * - Otherwise, if quota is exhausted on a quota-window provider, use configured window (default 5h).
+ * - Transient 429s retain standard short cooldowns (e.g. 60s / 30s).
+ */
+export function resolveProviderQuotaCooldownMs(params: {
+  provider: string | null | undefined;
+  retryAfterMs?: number | null;
+  isQuotaExhausted?: boolean;
+  fallbackTransientMs?: number;
+  consecutive429Count?: number;
+}): number {
+  const {
+    provider,
+    retryAfterMs,
+    isQuotaExhausted,
+    fallbackTransientMs = 60_000,
+    consecutive429Count = 0,
+  } = params;
+
+  if (retryAfterMs && retryAfterMs > 0) {
+    return retryAfterMs;
+  }
+
+  if (isQuotaExhausted) {
+    const p = provider || "";
+    const configured = getProviderQuotaWindowMs(p);
+    if (configured && configured > 0) return configured;
+    if (isQuotaWindowProvider(p)) {
+      return DEFAULT_QUOTA_WINDOW_MS;
+    }
+  }
+
+  // Transient 429s without an upstream retry-after: back off progressively so
+  // a sustained throttle does not re-trip at a fixed 60s interval forever.
+  if (consecutive429Count > 0) {
+    const base = fallbackTransientMs;
+    const backoff = Math.min(base * 8, base * Math.pow(2, Math.min(consecutive429Count, 6)));
+    return Math.min(CLAUDE_WEB_429_BACKOFF_CAP_MS, backoff); // hard cap (configurable)
+  }
+  return fallbackTransientMs;
 }
 
 export function getProviderDefaultRateLimit(provider: string): RateLimitWindow | undefined {

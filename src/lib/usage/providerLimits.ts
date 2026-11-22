@@ -1,17 +1,8 @@
 import { syncCodexQuotaObservation } from "@/lib/db/providers/codexAccountRecovery";
-import { syncCodexWorkspaceInfoIfNeeded } from "@/lib/usage/codexWorkspaceSync";
-import { syncCodexPlanFromUsage } from "@/lib/usage/codexPlanSync";
 import { isCompleteUsageReading } from "@/lib/usage/usageReading";
-import {
-  captureCodexConnectionFence,
-  runWithCodexConnectionFence,
-  assertCodexOperationCurrent,
-  type CodexConnectionFence,
-} from "@/lib/db/codexConnectionFences";
 import {
   getProviderConnectionById,
   getProviderConnections,
-  mergeConnectionProviderSpecificData,
   updateProviderConnection,
 } from "@/lib/db/providers";
 import { getSettings, resolveProxyForConnection, updateSettings } from "@/lib/db/settings";
@@ -68,12 +59,6 @@ import {
 import { getCachedLiveModelIds, refreshLiveModelIds } from "./providerLimits/liveModelIds";
 import { syncInChunksWithSpacing } from "./providerLimits/chunkedSpacingSync";
 import {
-  currentQuotaBatchEntries,
-  refreshedCodexFence,
-  type FetchedLimitsCache,
-  type PendingLimitsCacheEntry,
-} from "./providerLimits/codexQuotaFence";
-import {
   refreshAndUpdateCredentialsWithResolver,
   type CredentialRefreshOptions,
   type ProviderConnectionLike,
@@ -92,7 +77,6 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
   "minimax",
   "minimax-cn",
   "crof",
-  "mistral",
   "nanogpt",
   "nan",
   "apmix",
@@ -151,7 +135,11 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
 const DEFAULT_PROVIDER_LIMITS_SYNC_INTERVAL_MINUTES = 70;
 const PROVIDER_LIMITS_AUTO_SYNC_SETTING_KEY = "provider_limits_auto_sync_last_run";
 const DEFAULT_PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS = 5_000;
+// Minimum interval between quota refreshes for the same connection to prevent
+// quota refresh storms during autonomous agent loops and combo fallback cascades.
+const MIN_QUOTA_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const pendingPostUsageRefreshes = new Set<string>();
+const lastPostUsageRefreshAt = new Map<string, number>();
 
 function getProviderLimitsPostUsageRefreshDelayMs(): number {
   const raw = Number(process.env.PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS ?? "");
@@ -163,9 +151,16 @@ function getProviderLimitsPostUsageRefreshDelayMs(): number {
 function scheduleProviderLimitsPostUsageRefresh(connectionId: string): void {
   if (!connectionId || pendingPostUsageRefreshes.has(connectionId)) return;
 
+  // Debounce: skip if a refresh for this connection ran within MIN_QUOTA_REFRESH_INTERVAL_MS.
+  const lastRefreshAt = lastPostUsageRefreshAt.get(connectionId);
+  if (lastRefreshAt !== undefined && Date.now() - lastRefreshAt < MIN_QUOTA_REFRESH_INTERVAL_MS) {
+    return;
+  }
+
   pendingPostUsageRefreshes.add(connectionId);
   const timer = setTimeout(() => {
     pendingPostUsageRefreshes.delete(connectionId);
+    lastPostUsageRefreshAt.set(connectionId, Date.now());
     void fetchAndPersistProviderLimits(connectionId, "scheduled", {
       allowRotatingRefresh: true,
     }).catch((error) => {
@@ -184,6 +179,22 @@ export function notifyProviderUsageRecorded(
 ): void {
   if ((provider !== "antigravity" && provider !== "agy") || !connectionId) return;
   scheduleProviderLimitsPostUsageRefresh(connectionId);
+}
+
+/** Test-only: reset post-usage refresh debounce state */
+export function __resetPostUsageRefreshStateForTests(): void {
+  pendingPostUsageRefreshes.clear();
+  lastPostUsageRefreshAt.clear();
+}
+
+/** Test-only: inspect pending post-usage refresh connection IDs */
+export function __getPendingPostUsageRefreshesForTests(): Set<string> {
+  return pendingPostUsageRefreshes;
+}
+
+/** Test-only: inspect last post-usage refresh timestamps by connection ID */
+export function __getLastPostUsageRefreshAtForTests(): Map<string, number> {
+  return lastPostUsageRefreshAt;
 }
 
 // Subscribe at module load so usageHistory can emit usage events without importing
@@ -354,18 +365,18 @@ function isTerminalStatusForQuotaRecovery(testStatus: string | null | undefined)
   return TERMINAL_STATUSES_FOR_QUOTA_RECOVERY.has(testStatus);
 }
 
-function reportedQuotaRemaining(value: JsonRecord): number | null {
-  if (typeof value.remaining === "number") return value.remaining;
-  return typeof value.remainingPercentage === "number" ? value.remainingPercentage : null;
-}
-
 export function hasUsableQuota(usage: JsonRecord): boolean {
   const quotas = usage?.quotas;
   if (!isRecord(quotas)) return false;
   for (const value of Object.values(quotas)) {
     if (!isRecord(value)) continue;
     if (value.unlimited === true) return true;
-    const remaining = reportedQuotaRemaining(value);
+    const remaining =
+      typeof value.remaining === "number"
+        ? value.remaining
+        : typeof value.remainingPercentage === "number"
+          ? value.remainingPercentage
+          : null;
     if (remaining !== null && remaining > 0) return true;
   }
   return false;
@@ -387,7 +398,12 @@ export function syntheticCooldownOutlivedByRealWindows(
   if (windows.length === 0) return false;
   for (const value of windows) {
     if (!isRecord(value) || value.unlimited === true) return false;
-    const remaining = reportedQuotaRemaining(value);
+    const remaining =
+      typeof value.remaining === "number"
+        ? value.remaining
+        : typeof value.remainingPercentage === "number"
+          ? value.remainingPercentage
+          : null;
     if (remaining === null || remaining <= 0) return false;
     if (value.resetAt == null) return false;
     const resetMs = Date.parse(String(value.resetAt));
@@ -1003,11 +1019,6 @@ export async function getSanitizedCachedProviderLimitsMap(): Promise<
   return sanitized;
 }
 
-async function apiKeyUnchangedSinceRead(connection: ProviderConnectionLike): Promise<boolean> {
-  const stored = (await getProviderConnectionById(connection.id)) as { apiKey?: string } | null;
-  return stored?.apiKey === (connection as { apiKey?: string }).apiKey;
-}
-
 export async function fetchLiveProviderLimits(connectionId: string): Promise<{
   connection: ProviderConnectionLike;
   usage: JsonRecord;
@@ -1025,7 +1036,6 @@ async function fetchLiveProviderLimitsWithOptions(
 ): Promise<{
   connection: ProviderConnectionLike;
   usage: JsonRecord;
-  codexFence?: CodexConnectionFence | null;
 }> {
   let connection = (await getProviderConnectionById(
     connectionId
@@ -1050,10 +1060,7 @@ async function fetchLiveProviderLimitsWithOptions(
       )) as JsonRecord,
       await refreshLiveModelIds(connection.provider)
     );
-    // A key edit during the fetch makes this reading the old key's: it must not refill the quota
-    // cache or write a snapshot for the new key. The write follows the check with no I/O between.
-    const keyUnchanged = await apiKeyUnchangedSinceRead(connection);
-    if (keyUnchanged && isRecord(usage.quotas)) {
+    if (isRecord(usage.quotas)) {
       setQuotaCache(
         connectionId,
         connection.provider,
@@ -1070,10 +1077,6 @@ async function fetchLiveProviderLimitsWithOptions(
     return { connection, usage };
   }
 
-  let codexFence =
-    connection.provider === "codex"
-      ? captureCodexConnectionFence(connection as unknown as JsonRecord, connectionId)
-      : null;
   const proxyInfo = await resolveProxyForConnection(connectionId);
 
   const fetchUsageWithContext = async (proxyConfig: unknown) =>
@@ -1086,7 +1089,6 @@ async function fetchLiveProviderLimitsWithOptions(
       });
       conn = result.connection;
       wasRefreshed = result.refreshed;
-      codexFence = refreshedCodexFence(codexFence, connection, result);
 
       if (wasRefreshed) {
         await syncToCloudIfEnabled();
@@ -1112,7 +1114,6 @@ async function fetchLiveProviderLimitsWithOptions(
           force: true,
         });
         if (forced.refreshed || forced.adopted) {
-          codexFence = refreshedCodexFence(codexFence, conn, forced);
           conn = forced.connection;
           if (forced.refreshed) await syncToCloudIfEnabled();
           usageData = sanitizeUsageQuotasForProvider(
@@ -1126,20 +1127,8 @@ async function fetchLiveProviderLimitsWithOptions(
         }
       }
 
-      // Display-only workspace label (personal plan vs. Business seat), fetched once
-      // the token has just proven itself on the usage request.
-      if (conn.provider === "codex" && !usageData?.message) {
-        // Merged in one transaction onto the row as stored now, so fields another
-        // path wrote during the lookup are not overwritten by this snapshot.
-        conn = await syncCodexWorkspaceInfoIfNeeded(conn, {
-          persist: mergeConnectionProviderSpecificData,
-        });
-      }
-
       // Only the dashboard's on-demand refresh lists credits; background polls keep
-      // their base usage request and never trigger reset-credit activity. The only
-      // background exception is the opt-in, capped sweep in
-      // src/lib/services/codexResetCreditAutospend.ts, and it runs outside this path.
+      // their base usage request and never trigger reset-credit activity.
       if (options.includeResetCredits && conn.provider === "claude" && conn.accessToken) {
         await fetchAndSeedClaudeResetCreditUsage(conn.id, conn.accessToken);
       }
@@ -1205,51 +1194,38 @@ async function fetchLiveProviderLimitsWithOptions(
     result = await fetchUsageWithContext(null);
   }
 
-  return runWithCodexConnectionFence(codexFence, async () => {
-    assertCodexOperationCurrent(connectionId);
-    if (connection.provider === "codex") {
-      const data = await syncCodexQuotaObservation(
-        connection.id,
-        result.usage,
-        connection.providerSpecificData
-      );
-      if (data) connection = { ...connection, providerSpecificData: data };
-      connection = await syncCodexPlanFromUsage(connection, result.usage, (id, fields) => {
-        assertCodexOperationCurrent(connectionId);
-        return mergeConnectionProviderSpecificData(id, fields);
-      });
-    }
-    if (isRecord(result.usage.quotas)) {
-      setQuotaCache(
-        connectionId,
-        connection.provider,
-        result.usage.quotas,
-        isRecord(result.usage.modelQuotas) ? result.usage.modelQuotas : {},
-        { complete: isCompleteUsageReading(result.usage) }
-      );
-    }
-    connection = await syncExpiredStatusIfNeeded(connection, result.usage);
-    connection = await syncClaudeExtraUsageStateIfNeeded(connection, result.usage);
-    connection = await syncClaudeBootstrapIfNeeded(connection, result.usage);
-    connection = await syncAntigravitySubscriptionIfNeeded(connection, result.usage);
-    // Observations remain valid across a newer same-owner failure; recovery does not.
-    connection = await runWithCodexConnectionFence(
-      codexFence,
-      () => maybeClearRecoveredQuotaState(connection, result.usage),
-      true
+  if (connection.provider === "codex") {
+    const data = await syncCodexQuotaObservation(
+      connection.id,
+      result.usage,
+      connection.providerSpecificData
     );
+    if (data) connection = { ...connection, providerSpecificData: data };
+  }
+  if (isRecord(result.usage.quotas)) {
+    setQuotaCache(
+      connectionId,
+      connection.provider,
+      result.usage.quotas,
+      isRecord(result.usage.modelQuotas) ? result.usage.modelQuotas : {},
+      { complete: isCompleteUsageReading(result.usage) }
+    );
+  }
+  connection = await syncExpiredStatusIfNeeded(connection, result.usage);
+  connection = await syncClaudeExtraUsageStateIfNeeded(connection, result.usage);
+  connection = await syncClaudeBootstrapIfNeeded(connection, result.usage);
+  connection = await syncAntigravitySubscriptionIfNeeded(connection, result.usage);
+  connection = await maybeClearRecoveredQuotaState(connection, result.usage);
 
-    return {
-      connection,
-      // Claude's banked reset-credit count is invisible to the regular usage poll; attach the
-      // count the user-opened list (or the opt-in auto-reset) last seeded, or omit it (unknown).
-      usage:
-        connection.provider === "claude"
-          ? withClaudeResetCreditCount(connection.id, result.usage)
-          : result.usage,
-      codexFence,
-    };
-  });
+  return {
+    connection,
+    // Claude's banked reset-credit count is invisible to the regular usage poll; attach the
+    // count the user-opened list (or the opt-in auto-reset) last seeded, or omit it (unknown).
+    usage:
+      connection.provider === "claude"
+        ? withClaudeResetCreditCount(connection.id, result.usage)
+        : result.usage,
+  };
 }
 
 function cacheReadObservedAt(
@@ -1272,70 +1248,65 @@ export async function fetchAndPersistProviderLimits(
   // Conservative observation ordering: a slow usage poll must not outrank
   // inference evidence accepted while that poll was in flight.
   const readStartedAt = new Date().toISOString();
-  const { connection, usage, codexFence } = await fetchLiveProviderLimitsWithOptions(connectionId, {
+  const { connection, usage } = await fetchLiveProviderLimitsWithOptions(connectionId, {
     forceRefresh: source === "manual",
     allowRotatingRefresh: opts.allowRotatingRefresh,
     includeResetCredits: opts.includeResetCredits,
   });
-  return runWithCodexConnectionFence(codexFence ?? null, () => {
-    assertCodexOperationCurrent(connectionId);
-    const newCache = toProviderLimitsCacheEntry(
-      usage,
-      source,
-      cacheReadObservedAt(connection, usage, readStartedAt)
-    );
-    const previous = getProviderLimitsCache(connectionId);
-    const cache = mergeProviderLimitsCacheEntry(connection.provider, newCache, previous);
+  const newCache = toProviderLimitsCacheEntry(
+    usage,
+    source,
+    cacheReadObservedAt(connection, usage, readStartedAt)
+  );
+  const previous = getProviderLimitsCache(connectionId);
+  const cache = mergeProviderLimitsCacheEntry(connection.provider, newCache, previous);
 
-    // Don't persist error-only entries (429 etc.) — would wipe prior good cache.
-    // Serve the prior entry instead; only successful fetches update the cache.
-    if (cache === previous && newCache.message) {
-      // Claude's banked count lives in the list-seeded memo (already on `usage` when known),
-      // so a cached count — e.g. from before a redeem — must not come back through here.
-      const isClaude = connection.provider === "claude";
-      const bankedResetCredits = isClaude
-        ? newCache.bankedResetCredits
-        : previous.bankedResetCredits;
-      let served = previous;
-      if (isClaude && previous.bankedResetCredits !== bankedResetCredits) {
-        const { bankedResetCredits: _cached, ...rest } = previous;
-        served = setProviderLimitsCache(
-          connectionId,
-          bankedResetCredits === undefined ? rest : { ...rest, bankedResetCredits }
-        );
-      }
-      const staleUsage: JsonRecord = {
-        ...usage,
-        quotas: previous.quotas,
-        modelQuotas: previous.modelQuotas,
-        plan: previous.plan ?? usage.plan ?? null,
-        bankedResetCredits,
-        paidCredits: previous.paidCredits,
-        billing: previous.billing,
-        message: null,
-        _stale: true,
-        _staleSince: previous.fetchedAt,
-        _staleReason: newCache.message,
-      };
-      if (bankedResetCredits === undefined) delete staleUsage.bankedResetCredits;
-      return { connection, usage: staleUsage, cache: served };
+  // Don't persist error-only entries (429 etc.) — would wipe prior good cache.
+  // Serve the prior entry instead; only successful fetches update the cache.
+  if (cache === previous && newCache.message) {
+    // Claude's banked count lives in the list-seeded memo (already on `usage` when known),
+    // so a cached count — e.g. from before a redeem — must not come back through here.
+    const isClaude = connection.provider === "claude";
+    const bankedResetCredits = isClaude ? newCache.bankedResetCredits : previous.bankedResetCredits;
+    let served = previous;
+    if (isClaude && previous.bankedResetCredits !== bankedResetCredits) {
+      const { bankedResetCredits: _cached, ...rest } = previous;
+      served = setProviderLimitsCache(
+        connectionId,
+        bankedResetCredits === undefined ? rest : { ...rest, bankedResetCredits }
+      );
     }
-
-    const mergedUsage: JsonRecord = {
+    const staleUsage: JsonRecord = {
       ...usage,
-      ...(cache.billing ? { billing: cache.billing } : {}),
+      quotas: previous.quotas,
+      modelQuotas: previous.modelQuotas,
+      plan: previous.plan ?? usage.plan ?? null,
+      bankedResetCredits,
+      paidCredits: previous.paidCredits,
+      billing: previous.billing,
+      message: null,
+      _stale: true,
+      _staleSince: previous.fetchedAt,
+      _staleReason: newCache.message,
     };
-    setProviderLimitsCache(connectionId, cache);
-    if (connection.provider === "codex") {
-      const current = getProviderLimitsCache(connectionId) ?? cache;
-      return {
-        connection,
-        usage: { ...mergedUsage, quotas: current.quotas, fetchedAt: current.fetchedAt },
-        cache: current,
-      };
-    }
-    return { connection, usage: mergedUsage, cache };
-  });
+    if (bankedResetCredits === undefined) delete staleUsage.bankedResetCredits;
+    return { connection, usage: staleUsage, cache: served };
+  }
+
+  const mergedUsage: JsonRecord = {
+    ...usage,
+    ...(cache.billing ? { billing: cache.billing } : {}),
+  };
+  setProviderLimitsCache(connectionId, cache);
+  if (connection.provider === "codex") {
+    const current = getProviderLimitsCache(connectionId) ?? cache;
+    return {
+      connection,
+      usage: { ...mergedUsage, quotas: current.quotas, fetchedAt: current.fetchedAt },
+      cache: current,
+    };
+  }
+  return { connection, usage: mergedUsage, cache };
 }
 
 async function fetchUsageCacheForSync(connection: ProviderConnectionLike, source: SyncSource) {
@@ -1344,16 +1315,14 @@ async function fetchUsageCacheForSync(connection: ProviderConnectionLike, source
   const forceRefresh =
     source === "manual" || shouldRefreshProviderLimitsCache(connection, existingCache || undefined);
   const readStartedAt = new Date().toISOString();
-  const { usage, codexFence } = await fetchLiveProviderLimitsWithOptions(connection.id, {
-    forceRefresh,
-  });
+  const { usage } = await fetchLiveProviderLimitsWithOptions(connection.id, { forceRefresh });
   const nextCache = toProviderLimitsCacheEntry(
     usage,
     source,
     cacheReadObservedAt(connection, usage, readStartedAt)
   );
   const cache = mergeProviderLimitsCacheEntry(connection.provider, nextCache, existingCache);
-  return { connectionId: connection.id, cache, codexFence };
+  return { connectionId: connection.id, cache };
 }
 
 export async function syncAllProviderLimits(
@@ -1373,19 +1342,22 @@ export async function syncAllProviderLimits(
     isActive: true,
   })) as unknown as ProviderConnectionLike[];
   const connections = connectionRows.filter(isSupportedUsageConnection);
-  const cacheEntries: PendingLimitsCacheEntry[] = [];
+  const cacheEntries: Array<{ connectionId: string; entry: ProviderLimitsCacheEntry }> = [];
   const caches: Record<string, ProviderLimitsCacheEntry> = {};
   const errors: Record<string, string> = {};
 
-  const recordResult = (connectionId: string, result: PromiseSettledResult<FetchedLimitsCache>) => {
+  const recordResult = (
+    connectionId: string,
+    result: PromiseSettledResult<{ connectionId: string; cache: ProviderLimitsCacheEntry }>
+  ) => {
     if (result.status === "fulfilled") {
-      const { cache, codexFence } = result.value;
+      const { cache } = result.value;
       const previous = getProviderLimitsCache(connectionId);
       if (cache === previous) {
         caches[connectionId] = cache;
         return;
       }
-      cacheEntries.push({ connectionId, entry: cache, codexFence });
+      cacheEntries.push({ connectionId, entry: cache });
       caches[connectionId] = cache;
       return;
     }
@@ -1407,7 +1379,7 @@ export async function syncAllProviderLimits(
 
   const recordChunk = (
     chunk: ProviderConnectionLike[],
-    results: PromiseSettledResult<FetchedLimitsCache>[]
+    results: PromiseSettledResult<{ connectionId: string; cache: ProviderLimitsCacheEntry }>[]
   ) => {
     results.forEach((result, index) => {
       const connectionId = chunk[index]?.id;
@@ -1418,10 +1390,8 @@ export async function syncAllProviderLimits(
   await syncInChunksWithSpacing(otherConnections, concurrency, spacingMs, fetchOne, recordChunk);
   await syncInChunksWithSpacing(oauthConnections, 1, spacingMs, fetchOne, recordChunk);
 
-  // Recheck before advertising/persisting deferred results, not just after fetch.
-  const currentEntries = currentQuotaBatchEntries(cacheEntries, caches, errors);
-  if (currentEntries.length > 0) {
-    setProviderLimitsCacheBatch(currentEntries);
+  if (cacheEntries.length > 0) {
+    setProviderLimitsCacheBatch(cacheEntries);
   }
 
   if (source === "scheduled") {
@@ -1430,8 +1400,8 @@ export async function syncAllProviderLimits(
 
   return {
     total: connections.length,
-    succeeded: currentEntries.length,
-    failed: connections.length - currentEntries.length,
+    succeeded: cacheEntries.length,
+    failed: connections.length - cacheEntries.length,
     caches,
     errors,
   };

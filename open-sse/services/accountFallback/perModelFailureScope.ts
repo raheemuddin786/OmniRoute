@@ -8,7 +8,8 @@
  * hasPerModelQuota("claude") is false and a 429 stays account-wide.
  */
 import { resolveProviderId } from "../../../src/shared/constants/providers";
-import { hasPerModelQuota } from "../accountFallback.ts";
+import { hasPerModelQuota } from "./hasPerModelQuota.ts";
+import { isModelScopedAccessDenial } from "./modelScopedAccessDenial.ts";
 
 // Bounded quantifiers keep this ReDoS-safe.
 const MODEL_NOT_FOUND_404_REGEX =
@@ -122,6 +123,7 @@ export function hasPerModelFailureScope(
     isModelNotFound404(status, errorText) ||
     isAnthropicModelNotFound(provider, model, status, errorText) ||
     isModelUnsupported401(status, errorText) ||
+    isModelScopedAccessDenial(provider, status ?? 0, errorText) ||
     isExplicitModelCapacityFailure(status, errorText, model)
   )
     return true;
@@ -129,5 +131,7 @@ export function hasPerModelFailureScope(
   if (hasPerModelQuota(provider, model, connectionPassthroughModels)) return true;
   if (typeof connectionPassthroughModels === "boolean") return connectionPassthroughModels;
   if (!provider) return false;
-  return resolveProviderId(provider) === "claude";
+  const canonical = resolveProviderId(provider);
+  // Claude Web multiplexes multiple models behind one cookie/session; lock the model, not the session
+  return canonical === "claude" || canonical === "claude-web";
 }

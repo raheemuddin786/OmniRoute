@@ -29,7 +29,12 @@ export const PRE_SCREEN_CONCURRENCY = 5;
  * An explicit `targetTimeoutMs` in the resolved combo config (the combo's own config or the
  * global `comboDefaults`) overrides the declared budgets.
  */
-export const DEFAULT_COMBO_TARGET_TIMEOUT_MS = 120_000;
+export const DEFAULT_COMBO_TARGET_TIMEOUT_MS =
+  typeof process !== "undefined" &&
+  process.env?.COMBO_TARGET_TIMEOUT_MS &&
+  Number(process.env.COMBO_TARGET_TIMEOUT_MS) > 0
+    ? Number(process.env.COMBO_TARGET_TIMEOUT_MS)
+    : 120_000;
 
 /**
  * Upper bound on how far a declared budget may stretch a combo target's first-output wait.
@@ -146,7 +151,6 @@ const DEFAULT_COMBO_CONFIG = {
   resetAwareWeeklyWeight: 0.65,
   resetAwareTieBandPercent: 5,
   resetAwareExhaustionGuardPercent: 10,
-  resetAwareNoQuotaFloor: 0.5,
   quotaWeightedFloorPercent: 1,
   // Historical default (predates #2417/#10217) — true. This value feeds TWO
   // independent mechanisms and must stay true-by-default for one of them:

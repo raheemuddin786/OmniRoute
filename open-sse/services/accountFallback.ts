@@ -2842,3 +2842,27 @@ export function getAccountHealth(
   if (account.rateLimitedUntil && isAccountUnavailable(account.rateLimitedUntil)) score -= 30;
   return Math.max(0, score);
 }
+
+let _rateLimitPauseChecker:
+  | ((
+      provider: string,
+      connectionId: string,
+      model: string | null | undefined,
+      now?: number
+    ) => boolean)
+  | null = null;
+
+export function setRateLimitPauseChecker(
+  checker: (
+    provider: string,
+    connectionId: string,
+    model: string | null | undefined,
+    now?: number
+  ) => boolean
+): void {
+  _rateLimitPauseChecker = checker;
+}
+
+export function getRateLimitPauseChecker(): typeof _rateLimitPauseChecker {
+  return _rateLimitPauseChecker;
+}
