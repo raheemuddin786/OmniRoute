@@ -1,13 +1,4 @@
 import type { FeatureFlagDefinition } from "./featureFlagTypes";
-import { SEARCH_FEATURE_FLAG_DEFINITIONS } from "./searchFeatureFlagDefinitions";
-import { FAL_NATIVE_ENABLED_FLAG } from "./featureFlagDefinitionsFal";
-import { PLUGIN_PERMISSION_MODEL_ENABLED_FLAG } from "./featureFlagDefinitionsPlugins";
-import { CODE_ASSIST_LEGACY_TIER_FLAG } from "./featureFlagDefinitionsCodeAssist";
-import { SYSTEM_ONE_FEATURE_FLAG_DEFINITIONS } from "./featureFlagDefinitionsSystemOne";
-import {
-  PII_RESPONSE_SANITIZATION_MODE_FLAG,
-  PII_REVERSIBLE_VAULT_FLAG,
-} from "./piiVaultFeatureFlag";
 
 export type { FeatureFlagDefinition };
 
@@ -81,8 +72,19 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "info",
   },
-  PII_RESPONSE_SANITIZATION_MODE_FLAG,
-  PII_REVERSIBLE_VAULT_FLAG,
+  {
+    key: "PII_RESPONSE_SANITIZATION_MODE",
+    label: "PII Response Sanitization Mode",
+    description:
+      "Mode for PII response sanitization: redact (replace PII), warn (log only), block (reject), off (disable)",
+    descriptionI18nKey: "featureFlagPiiResponseSanitizationModeDescription",
+    category: "security",
+    defaultValue: "redact",
+    type: "enum",
+    enumValues: ["redact", "warn", "block", "off"],
+    requiresRestart: false,
+    warningLevel: "info",
+  },
   {
     key: "OUTBOUND_SSRF_GUARD_ENABLED",
     label: "SSRF Guard",
@@ -133,7 +135,6 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "info",
   },
-  PLUGIN_PERMISSION_MODEL_ENABLED_FLAG,
   // ──────────────── Network (7) ────────────────
   {
     key: "ENABLE_TLS_FINGERPRINT",
@@ -1105,7 +1106,7 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "caution",
   },
-  FAL_NATIVE_ENABLED_FLAG,
+
   {
     key: "CATALOG_MIRROR_REFINEMENTS_ENABLED",
     label: "Catalog Mirror Refinements",
@@ -1429,7 +1430,41 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "info",
   },
-  ...SEARCH_FEATURE_FLAG_DEFINITIONS,
-  CODE_ASSIST_LEGACY_TIER_FLAG,
-  ...SYSTEM_ONE_FEATURE_FLAG_DEFINITIONS,
+  // ──────────────── Smart Proxy Bridge (SPB-IR) ────────────────
+  {
+    key: "SPB_ENABLED",
+    label: "Smart Proxy Bridge",
+    description:
+      "Enable the SPB-IR intent analyzer, tiered model registry, state checkpointing, and autonomous recovery daemon. When off, the bridge is inert and every request routes through the existing combo/policy path unchanged.",
+    descriptionI18nKey: "featureFlagSpbEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
+    key: "SPB_RECOVERY_DAEMON_ENABLED",
+    label: "SPB Recovery Daemon",
+    description:
+      "Start the autonomous SPB recovery daemon on server startup. The daemon sweeps every minute, prunes stale checkpoints older than 24h, transitions expired OPEN circuit breakers to HALF_OPEN, and clears expired provider connection cooldowns.",
+    descriptionI18nKey: "featureFlagSpbRecoveryDaemonEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: true,
+    warningLevel: "caution",
+  },
+  {
+    key: "SPB_AUTO_SELECTION_ENABLED",
+    label: "SPB Tier Auto-Selection",
+    description:
+      "Allow incoming requests carrying the X-OmniRoute-Strategy: smart-proxy-bridge header to be routed through the SPB-IR tier auto-selection engine (intent classification → complexity score → model tier). When off, the header is ignored and normal combo routing applies.",
+    descriptionI18nKey: "featureFlagSpbAutoSelectionEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
 ];

@@ -13,6 +13,7 @@ import { OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME } from "../../services/webSearc
 import { OMNIROUTE_WEB_FETCH_FALLBACK_TOOL_NAME } from "../../services/webFetchInterception.ts";
 import { CLAUDE_OAUTH_TOOL_PREFIX } from "../../translator/request/openai-to-claude.ts";
 import { applyToolDisclosure, type ToolDisclosureConfig } from "../../utils/toolDisclosure.ts";
+import { extractSessionAffinityKey } from "@/sse/services/sessionAffinityPin.ts";
 import {
   isOpenCodeLane,
   providerSupportsCaching,
@@ -42,7 +43,6 @@ import { stripUnsupportedParams } from "./unsupportedParamsStrip.ts";
 import {
   stripGpt5SamplingWhenReasoning,
   stripGpt5ReasoningWhenTools,
-  foldReasoningForOpenAIChat,
 } from "../../services/gpt5SamplingGuard.ts";
 import { wireAdaptiveEffort } from "./adaptiveEffortWiring.ts";
 
@@ -319,26 +319,6 @@ function providerRejectsPromptCacheKey(
   return isOpenCodeLane(provider) && connectionCacheOverride?.supportsPromptCaching !== true;
 }
 
-// A Responses body carries its stable prefix in `instructions` plus leading
-// system/developer input items; normalize it into the message shape the prefix analyzer reads.
-function responsesBodyPrefixMessages(body: Body): Array<{ role: string; content: string }> {
-  const messages: Array<{ role: string; content: string }> = [];
-  if (typeof body.instructions === "string" && body.instructions.length > 0) {
-    messages.push({ role: "system", content: body.instructions });
-  }
-  if (!Array.isArray(body.input)) return messages;
-  for (const item of body.input) {
-    const record = item && typeof item === "object" ? (item as Body) : null;
-    if (record?.role !== "system" && record?.role !== "developer") break;
-    messages.push({
-      role: "system",
-      content:
-        typeof record.content === "string" ? record.content : JSON.stringify(record.content ?? ""),
-    });
-  }
-  return messages;
-}
-
 // Inject prompt_cache_key only for providers that support it.
 async function injectPromptCacheKey(
   bodyToSend: Body,
@@ -346,10 +326,8 @@ async function injectPromptCacheKey(
   targetFormat: string,
   connectionCacheOverride: ConnectionCacheOverride | null
 ): Promise<Body> {
-  const isChat = targetFormat === FORMATS.OPENAI && Array.isArray(bodyToSend.messages);
-  const isResponses = targetFormat === FORMATS.OPENAI_RESPONSES && provider === "mistral";
   if (
-    (isChat || isResponses) &&
+    targetFormat === FORMATS.OPENAI &&
     providerSupportsCaching(
       provider,
       undefined,
@@ -357,12 +335,11 @@ async function injectPromptCacheKey(
       bodyToSend.model as string
     ) &&
     !bodyToSend.prompt_cache_key &&
+    Array.isArray(bodyToSend.messages) &&
     !providerRejectsPromptCacheKey(provider, connectionCacheOverride)
   ) {
     const { generatePromptCacheKey } = await import("@/lib/promptCache");
-    const cacheKey = generatePromptCacheKey(
-      isChat ? (bodyToSend.messages as never) : responsesBodyPrefixMessages(bodyToSend)
-    );
+    const cacheKey = generatePromptCacheKey(bodyToSend.messages);
     if (cacheKey) {
       bodyToSend = { ...bodyToSend, prompt_cache_key: cacheKey };
     }
@@ -540,14 +517,20 @@ export async function prepareUpstreamBody(opts: PrepareUpstreamBodyOptions): Pro
       throw error;
     }
   }
-  // After the sanitizers, which read `reasoning.effort`, and after payload rules can add it.
-  bodyToSend = foldReasoningForOpenAIChat(bodyToSend, provider, targetFormat);
   bodyToSend = defaultImageDetail(bodyToSend, isOpencodeClient);
+  // Derive stable session affinity key to preserve tool mask across session turns
+  const sessionAffinityId =
+    extractSessionAffinityKey(
+      opts.rawBody ?? bodyToSend,
+      opts.clientRawRequest?.headers as Headers
+    ) ?? null;
+
   // Relevance selection runs before the provider cap so the cap keeps the useful tools.
   const disclosure = applyToolDisclosure(bodyToSend, opts.toolDisclosure, {
     rawBody: opts.rawBody,
     toolNamePrefix: CLAUDE_OAUTH_TOOL_PREFIX,
     isPinnedTool: isFallbackTool,
+    sessionId: sessionAffinityId,
     onError: (error) =>
       log?.warn?.("TOOL_DISCLOSURE", `Selection failed, sending all tools: ${String(error)}`),
   });

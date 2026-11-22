@@ -1,6 +1,5 @@
 import { handleRerank } from "@omniroute/open-sse/handlers/rerank.ts";
 import { recordModalCallCost } from "@/domain/costRules";
-import { MODAL_LEDGER_SERVICE_TIER } from "@/lib/db/costLedger";
 import { getRequestedModelEndpointMismatch } from "@/lib/providerModels/modelEndpointGuard";
 import {
   getProviderCredentialsWithQuotaPreflight,
@@ -38,6 +37,7 @@ import { getComboByName, getCombos } from "@/lib/db/combos";
 import { getUserDatabaseSettings } from "@/lib/db/databaseSettings";
 import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
 import * as log from "@/sse/utils/logger";
+import { getCircuitBreaker } from "@/shared/utils/circuitBreaker";
 
 /**
  * Handle CORS preflight
@@ -150,7 +150,6 @@ export async function handleValidatedRerankRequestBody(
         } catch {}
 
         return handleComboChat({
-          endpointCapability: "rerank",
           body: body as any,
           combo: combo as any,
           handleSingleModel: async (reqBody: any, targetModelStr: string) =>
@@ -270,8 +269,7 @@ export async function handleValidatedRerankRequestBody(
       connectionId: (credentials as { connectionId?: string } | null)?.connectionId || null,
       apiKeyId: meta.apiKeyId || null,
       apiKeyName: meta.apiKeyName || null,
-      onPricedCall: (call) =>
-        recordModalCallCost(meta.apiKeyId, { ...call, serviceTier: MODAL_LEDGER_SERVICE_TIER }),
+      onPricedCall: (call) => recordModalCallCost(meta.apiKeyId, call),
       requestedModel,
       comboName: meta.comboName || null,
     });
@@ -330,7 +328,22 @@ export async function handleValidatedRerankRequestBody(
         body: upstreamBody,
       };
       try {
-        let res = await fetch(localProvider.baseUrl, upstreamInit);
+        let res: Response;
+        try {
+          res = await fetch(localProvider.baseUrl, upstreamInit);
+        } catch (fetchErr: any) {
+          const fetchErrMsg = String(fetchErr?.message || fetchErr);
+          if (/ECONNREFUSED|connect ECONNREFUSED/i.test(fetchErrMsg)) {
+            getCircuitBreaker(prefix)._onFailure();
+            throw fetchErr;
+          }
+          if (/socket hang up|ECONNRESET|fetch failed/i.test(fetchErrMsg)) {
+            // One retry on a fresh connection for socket hangup
+            res = await fetch(localProvider.baseUrl, upstreamInit);
+          } else {
+            throw fetchErr;
+          }
+        }
 
         // Some local providers (e.g. Infinity, TEI) mount at /rerank rather than /v1/rerank
         if (res.status === 404 && localProvider.baseUrl.endsWith("/v1/rerank")) {

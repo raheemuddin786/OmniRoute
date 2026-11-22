@@ -8,6 +8,7 @@ import { handleChatCore } from "./chatCore.ts";
 import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHelper.ts";
 import { collectResponsesCustomToolNames } from "../translator/request/openai-responses/additionalTools.ts";
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.ts";
+import { extractToolSchemaMap } from "../translator/response/openai-responses/toolSchemas.ts";
 import { createSseHeartbeatTransform, HEARTBEAT_SHAPES } from "../utils/sseHeartbeat.ts";
 import { extractToolSchemaMap } from "../translator/response/openai-responses/toolSchemas.ts";
 import { SSE_HEARTBEAT_INTERVAL_MS } from "../config/constants.ts";
@@ -97,6 +98,7 @@ export async function handleResponsesCore({
   }
 
   // Transform SSE stream to Responses API format (no logging in worker)
+  const toolSchemas = extractToolSchemaMap(body);
   const transformStream = createResponsesApiTransformStream(null, undefined, {
     customToolNames,
     requestToolIdentityMap,

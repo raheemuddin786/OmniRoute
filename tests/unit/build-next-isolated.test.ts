@@ -8,10 +8,10 @@ import {
   getTransientBuildPaths,
   movePath,
   pruneStandaloneArtifacts,
+  resolveBuildHeapMb,
   resolveNextBuildEnv,
   shouldBuildStandalone,
   syncStandaloneExtraModules,
-  syncStandaloneNativeAssets,
 } from "../../scripts/build/build-next-isolated.mjs";
 
 async function withTempDir(fn) {
@@ -136,6 +136,19 @@ test("resolveNextBuildEnv does not clobber an existing --max-old-space-size (Doc
 test("resolveNextBuildEnv honors the OMNIROUTE_BUILD_MEMORY_MB override", () => {
   const env = resolveNextBuildEnv({ OMNIROUTE_BUILD_MEMORY_MB: "6144" });
   assert.match(env.NODE_OPTIONS, /--max-old-space-size=6144/);
+});
+
+test("resolveBuildHeapMb sizes heap dynamically based on total RAM", () => {
+  assert.equal(resolveBuildHeapMb({}, { totalmem: () => 24 * 1024 * 1024 * 1024 }), 16384);
+  assert.equal(resolveBuildHeapMb({}, { totalmem: () => 16 * 1024 * 1024 * 1024 }), 12288);
+  assert.equal(resolveBuildHeapMb({}, { totalmem: () => 8 * 1024 * 1024 * 1024 }), 6144);
+  assert.equal(
+    resolveBuildHeapMb(
+      { OMNIROUTE_BUILD_MEMORY_MB: "5120" },
+      { totalmem: () => 24 * 1024 * 1024 * 1024 }
+    ),
+    5120
+  );
 });
 
 test("getTransientBuildPaths leaves _tasks in place by default", () => {

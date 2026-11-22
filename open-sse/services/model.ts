@@ -111,13 +111,6 @@ export const CODEX_NATIVE_UNPREFIXED_MODELS = new Set([
   "gpt-6.1-sol-high",
   "gpt-6.1-sol-medium",
   "gpt-6.1-sol-low",
-  "gpt-6.1-terra",
-  "gpt-6.1-terra-ultra",
-  "gpt-6.1-terra-max",
-  "gpt-6.1-terra-xhigh",
-  "gpt-6.1-terra-high",
-  "gpt-6.1-terra-medium",
-  "gpt-6.1-terra-low",
   "gpt-5.6-sol",
   "gpt-5.6-sol-ultra",
   "gpt-5.6-sol-max",
@@ -316,35 +309,13 @@ async function getActiveProviderSet() {
   }
 }
 
-// The lookup scans every connection's model catalog with json_each, so a repeat of the same
-// bare id must not reach the database. Entries are valid for one model-catalog version: every
-// connection or catalog write bumps it. Model ids come from clients, so the map is bounded.
-const SYNCED_PROVIDERS_CACHE_MAX = 1000;
-let syncedProvidersCacheVersion = -1;
-const syncedProvidersCache = new Map<string, string[]>();
-
 async function getActiveSyncedProvidersForModel(modelId: string) {
   try {
-    const { getModelCatalogCacheVersion } = await import("@/lib/db/readCache");
-    const version = getModelCatalogCacheVersion();
-    if (version !== syncedProvidersCacheVersion) {
-      syncedProvidersCache.clear();
-      syncedProvidersCacheVersion = version;
-    }
-    const cached = syncedProvidersCache.get(modelId);
-    if (cached) return cached;
-
     const { getActiveProvidersWithSyncedModel } = await import("@/lib/db/models");
-    const providers = (await getActiveProvidersWithSyncedModel(modelId))
+    const providers = await getActiveProvidersWithSyncedModel(modelId);
+    return providers
       .map(resolveProviderAlias)
       .filter((provider): provider is string => typeof provider === "string");
-    // A write can land while this lookup awaits the query; a concurrent lookup may then already
-    // have moved the map to the new version. Only cache a result read under the current version.
-    if (getModelCatalogCacheVersion() === version) {
-      if (syncedProvidersCache.size >= SYNCED_PROVIDERS_CACHE_MAX) syncedProvidersCache.clear();
-      syncedProvidersCache.set(modelId, providers);
-    }
-    return providers;
   } catch {
     return [];
   }
@@ -440,7 +411,12 @@ function shouldTreatAsExactModelId(modelStr: string | null) {
 // which normalizeCrossProxyModelId reads on every call. The flag is part of the key
 // so an env toggle cannot return a stale parse. Callers receive a copy: the cache
 // must not alias a mutated result into the next request.
-export const PARSE_MODEL_CACHE_LIMIT = 2048;
+export const PARSE_MODEL_CACHE_LIMIT =
+  typeof process !== "undefined" &&
+  process.env?.PARSE_MODEL_CACHE_LIMIT &&
+  Number(process.env.PARSE_MODEL_CACHE_LIMIT) > 0
+    ? Number(process.env.PARSE_MODEL_CACHE_LIMIT)
+    : 16384;
 export const parseModelCache = boundedMap<ParsedModel>(
   "parse-model-cache",
   PARSE_MODEL_CACHE_LIMIT,
@@ -524,10 +500,16 @@ function parseModelUncached(modelStr: string | null | undefined): ParsedModel {
   }
 
   // Check if standard format: provider/model or alias/model
+  // Deduplicate provider prefix: if providerOrAlias equals model, use only model
   if (cleanStr.includes("/")) {
     const firstSlash = cleanStr.indexOf("/");
     const providerOrAlias = cleanStr.slice(0, firstSlash).trim();
     const model = cleanStr.slice(firstSlash + 1).trim();
+    // Deduplicate: provider/model where provider == model -> just use model
+    if (providerOrAlias === model) {
+      // Use just the model part (strip provider entirely)
+      return { provider: null, model, isAlias: true, providerAlias: null, extendedContext };
+    }
     const provider = resolveProviderAlias(providerOrAlias);
     return { provider, model, isAlias: false, providerAlias: providerOrAlias, extendedContext };
   }
@@ -788,9 +770,6 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
 
   // Auto-pick:
   // 1. If active providers match, pick from active candidates (first active provider).
-  //    The other active candidates serve the same id; they are returned as
-  //    `failoverTargets` so the chat handler can fail over to them instead of
-  //    failing the request on the first provider's quota or outage.
   // 2. If no active providers filter applied, but canonical candidates deduplicate to 1 provider, pick it.
   const effectiveCandidates = activeCandidates.length > 0 ? activeCandidates : canonicalCandidates;
 
@@ -798,19 +777,69 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     if (activeCandidates.length > 0 || effectiveCandidates.length === 1) {
       const provider = effectiveCandidates[0];
       const canonicalModel = resolveInferredProviderModel(provider, modelId);
-      const failoverTargets = activeCandidates
-        .slice(1)
-        .map((p) => `${p}/${resolveInferredProviderModel(p, modelId)}`);
-      return {
-        provider,
-        model: canonicalModel,
-        extendedContext,
-        ...(failoverTargets.length > 0 ? { failoverTargets } : {}),
-      };
+      return { provider, model: canonicalModel, extendedContext };
     }
   }
 
   if (candidatesToUse.length > 1) {
+    if (activeCandidates.length === 0 && activeProviders && activeProviders.size > 0) {
+      if (/^claude-/i.test(modelId)) {
+        if (activeProviders.has("anthropic")) {
+          return { provider: "anthropic", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("antigravity")) {
+          return { provider: "antigravity", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("claude-web")) {
+          return { provider: "claude-web", model: modelId, extendedContext };
+        }
+      }
+      if (/^gemini-/i.test(modelId) || /^gemma-/i.test(modelId)) {
+        if (activeProviders.has("gemini")) {
+          return { provider: "gemini", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("antigravity")) {
+          return { provider: "antigravity", model: modelId, extendedContext };
+        }
+      }
+      if (/^deepseek-/i.test(modelId)) {
+        if (activeProviders.has("deepseek-web")) {
+          return { provider: "deepseek-web", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("openrouter")) {
+          return { provider: "openrouter", model: `deepseek/${modelId}`, extendedContext };
+        }
+        if (activeProviders.has("nvidia")) {
+          return {
+            provider: "nvidia",
+            model:
+              modelId.includes("reasoner") || modelId.includes("r1")
+                ? "deepseek-ai/deepseek-v4-pro-0813"
+                : "deepseek-ai/deepseek-v4-flash-0731",
+            extendedContext,
+          };
+        }
+        if (activeProviders.has("cohere")) {
+          return {
+            provider: "cohere",
+            model:
+              modelId.includes("reasoner") || modelId.includes("r1")
+                ? "command-a-reasoning-08-2025"
+                : "command-r-plus-08-2024",
+            extendedContext,
+          };
+        }
+      }
+      if (/^o1/i.test(modelId) || /^o3/i.test(modelId) || /^gpt-/i.test(modelId)) {
+        if (activeProviders.has("openai")) {
+          return { provider: "openai", model: modelId, extendedContext };
+        }
+        if (activeProviders.has("openrouter")) {
+          return { provider: "openrouter", model: `openai/${modelId}`, extendedContext };
+        }
+      }
+    }
+
     const aliasesForHint = candidatesToUse.map((p) => PROVIDER_ID_TO_ALIAS[p] || p);
     const hints = aliasesForHint.slice(0, 2).map((alias) => `${alias}/${modelId}`);
     const message = `Ambiguous model '${modelId}'. Use provider/model prefix (ex: ${hints.join(" or ")}).`;
@@ -842,11 +871,56 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     if (activeProviders?.has("anthropic")) {
       return { provider: "anthropic", model: modelId, extendedContext };
     }
+    if (activeProviders?.has("antigravity")) {
+      return { provider: "antigravity", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("claude-web")) {
+      return { provider: "claude-web", model: modelId, extendedContext };
+    }
   }
   if (/^gemini-/i.test(modelId) || /^gemma-/i.test(modelId)) {
     // Gemini/Gemma models → Gemini provider
     if (activeProviders?.has("gemini")) {
       return { provider: "gemini", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("antigravity")) {
+      return { provider: "antigravity", model: modelId, extendedContext };
+    }
+  }
+  if (/^deepseek-/i.test(modelId)) {
+    if (activeProviders?.has("deepseek-web")) {
+      return { provider: "deepseek-web", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("openrouter")) {
+      return { provider: "openrouter", model: `deepseek/${modelId}`, extendedContext };
+    }
+    if (activeProviders?.has("nvidia")) {
+      return {
+        provider: "nvidia",
+        model:
+          modelId.includes("reasoner") || modelId.includes("r1")
+            ? "deepseek-ai/deepseek-v4-pro-0813"
+            : "deepseek-ai/deepseek-v4-flash-0731",
+        extendedContext,
+      };
+    }
+    if (activeProviders?.has("cohere")) {
+      return {
+        provider: "cohere",
+        model:
+          modelId.includes("reasoner") || modelId.includes("r1")
+            ? "command-a-reasoning-08-2025"
+            : "command-r-plus-08-2024",
+        extendedContext,
+      };
+    }
+  }
+  if (/^o1/i.test(modelId) || /^o3/i.test(modelId) || /^gpt-/i.test(modelId)) {
+    if (activeProviders?.has("openai")) {
+      return { provider: "openai", model: modelId, extendedContext };
+    }
+    if (activeProviders?.has("openrouter")) {
+      return { provider: "openrouter", model: `openai/${modelId}`, extendedContext };
     }
   }
 
@@ -882,6 +956,15 @@ export async function getModelInfoCore(
     return {
       provider: parsed.provider,
       model: canonicalModel,
+      extendedContext,
+    };
+  }
+
+  // Virtual auto-routing directives
+  if (parsed.model === "auto") {
+    return {
+      provider: "auto",
+      model: "",
       extendedContext,
     };
   }

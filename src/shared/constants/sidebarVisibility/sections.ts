@@ -73,6 +73,15 @@ const OMNI_PROXY_ITEMS: readonly SidebarItemDefinition[] = [
     icon: "account_tree",
   },
   {
+    id: "smart-proxy",
+    href: "/dashboard/smart-proxy",
+    i18nKey: "smartProxy",
+    labelFallback: "Smart Proxy Bridge",
+    subtitleKey: "smartProxySubtitle",
+    subtitleFallback: "Intelligent multi-tier routing & token optimization",
+    icon: "alt_route",
+  },
+  {
     id: "quota",
     href: "/dashboard/quota",
     i18nKey: "providerQuota",

@@ -681,3 +681,95 @@ test("createResponsesApiTransformStream: finish_reason:stop is unaffected by the
   assert.equal(completed.status, "completed");
   assert.equal(completed.incomplete_details, undefined);
 });
+
+test("createResponsesApiTransformStream preserves required tool arguments with empty values (e.g. SubagentHandback message)", async () => {
+  const toolSchemas = new Map();
+  toolSchemas.set("SubagentHandback", {
+    type: "object",
+    properties: {
+      message: { type: "string" },
+      status: { type: "string" },
+    },
+    required: ["message"],
+  });
+
+  const output = await runTransformStream(
+    [
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_hb","function":{"name":"SubagentHandback","arguments":"{\\"message\\":\\"\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+    ],
+    null,
+    { toolSchemas }
+  );
+
+  const events = parseSseOutput(output);
+  const done = events
+    .filter((event) => event.event === "response.output_item.done")
+    .map((event) => JSON.parse(event.data).item)
+    .find((item) => item.name === "SubagentHandback");
+
+  assert.equal(done.type, "function_call");
+  assert.equal(done.arguments, '{"message":""}');
+});
+
+test("createResponsesApiTransformStream strips optional empty parameters when declared non-required in tool schema", async () => {
+  const toolSchemas = new Map();
+  toolSchemas.set("MyTool", {
+    type: "object",
+    properties: {
+      req: { type: "string" },
+      opt: { type: "string" },
+    },
+    required: ["req"],
+  });
+
+  const output = await runTransformStream(
+    [
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"MyTool","arguments":"{\\"req\\":\\"hello\\",\\"opt\\":\\"\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+    ],
+    null,
+    { toolSchemas }
+  );
+
+  const events = parseSseOutput(output);
+  const done = events
+    .filter((event) => event.event === "response.output_item.done")
+    .map((event) => JSON.parse(event.data).item)
+    .find((item) => item.name === "MyTool");
+
+  assert.equal(done.arguments, '{"req":"hello"}');
+});
+
+test("createResponsesApiTransformStream preserves empty arguments for schema-less tool", async () => {
+  const output = await runTransformStream(
+    [
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"UnknownTool","arguments":"{\\"extra\\":\\"\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+    ],
+    null
+  );
+
+  const events = parseSseOutput(output);
+  const done = events
+    .filter((event) => event.event === "response.output_item.done")
+    .map((event) => JSON.parse(event.data).item)
+    .find((item) => item.name === "UnknownTool");
+
+  assert.equal(done.arguments, '{"extra":""}');
+});
+
+test("createResponsesApiTransformStream handles tool arguments split across multiple SSE chunks", async () => {
+  const output = await runTransformStream(
+    [
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_split","function":{"name":"SubagentHandback","arguments":"{\\"message\\":\\"hello\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]}}],"finish_reason":"tool_calls"}]}\n\n',
+    ],
+    null
+  );
+
+  const events = parseSseOutput(output);
+  const done = events
+    .filter((event) => event.event === "response.output_item.done")
+    .map((event) => JSON.parse(event.data).item)
+    .find((item) => item.name === "SubagentHandback");
+
+  assert.equal(done.arguments, '{"message":"hello"}');
+});

@@ -65,7 +65,8 @@ export function getModelPricing(provider: string, model: string): ModelPricing {
       };
     }
   }
-  const genericHit = KNOWN_MODEL_PRICING[normalized];
+  const genericHit =
+    KNOWN_MODEL_PRICING[normalized] || KNOWN_MODEL_PRICING[normalized.replace(/\./g, "-")];
   if (genericHit) return { ...genericHit, isEstimated: false };
   if (isFreeModel(provider, { id: normalized }))
     return { inputCostPer1M: 0, outputCostPer1M: 0, isFree: true, isEstimated: false };

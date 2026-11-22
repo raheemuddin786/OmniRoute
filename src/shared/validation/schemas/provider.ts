@@ -4,10 +4,7 @@ import {
   normalizeModelSupportedEndpoints,
 } from "@/shared/constants/modelSupportedEndpoints";
 import { providerAllowsOptionalApiKey, resolveProviderId } from "@/shared/constants/providers";
-import {
-  compatibleQuotaPathSchema,
-  validateProviderSpecificData,
-} from "@/shared/validation/providerSpecificData";
+import { validateProviderSpecificData } from "@/shared/validation/providerSpecificData";
 import {
   isReservedProviderPrefix,
   reservedProviderPrefixMessage,
@@ -22,8 +19,6 @@ import {
   customHeadersSchema,
 } from "./misc.ts";
 import { isValidProviderIconUrl } from "@/shared/validation/iconUrl";
-import { customJsonConfigSchema } from "@omniroute/open-sse/utils/customJson.ts";
-import { THINKING_REPLAY_MODES } from "@/shared/constants/modelCompat";
 import {
   MODEL_CONCURRENCY_MAX_CAP,
   MODEL_CONCURRENCY_MAX_KEY_LENGTH,
@@ -323,10 +318,6 @@ export const providerModelMutationSchema = z.object({
   // the same flag flows through `getCustomVisionCapabilityFields()` in the /v1/models
   // catalog. `null` clears a manual override back to the id-based heuristic.
   supportsVision: z.boolean().nullable().optional(),
-  // #18739: per-node thinking-replay contract persisted on the modelCompatOverrides
-  // entry (see open-sse/translator/helpers/thinkingReplayMode.ts). `null` unsets it
-  // back to the default provider-derived handling.
-  thinkingReplay: z.enum(THINKING_REPLAY_MODES).nullable().optional(),
   dimensions: z.number().int().positive().nullable().optional(),
   supportedInputTypes: z.array(z.string()).optional(),
   modelType: z.enum(["chat", "embedding", "image", "rerank"]).optional(),
@@ -385,29 +376,6 @@ const providerIdSuffixSchema = z
   .optional()
   .nullable();
 
-/** A custom JSON API node is an openai-compatible node with its own config; never a preset. */
-function addCustomJsonNodeIssues(
-  value: { apiType?: string; preset?: string; type?: string },
-  ctx: z.RefinementCtx
-): void {
-  if (value.apiType !== "custom-json") return;
-  if (value.preset) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Presets cannot create custom JSON API nodes",
-      path: ["apiType"],
-    });
-    return;
-  }
-  if ((value.type || "openai-compatible") !== "openai-compatible") {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Custom JSON API nodes must use the openai-compatible type",
-      path: ["apiType"],
-    });
-  }
-}
-
 export const createProviderNodeSchema = z
   .object({
     // #6874: name/prefix are required in general, but a `preset` (e.g.
@@ -423,7 +391,6 @@ export const createProviderNodeSchema = z
         "audio-transcriptions",
         "audio-speech",
         "images-generations",
-        "custom-json",
       ])
       .optional(),
     baseUrl: z.string().trim().min(1).optional(),
@@ -441,8 +408,6 @@ export const createProviderNodeSchema = z
     // isValidProviderIconUrl (2000 chars for http(s), 256 KiB for data:image).
     iconUrl: providerNodeIconUrlSchema,
     customHeaders: customHeadersSchema,
-    // Custom JSON API node config (apiType "custom-json"): request template + response path.
-    customJson: customJsonConfigSchema.optional(),
     dailyQuotaResetTimezone: dailyQuotaResetTimezoneSchema,
     dailyQuotaResetHour: dailyQuotaResetHourSchema,
     providerIdSuffix: providerIdSuffixSchema,
@@ -473,7 +438,6 @@ export const createProviderNodeSchema = z
         path: ["prefix"],
       });
     }
-    addCustomJsonNodeIssues(value, ctx);
     if (value.preset === "vibeproxy-openai") {
       // Preset supplies name/prefix/apiType — but baseUrl is still mandatory
       // (a local proxy's host/port is operator-specific, unlike the generic
@@ -533,7 +497,6 @@ export const updateProviderNodeSchema = z
         "audio-transcriptions",
         "audio-speech",
         "images-generations",
-        "custom-json",
       ])
       .optional(),
     baseUrl: z.string().trim().min(1, "Base URL is required"),
@@ -543,14 +506,8 @@ export const updateProviderNodeSchema = z
     // clears a previously stored custom icon.
     iconUrl: providerNodeIconUrlSchema,
     customHeaders: customHeadersSchema,
-    customJson: customJsonConfigSchema.optional(),
     dailyQuotaResetTimezone: dailyQuotaResetTimezoneSchema,
     dailyQuotaResetHour: dailyQuotaResetHourSchema,
-    // "Quota check" toggle for compatible nodes: written to the node's connections as a
-    // standard-credits `quotaEndpoint` (src/shared/utils/compatibleQuotaCheck.ts).
-    quotaCheck: z
-      .object({ enabled: z.boolean(), path: compatibleQuotaPathSchema.optional() })
-      .optional(),
   })
   .superRefine((value, ctx) => {
     // Reserved-prefix guard (tokenrouter bug) — same rationale as the guard in
@@ -579,14 +536,11 @@ export const providerNodeValidateSchema = z.object({
       "audio-transcriptions",
       "audio-speech",
       "images-generations",
-      "custom-json",
     ])
     .optional(),
   chatPath: z.string().trim().startsWith("/").max(500).optional().or(z.literal("")),
   modelsPath: z.string().trim().startsWith("/").max(500).optional().or(z.literal("")),
   modelId: z.string().trim().max(200).optional().or(z.literal("")),
-  customJson: customJsonConfigSchema.optional(),
-  customHeaders: customHeadersSchema,
 });
 
 // rate-limit override numeric fields must reject operator intent loss.
@@ -699,6 +653,9 @@ export const updateProviderConnectionSchema = z
         maxConcurrent: rateLimitOverrideNumber(10_000).optional(),
         maxWaitMs: rateLimitOverrideNumber(120_000).optional(),
         executionMaxWaitMs: rateLimitOverrideNumber(600_000).optional(),
+        request_timeout_ms: rateLimitOverrideNumber(3_600_000).optional(),
+        connect_timeout_ms: rateLimitOverrideNumber(3_600_000).optional(),
+        read_timeout_ms: rateLimitOverrideNumber(3_600_000).optional(),
         modelConcurrency: modelConcurrencyMap(),
       })
       .partial()
@@ -851,7 +808,6 @@ export const validateProviderApiKeySchema = z
     connectorName: z.string().trim().max(200).optional(),
     // Command Code per-connection Zero Data Retention: probe with `x-cmd-zdr: 1`.
     zdrEnabled: z.boolean().optional(),
-    accountId: z.string().trim().max(200).optional(),
   })
   .superRefine((data, ctx) => {
     if (data.provider === "google-pse-search" && !data.cx) {

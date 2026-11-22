@@ -69,7 +69,8 @@ export class CursorCloudAgent extends CloudAgentBase {
   ): Promise<CloudAgentTask> {
     const taskId = this.generateTaskId();
 
-    const source: Record<string, unknown> = { repository: params.source.repoUrl };
+    const normalized = this.normalizeRepository(params.source.repoUrl, params.source.repoName);
+    const source: Record<string, unknown> = { repository: normalized.httpsUrl };
     if (params.source.branch) source.ref = params.source.branch;
     const body: Record<string, unknown> = {
       prompt: { text: params.prompt },
@@ -198,8 +199,9 @@ export class CursorCloudAgent extends CloudAgentBase {
         const name = (repo.name as string) || url.split("/").slice(-2).join("/");
         return { name, url };
       })
-      .filter((entry: { name: string; url: string } | null): entry is { name: string; url: string } =>
-        entry !== null
+      .filter(
+        (entry: { name: string; url: string } | null): entry is { name: string; url: string } =>
+          entry !== null
       );
   }
 }

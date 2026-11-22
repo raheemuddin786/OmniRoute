@@ -27,20 +27,6 @@ const ALIBABA_FREE_QUOTA_EXHAUSTED_PATTERNS = [
 
 const ALIBABA_MODEL_STUDIO_PROVIDER_IDS = new Set(["alibaba", "alibaba-cn", "ali"]);
 
-export {
-  filterAlibabaFreeEligibleModels,
-  isAlibabaFreeTierCapableModel,
-} from "./alibabaFreeTierDiscovery.ts";
-
-export {
-  filterAlibabaFreeVisionEligibleModels,
-  filterAlibabaFreeMultimodalEligibleModels,
-  filterAlibabaFreeAudioEligibleModels,
-  isAlibabaFreeTierVisionCapableModel,
-  isAlibabaFreeTierMultimodalCapableModel,
-  isAlibabaFreeTierAudioCapableModel,
-} from "./alibabaFreeTierQuotaFetcher.ts";
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

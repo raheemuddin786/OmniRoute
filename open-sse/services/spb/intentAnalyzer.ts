@@ -560,12 +560,12 @@ export function classifyIntent(
   } else if (imageGenerationRegex.test(targetText)) {
     taskPhase = "IMAGE_GENERATION";
     complexityScore = 0.7;
-  } else if (multilingualPhaseHint) {
-    taskPhase = multilingualPhaseHint;
-    complexityScore = 0.7;
   } else if (hasCodeKeywords || requiresTools) {
     taskPhase = "CODE_GENERATION";
     complexityScore = 0.65;
+  } else if (multilingualPhaseHint) {
+    taskPhase = multilingualPhaseHint;
+    complexityScore = 0.7;
   }
 
   return {

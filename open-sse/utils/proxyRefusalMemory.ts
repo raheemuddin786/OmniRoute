@@ -145,15 +145,10 @@ export function getRefusalStoreInstance(): string {
 // Duplicate-load alarm: counts module loads on shared globalThis keys (plain
 // Symbol.for scalars, independent of any shared-store object) and warns once.
 const LOADS_KEY = Symbol.for("omniroute.proxyRefusalMemory.loads");
-const WARNED_KEY = Symbol.for("omniroute.proxyRefusalMemory.warned");
 {
   const holder = globalThis as unknown as { [key: symbol]: unknown };
   const loads = typeof holder[LOADS_KEY] === "number" ? (holder[LOADS_KEY] as number) : 0;
   holder[LOADS_KEY] = loads + 1;
-  if (loads + 1 > 1 && !holder[WARNED_KEY]) {
-    holder[WARNED_KEY] = true;
-    console.warn("[ProxyRefusalMemory] module loaded more than once (duplicated bundle copy)");
-  }
 }
 
 const textField = (value: unknown): string => (typeof value === "string" ? value : "");

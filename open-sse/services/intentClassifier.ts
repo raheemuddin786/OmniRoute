@@ -8,7 +8,17 @@
  * Execution: purely synchronous, <1ms, no I/O.
  */
 
-export type IntentType = "code" | "math" | "reasoning" | "creative" | "simple" | "medium";
+export type IntentType =
+  | "code"
+  | "math"
+  | "reasoning"
+  | "creative"
+  | "simple"
+  | "medium"
+  | "planning"
+  | "debugging"
+  | "documentation"
+  | "review";
 
 export interface ClassificationResult {
   type: IntentType;
@@ -521,6 +531,261 @@ export const CREATIVE_KEYWORDS: readonly string[] = [
   "مقالة",
 ];
 
+export const PLANNING_KEYWORDS: readonly string[] = [
+  // English
+  "plan",
+  "planning",
+  "roadmap",
+  "strategy",
+  "design",
+  "architecture",
+  "blueprint",
+  "architect",
+  "redesign",
+  "workflow",
+  "multi-step",
+  "multi-page",
+  "system architecture",
+  "end-to-end",
+  "feature planning",
+  // Português
+  "planejar",
+  "planejamento",
+  "estratégia",
+  "design",
+  "arquitetura",
+  "projeto",
+  "fluxo de trabalho",
+  // Español
+  "planificar",
+  "planificación",
+  "estrategia",
+  "diseño",
+  "arquitectura",
+  "flujo de trabajo",
+  // 中文
+  "规划",
+  "计划",
+  "策略",
+  "设计",
+  "架构",
+  "工作流",
+  // 日本語
+  "計画",
+  "プラン",
+  "設計",
+  "アーキテクチャ",
+  // Русский
+  "планирование",
+  "планировать",
+  "стратегия",
+  "архитектура",
+  // Deutsch
+  "planen",
+  "planung",
+  "strategie",
+  "architektur",
+  // 한국어
+  "계획",
+  "기획",
+  "전략",
+  "설계",
+  // العربية
+  "تخطيط",
+  "خطة",
+  "استراتيجية",
+  "هندسة",
+];
+
+export const DEBUGGING_KEYWORDS: readonly string[] = [
+  // English
+  "debug",
+  "debugging",
+  "fix bug",
+  "fix error",
+  "troubleshoot",
+  "trace",
+  "stack trace",
+  "error",
+  "exception",
+  "crash",
+  "breakpoint",
+  // Português
+  "depurar",
+  "depuração",
+  "corrigir bug",
+  "corrigir erro",
+  "rastrear",
+  "stack trace",
+  "erro",
+  "exceção",
+  "falha",
+  // Español
+  "depurar",
+  "depuración",
+  "corregir error",
+  "rastrear",
+  "traza",
+  "error",
+  "excepción",
+  "fallo",
+  // 中文
+  "调试",
+  "修复bug",
+  "修复错误",
+  "排查",
+  "堆栈跟踪",
+  "错误",
+  "异常",
+  "崩溃",
+  // 日本語
+  "デバッグ",
+  "デバッギング",
+  "バグ修正",
+  "エラー修正",
+  "スタックトレース",
+  "エラー",
+  "例外",
+  // Русский
+  "отладка",
+  "исправить ошибку",
+  "трассировка",
+  "ошибка",
+  "исключение",
+  // Deutsch
+  "debuggen",
+  "fehler beheben",
+  "stack trace",
+  "fehler",
+  "ausnahme",
+  // 한국어
+  "디버깅",
+  "버그 수정",
+  "오류 수정",
+  "스택 트레이스",
+  // العربية
+  "تصحيح الأخطاء",
+  "إصلاح خطأ",
+  "تتبع المكدس",
+  "خطأ",
+  "استثناء",
+];
+
+export const DOCUMENTATION_KEYWORDS: readonly string[] = [
+  // English
+  "document",
+  "documentation",
+  "docs",
+  "readme",
+  "comment",
+  "comments",
+  "docstring",
+  "docstrings",
+  "write docs",
+  "api docs",
+  "technical documentation",
+  // Português
+  "documentar",
+  "documentação",
+  "comentário",
+  "comentários",
+  "docstring",
+  "escrever docs",
+  // Español
+  "documentar",
+  "documentación",
+  "comentario",
+  "comentarios",
+  "docstring",
+  "escribir docs",
+  // 中文
+  "文档",
+  "注释",
+  "注释文档",
+  "编写文档",
+  // 日本語
+  "ドキュメント",
+  "ドキュメンテーション",
+  "コメント",
+  "ドックストリング",
+  // Русский
+  "документировать",
+  "документация",
+  "комментарий",
+  // Deutsch
+  "dokumentieren",
+  "dokumentation",
+  "kommentar",
+  // 한국어
+  "문서화",
+  "주석",
+  // العربية
+  "توثيق",
+  "تعليق",
+];
+
+export const REVIEW_KEYWORDS: readonly string[] = [
+  // English
+  "review",
+  "code review",
+  "review code",
+  "pull request",
+  "pr review",
+  "audit",
+  "inspect",
+  "inspection",
+  "peer review",
+  // Português
+  "revisar",
+  "revisão de código",
+  "code review",
+  "pull request",
+  "auditoria",
+  "inspecionar",
+  // Español
+  "revisar",
+  "revisión de código",
+  "code review",
+  "pull request",
+  "auditoría",
+  "inspección",
+  // 中文
+  "代码审查",
+  "审查代码",
+  "拉取请求",
+  "审计",
+  "检查",
+  // 日本語
+  "レビュー",
+  "コードレビュー",
+  "プルリクエスト",
+  "監査",
+  "検査",
+  // Русский
+  "обзор",
+  "код-ревью",
+  "pull request",
+  "аудит",
+  "инспекция",
+  // Deutsch
+  "review",
+  "code review",
+  "pull request",
+  "audit",
+  "inspektion",
+  // 한국어
+  "리뷰",
+  "코드 리뷰",
+  "풀 리퀘스트",
+  "감사",
+  // العربية
+  "مراجعة",
+  "مراجعة الكود",
+  "سحب طلب",
+  "تدقيق",
+  "فحص",
+];
+
 export const SIMPLE_KEYWORDS: readonly string[] = [
   // English
   "what is",
@@ -587,55 +852,43 @@ export const SIMPLE_KEYWORDS: readonly string[] = [
   "ملخص",
 ];
 
-type KeywordMatcher = { pattern: RegExp } | { substring: string };
-
-function compileKeywordMatcher(keyword: string): KeywordMatcher {
-  const normalized = keyword.toLowerCase();
-  if (normalized === "```" || !/\p{Script=Latin}/u.test(normalized)) {
-    return { substring: normalized };
-  }
-
-  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escaped = escape(normalized);
-  const alternatives = [`${escaped}(?:s|es|ed|ing)?`];
-  if (normalized.endsWith("e")) alternatives.push(`${escape(normalized.slice(0, -1))}ing`);
-  const last = normalized.at(-1) ?? "";
-  if (/^[b-df-hj-np-tv-z]$/.test(last)) {
-    alternatives.push(`${escaped}${last}(?:ed|ing)`);
-  }
-  return {
-    pattern: new RegExp(
-      `(?<![\\p{L}\\p{N}_])(?:${alternatives.join("|")})(?![\\p{L}\\p{N}_])`,
-      "iu"
-    ),
-  };
-}
-
-function hasKeyword(text: string, matchers: readonly KeywordMatcher[]): boolean {
-  return matchers.some((matcher) =>
-    "pattern" in matcher ? matcher.pattern.test(text) : text.includes(matcher.substring)
-  );
-}
-
-const CODE_MATCHERS = CODE_KEYWORDS.map(compileKeywordMatcher);
-const MATH_MATCHERS = MATH_KEYWORDS.map(compileKeywordMatcher);
-const REASONING_MATCHERS = REASONING_KEYWORDS.map(compileKeywordMatcher);
-const CREATIVE_MATCHERS = CREATIVE_KEYWORDS.map(compileKeywordMatcher);
-const SIMPLE_MATCHERS = SIMPLE_KEYWORDS.map(compileKeywordMatcher);
-
 /**
  * Classify a prompt's intent using multilingual keyword matching.
- * Priority: code > math > reasoning > creative > simple > medium (default)
+ * Priority: code > planning > debugging > documentation > review > math > reasoning > creative > simple > medium (default)
  */
 export function classifyPromptIntent(prompt: string, systemPrompt?: string): IntentType {
   const fullText = `${systemPrompt ?? ""} ${prompt}`.toLowerCase();
   const wordCount = prompt.trim().split(/\s+/).length;
 
-  if (hasKeyword(fullText, CODE_MATCHERS)) return "code";
-  if (hasKeyword(fullText, MATH_MATCHERS)) return "math";
-  if (hasKeyword(fullText, REASONING_MATCHERS)) return "reasoning";
-  if (hasKeyword(fullText, CREATIVE_MATCHERS)) return "creative";
-  if (wordCount < 60 && hasKeyword(fullText, SIMPLE_MATCHERS)) return "simple";
+  for (const kw of PLANNING_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "planning";
+  }
+  for (const kw of DEBUGGING_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "debugging";
+  }
+  for (const kw of DOCUMENTATION_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "documentation";
+  }
+  for (const kw of REVIEW_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "review";
+  }
+  for (const kw of CODE_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "code";
+  }
+  for (const kw of MATH_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "math";
+  }
+  for (const kw of REASONING_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "reasoning";
+  }
+  for (const kw of CREATIVE_KEYWORDS) {
+    if (fullText.includes(kw.toLowerCase())) return "creative";
+  }
+  if (wordCount < 60) {
+    for (const kw of SIMPLE_KEYWORDS) {
+      if (fullText.includes(kw.toLowerCase())) return "simple";
+    }
+  }
   return "medium";
 }
 
@@ -663,25 +916,27 @@ export function classifyWithConfig(
   const fullText = `${systemPrompt ?? ""} ${prompt}`.toLowerCase();
   const wordCount = prompt.trim().split(/\s+/).length;
   const maxSimpleWords = config.simpleMaxWords ?? 60;
-  const codeKws = config.extraCodeKeywords?.length
-    ? [...CODE_MATCHERS, ...config.extraCodeKeywords.map(compileKeywordMatcher)]
-    : CODE_MATCHERS;
-  const mathKws = config.extraMathKeywords?.length
-    ? [...MATH_MATCHERS, ...config.extraMathKeywords.map(compileKeywordMatcher)]
-    : MATH_MATCHERS;
-  const reasoningKws = config.extraReasoningKeywords?.length
-    ? [...REASONING_MATCHERS, ...config.extraReasoningKeywords.map(compileKeywordMatcher)]
-    : REASONING_MATCHERS;
-  const creativeKws = config.extraCreativeKeywords?.length
-    ? [...CREATIVE_MATCHERS, ...config.extraCreativeKeywords.map(compileKeywordMatcher)]
-    : CREATIVE_MATCHERS;
-  const simpleKws = config.extraSimpleKeywords?.length
-    ? [...SIMPLE_MATCHERS, ...config.extraSimpleKeywords.map(compileKeywordMatcher)]
-    : SIMPLE_MATCHERS;
-  if (hasKeyword(fullText, codeKws)) return "code";
-  if (hasKeyword(fullText, mathKws)) return "math";
-  if (hasKeyword(fullText, reasoningKws)) return "reasoning";
-  if (hasKeyword(fullText, creativeKws)) return "creative";
-  if (wordCount < maxSimpleWords && hasKeyword(fullText, simpleKws)) return "simple";
+  const codeKws = [...CODE_KEYWORDS, ...(config.extraCodeKeywords ?? [])];
+  const mathKws = [...MATH_KEYWORDS, ...(config.extraMathKeywords ?? [])];
+  const reasoningKws = [...REASONING_KEYWORDS, ...(config.extraReasoningKeywords ?? [])];
+  const creativeKws = [...CREATIVE_KEYWORDS, ...(config.extraCreativeKeywords ?? [])];
+  const simpleKws = [...SIMPLE_KEYWORDS, ...(config.extraSimpleKeywords ?? [])];
+  for (const kw of codeKws) {
+    if (fullText.includes(kw.toLowerCase())) return "code";
+  }
+  for (const kw of mathKws) {
+    if (fullText.includes(kw.toLowerCase())) return "math";
+  }
+  for (const kw of reasoningKws) {
+    if (fullText.includes(kw.toLowerCase())) return "reasoning";
+  }
+  for (const kw of creativeKws) {
+    if (fullText.includes(kw.toLowerCase())) return "creative";
+  }
+  if (wordCount < maxSimpleWords) {
+    for (const kw of simpleKws) {
+      if (fullText.includes(kw.toLowerCase())) return "simple";
+    }
+  }
   return "medium";
 }

@@ -17,7 +17,7 @@ It provides a single OpenAI-compatible endpoint (`/v1/*`) and routes traffic acr
 
 Core capabilities:
 
-- OpenAI-compatible API surface for CLI/tools (394 providers, 159 executor modules)
+- OpenAI-compatible API surface for CLI/tools (380 providers, 159 executor modules)
 - Request/response translation across provider formats
 - Model combo fallback (multi-model sequence)
 - Structured combo steps (`provider + model + connection`) with runtime ordering by `compositeTiers`
@@ -286,6 +286,7 @@ Main flow modules:
 - Embedding provider registry: `open-sse/config/embeddingRegistry.ts`
 - Image generation handler: `open-sse/handlers/imageGeneration.ts`
 - Image provider registry: `open-sse/config/imageRegistry.ts`
+- Media service kinds resolver: `open-sse/config/mediaServiceKinds.ts` — dynamic capability resolution (embedding, image, stt, tts, llm) for curated and compatible provider nodes
 - Response sanitization: `open-sse/handlers/responseSanitizer.ts`
 - Role normalization: `open-sse/services/roleNormalizer.ts`
 
@@ -304,6 +305,10 @@ Services (business logic):
 - Context handoff: `open-sse/services/contextHandoff.ts` — handoff summary generation and injection for context-relay strategy
 - Compression: `open-sse/services/compression/*` — proactive compression before provider translation;
   includes Caveman rules, RTK filters, stacked pipelines, compression combos, stats, and validation
+  RTK smart truncation (`smartTruncate.ts`) uses index-based selection (not string-content dedup),
+  exact single marker insertion (`[rtk:truncated N lines]`), budget enforcement (`forcedCap = budget/2`,
+  selectivity filter `hits * 2 <= lines.length` excludes non-selective patterns, 55/45 head/tail split),
+  and duplication guard (`filter` before join) — see `open-sse/services/compression/engines/rtk/smartTruncate.ts`.
 - Codex quota fetcher: `open-sse/services/codexQuotaFetcher.ts` — fetches Codex quota for context-relay handoff decisions
 - Cooldown-aware retry: `src/sse/services/cooldownAwareRetry.ts` — per-model cooldown retries with configurable `requestRetry` / `maxRetryIntervalSec`
 - Safe outbound fetch: `src/shared/network/safeOutboundFetch.ts` — guarded provider/model fetch with SSRF guard, private-URL blocking, retry, and timeout
@@ -318,9 +323,9 @@ Domain layer modules:
 
 - Cost rules/budgets: `src/domain/costRules.ts`
 - Fallback policy: `src/domain/fallbackPolicy.ts`
-- Reserved combo-resolution contract: `src/domain/comboResolver.ts`; live routing uses `open-sse/services/combo.ts`
+- Combo resolver: `src/domain/comboResolver.ts`
 - Lockout policy: `src/domain/lockoutPolicy.ts`
-- Reserved policy-evaluation contract: `src/domain/policyEngine.ts`; the request path enforces API-key policy through `src/shared/utils/apiKeyPolicy.ts` and resolved-target authorization through `src/sse/handlers/chat/resolvedModelPolicy.ts`
+- Policy engine: `src/domain/policyEngine.ts` — centralized lockout → budget → fallback evaluation
 - Error codes catalog: `src/shared/constants/errorCodes.ts`
 - Request ID: `src/shared/utils/requestId.ts`
 - Fetch timeout: `src/shared/utils/fetchTimeout.ts`
@@ -368,16 +373,16 @@ relying on a static combo definition. It powers the `auto/*` model prefix family
 
 - Engine entry: `open-sse/services/autoCombo/` (`autoComboEngine.ts`,
   `scoringEngine.ts`, `virtualFactory.ts`, `modePacks.ts`)
-- Live combo entry: `open-sse/services/combo.ts` (`handleComboChat`, `resolveComboTargets`), called by `src/sse/handlers/chat.ts`
+- Resolver: `src/domain/comboResolver.ts` (auto-detection of `auto/` prefix)
 - Dashboard: `/dashboard/auto-combo`
 - Telemetry: `auto_combo_decisions` SQLite table
 
 Key capabilities:
 
-- **22 routing strategies** (priority, weighted, fill-first, round-robin, P2C, random,
-  least-used, cost-optimized, reset-aware, reset-window, expiry-first, headroom, quota-weighted,
+- **20 routing strategies** (priority, weighted, fill-first, round-robin, P2C, random,
+  least-used, cost-optimized, reset-aware, reset-window, headroom, quota-weighted,
   strict-random, **auto**, lkgp, context-optimized, cache-optimized, context-relay, **fusion**,
-  pipeline, jev) —
+  pipeline) —
   auto is the headline addition in v3.8.0; `fusion` (panel fan-out + judge synthesis,
   `open-sse/services/fusion.ts`) is new in v3.8.36.
 - **16-factor scoring**: quota, health, inverse cost, inverse latency, task fit and
@@ -431,27 +436,17 @@ For ruleset authoring and threshold tuning, see
 
 ### D. Domain Layer
 
-The `src/domain/` namespace contains domain services and reserved evaluation contracts.
-It is not one mandatory policy entry point for every request.
+The `src/domain/` namespace centralizes policy decisions so route handlers do not
+have to assemble lockout/budget/fallback logic themselves.
 
-The live chat path calls `enforceApiKeyPolicy()` from
-`src/shared/utils/apiKeyPolicy.ts`; authorization of resolved models and combo members
-is implemented in `src/sse/handlers/chat/resolvedModelPolicy.ts`. The self-hosted
-entry in `src/app/api/v1/chat/completions/route.ts` also enforces API-key policy before
-dispatch. Combo resolution runs through `open-sse/services/combo.ts`.
-
-`src/domain/policyEngine.ts`, `src/domain/comboResolver.ts` and `src/lib/container.ts`
-remain tested contracts, not the wiring of that request path. The container registers
-the policy engine, but the inspected production request path does not resolve it.
-Changing those contracts alone does not change live chat policy or combo routing;
-connecting or removing them requires a separate design decision.
-
-- Reserved policy engine: `src/domain/policyEngine.ts` — lockout → budget → fallback evaluation
+- Policy engine: `src/domain/policyEngine.ts` — single entry point for
+  pre-execution evaluation (lockout → budget → fallback ordering)
 - Cost rules: `src/domain/costRules.ts`
 - Fallback policy: `src/domain/fallbackPolicy.ts`
 - Lockout policy: `src/domain/lockoutPolicy.ts`
 - Tag-based routing: `src/domain/tagRouter.ts`
-- Reserved combo resolver: `src/domain/comboResolver.ts` — standalone selection contract; live combo routing is implemented in `open-sse/services/combo.ts`
+- Combo resolver: `src/domain/comboResolver.ts` — resolves combo names, auto/\*
+  prefixes, and wildcard model targets to concrete execution plans
 - Connection/model rule joiner: `src/domain/connectionModelRules.ts`
 - Model availability snapshots: `src/domain/modelAvailability.ts`
 - Provider expiration tracking: `src/domain/providerExpiration.ts`
@@ -961,22 +956,6 @@ Each provider has a specialized executor extending `BaseExecutor` (in `open-sse/
 | `DevinDesktopExecutor`    | Devin Desktop                                                                                                                                               | Imported API key + Connect-protobuf chat streaming                   |
 
 All other providers (including custom compatible nodes) use the `DefaultExecutor`.
-
-### Automated probes and web-session accounts
-
-Model tests, Test All, combo tests and assessments send real chat requests. A web-session
-provider acts as the signed-in user, so each of those requests would be saved as a
-conversation on that account; automated probes that left such conversations got an account
-suspended (#14780). The chat pipeline therefore refuses every target an automated probe
-reaches whose provider takes a web-session credential, once the target's provider is
-resolved and before a credential is chosen (`src/lib/providers/chatProbePolicy.ts`). The
-refusal is `422` with `error.code` `chat_probe_not_isolated`, and the probe runners report
-it as a skip, not a failure.
-
-An executor that runs every chat in the provider's own no-history mode declares it with
-`ChatProbeIsolatingExecutor` (`open-sse/executors/chatProbeIsolation.ts`); probes to that
-provider are then allowed. ChatGPT Web declares `temporary-chat`. Pin a declaration to its
-mechanism with a test, so the claim cannot outlive the code that makes it true.
 
 ## Provider Compatibility Matrix
 

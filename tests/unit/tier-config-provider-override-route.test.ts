@@ -138,3 +138,29 @@ test("route round-trips cleanly against an already-populated tier_config table (
     { provider: "my-custom-endpoint-999", tier: "free" },
   ]);
 });
+
+test("PUT saves tierModels configuration and GET retrieves it", async () => {
+  const customTierModels = {
+    apex: ["claude-3-7-sonnet", "gpt-4o"],
+    resilient: ["deepseek-coder", "gemini-1-5-pro"],
+    local: ["ollama-local", "qwen-2.5-coder"],
+  };
+
+  const putRes = (await route.PUT(putRequest({ tierModels: customTierModels }))) as Response;
+  assert.equal(putRes.status, 200, "PUT tierModels should succeed");
+  const putBody = await putRes.json();
+  assert.deepEqual(
+    putBody.tierModels,
+    customTierModels,
+    "PUT response should reflect the new tierModels"
+  );
+
+  const getRes = (await route.GET(getRequest())) as Response;
+  assert.equal(getRes.status, 200);
+  const getBody = await getRes.json();
+  assert.deepEqual(
+    getBody.tierModels,
+    customTierModels,
+    "GET should return the persisted tierModels"
+  );
+});

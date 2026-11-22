@@ -9,6 +9,8 @@ import { APP_CONFIG } from "@/shared/constants/config";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import { getSpbTelemetrySummary } from "@/lib/db/spbState";
 
 /**
  * GET /api/monitoring/health — System health overview
@@ -93,9 +95,25 @@ function startHealthPayloadRefresh(): Promise<unknown> {
 // Deep verdict helpers: the verdict never alters `status` — it rides along as
 // an additive `deepHealth` key on the full view only, served from its own
 // 30s cache and refreshed off the request path (same SWR motif as above).
-function withDeepHealth(payload: unknown, wantDeep: boolean): unknown {
-  if (!wantDeep || !deepHealthVerdictCache) return payload;
-  return { ...(payload as Record<string, unknown>), deepHealth: deepHealthVerdictCache.verdict };
+function withDeepHealth(payload: unknown, wantDeep: boolean, spbProfile?: string | null): unknown {
+  const result =
+    payload && typeof payload === "object" ? { ...(payload as Record<string, unknown>) } : {};
+  // Inject live SPB telemetry data when SPB is enabled
+  const isSpbActive = isFeatureFlagEnabled("SPB_ENABLED") || process.env.SPB_ENABLED === "true";
+  if (isSpbActive) {
+    const summary = getSpbTelemetrySummary(spbProfile || undefined);
+    result.spbTelemetry = {
+      totalRoutes: summary.totalRoutes,
+      checkpointsRestored: summary.checkpointsRestored,
+      fallbacksTriggered: summary.fallbacksTriggered,
+      phaseDistribution: summary.phaseDistribution,
+      tierDistribution: summary.tierDistribution,
+      lastRoutedAt: summary.lastRoutedAt,
+    };
+  }
+
+  if (!wantDeep || !deepHealthVerdictCache) return result;
+  return { ...result, deepHealth: deepHealthVerdictCache.verdict };
 }
 
 function refreshDeepHealthVerdict(): void {
@@ -131,18 +149,22 @@ function refreshDeepHealthVerdict(): void {
 export async function GET(request: Request) {
   const fullView = (await requireManagementAuth(request, { alwaysRequireAuth: true })) === null;
   const wantDeep = fullView && isDeepHealthOptedIn(request);
+  const spbProfile = new URL(request.url).searchParams.get("spbProfile");
   if (wantDeep) refreshDeepHealthVerdict();
   const cachedNow = Date.now();
   if (healthPayloadCache) {
     if (cachedNow > healthPayloadCache.expiresAt) {
       scheduleHealthPayloadRefresh();
     }
-    return serveHealthPayload(fullView, withDeepHealth(healthPayloadCache.payload, wantDeep));
+    return serveHealthPayload(
+      fullView,
+      withDeepHealth(healthPayloadCache.payload, wantDeep, spbProfile)
+    );
   }
 
   try {
     const payload = await startHealthPayloadRefresh();
-    return serveHealthPayload(fullView, withDeepHealth(payload, wantDeep));
+    return serveHealthPayload(fullView, withDeepHealth(payload, wantDeep, spbProfile));
   } catch (error) {
     console.error("[API] GET /api/monitoring/health error:", error);
     return NextResponse.json({

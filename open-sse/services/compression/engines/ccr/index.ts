@@ -45,7 +45,7 @@ import {
 } from "../../../../../src/lib/db/ccrBlocks.ts";
 import { createCompressionStats } from "../../stats.ts";
 import { queryBlock, type CcrQuery } from "./ccrQuery.ts";
-import { callerSupportsCcrRetrieve } from "./protocolInstruction.ts";
+import { callerSupportsCcrRetrieve, injectCcrProtocolInstruction } from "./protocolInstruction.ts";
 import type {
   CompressionEngine,
   CompressionEngineApplyOptions,
@@ -58,15 +58,15 @@ import type { CompressionResult } from "../../types.ts";
 
 const ENGINE_ID = "ccr";
 /** Default minimum character count for a block to be a CCR candidate. */
-const DEFAULT_MIN_CHARS = 600;
+export const DEFAULT_MIN_CHARS = 600;
 /** Number of retrievals before a block is flagged "do-not-compress" for that principal. */
-const RETRIEVAL_THRESHOLD = 3;
+export const RETRIEVAL_THRESHOLD = 3;
 /**
  * H8 — default retrieval ramp factor. Each prior retrieval (below the threshold) raises a block's
  * effective `minChars` linearly, so hot content is compressed progressively less; `1` disables the
  * ramp (only the >= threshold cliff remains — the legacy binary behavior).
  */
-const RETRIEVAL_RAMP_FACTOR_DEFAULT = 2;
+export const RETRIEVAL_RAMP_FACTOR_DEFAULT = 2;
 /**
  * Maximum number of entries in the LRU-ordered store, across every principal. The store
  * is keyed per principal, but this cap is not: the only per-principal cap is
@@ -751,7 +751,7 @@ function buildCcrReplacementText(text: string, marker: string): string {
  * Replace a large text block with a CCR marker if it shrinks the content.
  * Returns the new text and a flag indicating whether replacement happened.
  */
-function maybeCcrReplace(
+export function maybeCcrReplace(
   text: string,
   minChars: number,
   principalId: string | undefined,
@@ -991,7 +991,11 @@ export const ccrEngine: CompressionEngine = {
       return { body, compressed: false, stats: null };
     }
 
-    const newBody: Record<string, unknown> = { ...body, messages: newMessages };
+    // #8033: teach MCP-capable callers the marker → omniroute_ccr_retrieve contract
+    // (once per session; never told to non-MCP callers who cannot reach the tool).
+    const messagesWithProtocol = injectCcrProtocolInstruction(newMessages, body);
+
+    const newBody: Record<string, unknown> = { ...body, messages: messagesWithProtocol };
     const durationMs = Math.round(performance.now() - start);
     const stats = createCompressionStats(
       body,
@@ -1017,3 +1021,11 @@ export const ccrEngine: CompressionEngine = {
     return validateCcrConfig(config);
   },
 };
+
+export {
+  expandIncomingCcrMarkers,
+  expandTextCcrMarkers,
+  resolveCcrContent,
+  cleanSpbDirectives,
+  tryUnwrapStringifiedJsonText,
+} from "./expandCcr";

@@ -102,13 +102,10 @@ export function formatApiKeyLabel(
  * @returns {string}
  */
 export function fmtCompact(n: number | null | undefined) {
-  if (!n) return new Intl.NumberFormat().format(0);
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "-" : "";
-  if (abs >= 999_950_000) return `${sign}${(abs / 1_000_000_000).toFixed(1)}B`;
-  if (abs >= 999_950) return `${sign}${(abs / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
-  return `${sign}${new Intl.NumberFormat().format(abs)}`;
+  if (n && n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n && n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n && n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return new Intl.NumberFormat().format(n || 0);
 }
 
 /**
@@ -135,6 +132,49 @@ export function formatCost(usd: number | null | undefined): string {
 }
 
 export const fmtCost = formatCost;
+
+/**
+ * Known scaffolding prefixes injected by client-side agent frameworks that
+ * should be stripped so the user-facing topic preview reflects genuine human
+ * intent, not injected system context.
+ *
+ * These are opt-in display filters only — the underlying stored prompt text is
+ * never mutated. Matching is case-insensitive on the trimmed line prefix.
+ */
+const SCAFFOLDING_PREFIXES = [
+  "Memory context:",
+  "System Directives:",
+  "System Prompt:",
+  "Developer:",
+  "File read context:",
+  "Prompt injection guard:",
+];
+
+/**
+ * Extract a clean user intent line from prompt text by stripping leading
+ * agent-framework scaffolding (e.g. "Memory context: ..."). Returns the
+ * first non-scaffolding line, or the original first line if nothing matches.
+ * Never mutates the stored source — display-only filtering.
+ *
+ * @param {string} prompt - Raw prompt text (may contain scaffolding prefixes)
+ * @returns {string} Clean intent line suitable for topic previews
+ */
+export function extractUserIntent(prompt: string): string {
+  if (!prompt || typeof prompt !== "string") return "";
+
+  const lines = prompt.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    const isScaffolding = SCAFFOLDING_PREFIXES.some((prefix) =>
+      trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+    );
+    if (!isScaffolding) return trimmed;
+  }
+  // All lines were scaffolding or empty: return the first non-empty line as-is
+  const firstNonEmpty = lines.find((l) => l.trim().length > 0);
+  return firstNonEmpty ? firstNonEmpty.trim() : "";
+}
 
 /**
  * Truncate a URL for compact display.

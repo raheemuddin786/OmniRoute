@@ -32,7 +32,9 @@ import {
 } from "../../services/apiKeyRotator.ts";
 import { isModelUnavailableError } from "../../services/modelFamilyFallback.ts";
 import { hasPerModelQuota } from "../../services/accountFallback.ts";
-import { mergeConnectionProviderSpecificData } from "@/lib/db/providers";
+import { updateProviderConnection } from "@/lib/db/providers";
+import { resolveProviderQuotaCooldownMs } from "../../services/providerDefaultRateLimit.ts";
+import { isSubscriptionQuotaText } from "../../services/quotaTextCooldowns.ts";
 
 type KeyHealthLog = {
   warn?: (tag: string, message: string) => void;
@@ -63,25 +65,6 @@ function isCredentialFailure(status: number, failureDetail: string): boolean {
   if (isModelCapabilityFailure(status, failureDetail)) return false;
   if (status === 401) return true;
   return CREDENTIAL_FAILURE_PATTERNS.some((pattern) => pattern.test(failureDetail));
-}
-
-/**
- * Persist the apiKeyHealth slice only. `creds.providerSpecificData` is a per-request copy that
- * carries request-local keys (ccSessionId, targetFormat, apiType, the rotated selectedKeyId), so
- * writing the whole object stored one request's values on the shared connection and overwrote
- * concurrent edits with a stale snapshot. The merge runs in a transaction on the stored row.
- */
-function persistKeyHealth(
-  connId: string,
-  apiKeyHealth: Record<string, KeyHealth>,
-  log?: KeyHealthLog
-): void {
-  mergeConnectionProviderSpecificData(connId, { apiKeyHealth }).catch((err: unknown) => {
-    log?.error?.(
-      "DB",
-      `Failed to persist apiKeyHealth: ${err instanceof Error ? err.message : String(err)}`
-    );
-  });
 }
 
 export function recordKeyHealthStatus(
@@ -125,7 +108,17 @@ export function recordKeyHealthStatus(
     const prevStatus = health?.[currentKeyId]?.status;
     const prevFailures = health?.[currentKeyId]?.failures ?? 0;
     if (updatedHealth.status !== prevStatus || updatedHealth.failures !== prevFailures) {
-      persistKeyHealth(connId, { ...health, [currentKeyId]: updatedHealth }, log);
+      updateProviderConnection(connId, {
+        providerSpecificData: {
+          ...psd,
+          apiKeyHealth: { ...health, [currentKeyId]: updatedHealth },
+        },
+      }).catch((err: unknown) => {
+        log?.error?.(
+          "DB",
+          `Failed to persist apiKeyHealth: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
   } else if (status === 402) {
     // 402 "Insufficient account balance" is terminal for this key on
@@ -150,7 +143,17 @@ export function recordKeyHealthStatus(
 
     const prevStatus = health?.[currentKeyId]?.status;
     if (updatedHealth.status !== prevStatus) {
-      persistKeyHealth(connId, { ...health, [currentKeyId]: updatedHealth }, log);
+      updateProviderConnection(connId, {
+        providerSpecificData: {
+          ...psd,
+          apiKeyHealth: { ...health, [currentKeyId]: updatedHealth },
+        },
+      }).catch((err: unknown) => {
+        log?.error?.(
+          "DB",
+          `Failed to persist apiKeyHealth: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
   } else if (status === 429) {
     // Per-key cooldown (#14573): a rate limit hits ONE key, not the credential
@@ -167,7 +170,16 @@ export function recordKeyHealthStatus(
     if (hasPerModelQuota(provider429)) {
       return;
     }
-    const cooldownMs = retryAfterMs && retryAfterMs > 0 ? retryAfterMs : DEFAULT_KEY_COOLDOWN_MS;
+    const isQuotaExhausted = isSubscriptionQuotaText(
+      failureDetail ? failureDetail.toLowerCase() : "",
+      provider429
+    );
+    const cooldownMs = resolveProviderQuotaCooldownMs({
+      provider: provider429,
+      retryAfterMs,
+      isQuotaExhausted,
+      fallbackTransientMs: DEFAULT_KEY_COOLDOWN_MS,
+    });
     const updatedHealth = recordKeyCooldown(connId, currentKeyId, cooldownMs);
     log?.warn?.(
       "AUTH",
@@ -176,13 +188,33 @@ export function recordKeyHealthStatus(
 
     const prevCooldown = health?.[currentKeyId]?.cooldownUntil ?? null;
     if (updatedHealth.cooldownUntil !== prevCooldown) {
-      persistKeyHealth(connId, { ...health, [currentKeyId]: updatedHealth }, log);
+      updateProviderConnection(connId, {
+        providerSpecificData: {
+          ...psd,
+          apiKeyHealth: { ...health, [currentKeyId]: updatedHealth },
+        },
+      }).catch((err: unknown) => {
+        log?.error?.(
+          "DB",
+          `Failed to persist apiKeyHealth: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
   } else if (status >= 200 && status < 300) {
     const updatedHealth = recordKeySuccess(connId, currentKeyId);
     const prevStatus = health?.[currentKeyId]?.status;
     if (prevStatus === "warning" || prevStatus === "invalid") {
-      persistKeyHealth(connId, { ...health, [currentKeyId]: updatedHealth }, log);
+      updateProviderConnection(connId, {
+        providerSpecificData: {
+          ...psd,
+          apiKeyHealth: { ...health, [currentKeyId]: updatedHealth },
+        },
+      }).catch((err: unknown) => {
+        log?.error?.(
+          "DB",
+          `Failed to persist apiKeyHealth: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
   }
 }
