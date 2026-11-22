@@ -3,10 +3,12 @@
 import React, { useState } from "react";
 import { copyToClipboard } from "@/shared/utils/clipboard";
 import { fmtCompact, extractUserIntent } from "@/shared/utils/formatting";
+import type { PromptPipelineStage } from "@/lib/db/projectRegistry";
 
 export interface PromptItemData {
   id?: string;
   prompt: string;
+  rawPrompt?: string;
   systemPrompt?: string;
   timestamp: string;
   model?: string;
@@ -28,6 +30,7 @@ export interface PromptItemData {
   errorType?: string | null;
   errorSummary?: string | null;
   resilienceActions?: string | null;
+  pipelineStages?: PromptPipelineStage[];
 }
 
 interface PromptListItemProps {
@@ -39,16 +42,21 @@ interface PromptListItemProps {
 export function PromptListItem({ item, index, defaultExpanded = false }: PromptListItemProps) {
   const [expanded, setExpanded] = useState<boolean>(defaultExpanded);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState<boolean>(false);
-  const [activeTechnicalTab, setActiveTechnicalTab] = useState<"system" | "summary" | "tools">(
-    "tools"
-  );
+  const [activeTechnicalTab, setActiveTechnicalTab] = useState<
+    "tools" | "flow" | "raw" | "system" | "summary"
+  >("tools");
+  const [promptViewMode, setPromptViewMode] = useState<"clean" | "raw">("clean");
+  const [selectedNodeIndex, setSelectedNodeIndex] = useState<number | null>(null);
   const [copiedUser, setCopiedUser] = useState<boolean>(false);
+  const [copiedRaw, setCopiedRaw] = useState<boolean>(false);
   const [copiedAgent, setCopiedAgent] = useState<boolean>(false);
   const [copiedSystem, setCopiedSystem] = useState<boolean>(false);
   const [copiedFull, setCopiedFull] = useState<boolean>(false);
 
   // Defensive guards for prompt properties
   const safePrompt = typeof item?.prompt === "string" ? item.prompt : "";
+  const safeRawPrompt =
+    typeof item?.rawPrompt === "string" && item.rawPrompt ? item.rawPrompt : safePrompt;
   const safeSystemPrompt = typeof item?.systemPrompt === "string" ? item.systemPrompt : undefined;
   const safeResponseSummary =
     typeof item?.responseSummary === "string" && item.responseSummary.trim().length > 0
@@ -69,10 +77,15 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
 
   const handleCopyUserPrompt = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const success = await copyToClipboard(safePrompt);
+    const success = await copyToClipboard(promptViewMode === "raw" ? safeRawPrompt : safePrompt);
     if (success) {
-      setCopiedUser(true);
-      setTimeout(() => setCopiedUser(false), 2000);
+      if (promptViewMode === "raw") {
+        setCopiedRaw(true);
+        setTimeout(() => setCopiedRaw(false), 2000);
+      } else {
+        setCopiedUser(true);
+        setTimeout(() => setCopiedUser(false), 2000);
+      }
     }
   };
 
@@ -314,26 +327,60 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
             <div className="flex items-start gap-3 justify-end">
               <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
                 <div className="flex items-center justify-between text-xs pb-1 border-b border-indigo-800/40">
-                  <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
-                    <span>👤</span>
-                    User Prompt
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                      <span>👤</span>
+                      User Prompt
+                    </span>
+                    {safeRawPrompt !== safePrompt && (
+                      <div className="inline-flex rounded-md border border-indigo-700/60 bg-indigo-900/60 p-0.5 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setPromptViewMode("clean")}
+                          className={`px-1.5 py-0.5 rounded transition-colors ${
+                            promptViewMode === "clean"
+                              ? "bg-indigo-600 text-white font-medium"
+                              : "text-indigo-300 hover:text-white"
+                          }`}
+                        >
+                          Intent
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPromptViewMode("raw")}
+                          className={`px-1.5 py-0.5 rounded transition-colors ${
+                            promptViewMode === "raw"
+                              ? "bg-indigo-600 text-white font-medium"
+                              : "text-indigo-300 hover:text-white"
+                          }`}
+                        >
+                          Raw Request
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <span className="text-indigo-400/80 font-mono text-xs">
-                      {safePrompt.length} chars
+                      {(promptViewMode === "raw" ? safeRawPrompt : safePrompt).length} chars
                     </span>
                     <button
                       type="button"
                       onClick={handleCopyUserPrompt}
                       className="text-xs text-indigo-300 hover:text-white transition-colors"
-                      title="Copy user prompt"
+                      title={promptViewMode === "raw" ? "Copy raw prompt" : "Copy extracted prompt"}
                     >
-                      {copiedUser ? "✓ Copied" : "Copy"}
+                      {promptViewMode === "raw"
+                        ? copiedRaw
+                          ? "✓ Copied Raw"
+                          : "Copy Raw"
+                        : copiedUser
+                          ? "✓ Copied"
+                          : "Copy"}
                     </button>
                   </div>
                 </div>
                 <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
-                  {safePrompt}
+                  {promptViewMode === "raw" ? safeRawPrompt : safePrompt}
                 </div>
               </div>
               <div
@@ -412,6 +459,17 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                 <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-950 border border-slate-800">
                   <button
                     type="button"
+                    onClick={() => setActiveTechnicalTab("flow")}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      activeTechnicalTab === "flow"
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    🔄 Lifecycle Graph
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setActiveTechnicalTab("tools")}
                     className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                       activeTechnicalTab === "tools"
@@ -419,7 +477,18 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                         : "text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    ⚡ Pipeline & Telemetry
+                    ⚡ Pipeline Telemetry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTechnicalTab("raw")}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      activeTechnicalTab === "raw"
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    📝 Raw Payload
                   </button>
                   {safeSystemPrompt && (
                     <button
@@ -459,6 +528,266 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                   </button>
                 )}
               </div>
+
+              {/* Subview 0: Lifecycle Interactive Graph */}
+              {activeTechnicalTab === "flow" && (
+                <div className="space-y-3 pt-1">
+                  <div className="bg-slate-950/90 p-3.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <span>🔄</span>
+                        Interactive Request Lifecycle Flow
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Click any node to inspect layer metadata
+                      </span>
+                    </div>
+
+                    {/* Flowchart Nodes Container */}
+                    <div className="flex items-center gap-1 overflow-x-auto py-2.5 px-1 scrollbar-thin">
+                      {(item.pipelineStages && item.pipelineStages.length > 0
+                        ? item.pipelineStages
+                        : [
+                            {
+                              name: "User Input",
+                              type: "client_input" as const,
+                              status: "success" as const,
+                              details: { length: (safeRawPrompt || safePrompt).length },
+                            },
+                            {
+                              name: "Guard & Context",
+                              type: "guardrail" as const,
+                              status: "success" as const,
+                              details: { invariants: Boolean(item.resilienceActions) },
+                            },
+                            {
+                              name: "Strategy & Route",
+                              type: "routing" as const,
+                              status: "success" as const,
+                              details: {
+                                strategy: item.comboName || "direct",
+                                target: item.model || "default",
+                              },
+                            },
+                            {
+                              name: "Cache & Tokens",
+                              type: "compression" as const,
+                              status: "success" as const,
+                              details: { cacheRatio: `${cacheRatioPct}%` },
+                            },
+                            {
+                              name: "LLM Dispatch",
+                              type: "llm_dispatch" as const,
+                              durationMs: item.durationMs,
+                              status: (item.status && item.status >= 400
+                                ? "error"
+                                : "success") as const,
+                              details: {
+                                status: item.status ?? 200,
+                                latency: `${item.durationMs || 0}ms`,
+                              },
+                            },
+                            ...(item.toolsUsed && item.toolsUsed.length > 0
+                              ? [
+                                  {
+                                    name: "Tool Loop",
+                                    type: "tool_execution" as const,
+                                    status: "success" as const,
+                                    details: {
+                                      tools: item.toolsUsed,
+                                      files: item.filesModified || [],
+                                    },
+                                  },
+                                ]
+                              : []),
+                            {
+                              name: "Response Out",
+                              type: "response_eval" as const,
+                              status: (item.status && item.status >= 400
+                                ? "error"
+                                : "success") as const,
+                              details: { status: item.status ?? 200 },
+                            },
+                          ]
+                      ).map((stage, sIdx, arr) => {
+                        const isSelected = selectedNodeIndex === sIdx;
+                        const isError = stage.status === "error";
+                        const isWarn = stage.status === "warning";
+
+                        const nodeBg = isSelected
+                          ? "bg-indigo-600 border-indigo-400 text-white shadow-lg ring-2 ring-indigo-400/40"
+                          : isError
+                            ? "bg-rose-950/60 border-rose-700/70 text-rose-200 hover:border-rose-500"
+                            : isWarn
+                              ? "bg-amber-950/60 border-amber-700/70 text-amber-200 hover:border-amber-500"
+                              : "bg-slate-900 border-slate-700 text-slate-200 hover:border-indigo-500 hover:bg-slate-800";
+
+                        const iconMap: Record<string, string> = {
+                          client_input: "👤",
+                          guardrail: "🛡️",
+                          routing: "🔀",
+                          compression: "⚡",
+                          llm_dispatch: "🤖",
+                          tool_execution: "🛠️",
+                          response_eval: "📤",
+                        };
+
+                        return (
+                          <React.Fragment key={sIdx}>
+                            <div
+                              onClick={() => setSelectedNodeIndex(isSelected ? null : sIdx)}
+                              className={`cursor-pointer transition-all duration-150 px-3 py-2 rounded-lg border flex flex-col items-center min-w-[110px] shrink-0 text-center select-none ${nodeBg}`}
+                            >
+                              <div className="flex items-center gap-1 text-[11px] font-semibold">
+                                <span>{iconMap[stage.type] || "🔹"}</span>
+                                <span className="truncate max-w-[95px]">{stage.name}</span>
+                              </div>
+                              <span className="text-[10px] opacity-80 font-mono mt-0.5">
+                                {stage.durationMs ? `${stage.durationMs}ms` : stage.status}
+                              </span>
+                            </div>
+                            {sIdx < arr.length - 1 && (
+                              <div className="text-slate-500 shrink-0 px-1 font-semibold select-none text-xs">
+                                ➔
+                              </div>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+
+                    {/* Selected Node Details Box */}
+                    {selectedNodeIndex !== null && (
+                      <div className="mt-3 p-3 rounded-lg bg-slate-900 border border-indigo-500/40 text-xs">
+                        {(() => {
+                          const stages =
+                            item.pipelineStages && item.pipelineStages.length > 0
+                              ? item.pipelineStages
+                              : [
+                                  {
+                                    name: "User Input",
+                                    type: "client_input",
+                                    status: "success",
+                                    details: { length: (safeRawPrompt || safePrompt).length },
+                                  },
+                                  {
+                                    name: "Guard & Context",
+                                    type: "guardrail",
+                                    status: "success",
+                                    details: { invariants: Boolean(item.resilienceActions) },
+                                  },
+                                  {
+                                    name: "Strategy & Route",
+                                    type: "routing",
+                                    status: "success",
+                                    details: {
+                                      strategy: item.comboName || "direct",
+                                      target: item.model || "default",
+                                    },
+                                  },
+                                  {
+                                    name: "Cache & Tokens",
+                                    type: "compression",
+                                    status: "success",
+                                    details: { cacheRatio: `${cacheRatioPct}%` },
+                                  },
+                                  {
+                                    name: "LLM Dispatch",
+                                    type: "llm_dispatch",
+                                    durationMs: item.durationMs,
+                                    status: item.status && item.status >= 400 ? "error" : "success",
+                                    details: {
+                                      status: item.status ?? 200,
+                                      latency: `${item.durationMs || 0}ms`,
+                                    },
+                                  },
+                                  ...(item.toolsUsed && item.toolsUsed.length > 0
+                                    ? [
+                                        {
+                                          name: "Tool Loop",
+                                          type: "tool_execution",
+                                          status: "success",
+                                          details: {
+                                            tools: item.toolsUsed,
+                                            files: item.filesModified || [],
+                                          },
+                                        },
+                                      ]
+                                    : []),
+                                  {
+                                    name: "Response Out",
+                                    type: "response_eval",
+                                    status: item.status && item.status >= 400 ? "error" : "success",
+                                    details: { status: item.status ?? 200 },
+                                  },
+                                ];
+                          const curr = stages[selectedNodeIndex];
+                          if (!curr) return null;
+                          return (
+                            <div>
+                              <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                                <span className="font-semibold text-indigo-300">
+                                  Layer #{selectedNodeIndex + 1}: {curr.name} ({curr.type})
+                                </span>
+                                <span className="font-mono text-[11px] text-slate-400">
+                                  Status: {curr.status}
+                                </span>
+                              </div>
+                              <pre className="mt-2 font-mono text-[11px] text-slate-300 bg-slate-950 p-2 rounded border border-slate-800/80 overflow-x-auto">
+                                {typeof curr.details === "object"
+                                  ? JSON.stringify(curr.details, null, 2)
+                                  : String(curr.details || "No further details")}
+                              </pre>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Subview: Raw Payload & Prompt Comparison */}
+              {activeTechnicalTab === "raw" && (
+                <div className="space-y-3 pt-1">
+                  <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider block">
+                        Raw Client Request vs Filtered Intent
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await copyToClipboard(safeRawPrompt);
+                          setCopiedRaw(true);
+                          setTimeout(() => setCopiedRaw(false), 2000);
+                        }}
+                        className="px-2 py-0.5 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                      >
+                        {copiedRaw ? "✓ Copied Raw" : "📋 Copy Full Raw Payload"}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs pt-1">
+                      <div>
+                        <span className="text-slate-400 block mb-1 font-medium">
+                          Extracted Intent:
+                        </span>
+                        <div className="max-h-60 overflow-y-auto p-2.5 rounded bg-slate-900 border border-slate-800 font-mono text-slate-200 whitespace-pre-wrap">
+                          {safePrompt}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block mb-1 font-medium">
+                          Original Raw Request:
+                        </span>
+                        <div className="max-h-60 overflow-y-auto p-2.5 rounded bg-slate-900 border border-slate-800 font-mono text-indigo-200 whitespace-pre-wrap">
+                          {safeRawPrompt}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Subview 1: Pipeline & Telemetry */}
               {activeTechnicalTab === "tools" && (

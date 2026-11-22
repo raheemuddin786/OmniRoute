@@ -51,8 +51,25 @@ export interface TokenEconomics {
   costUsd: number;
 }
 
+export interface PromptPipelineStage {
+  name: string;
+  type:
+    | "client_input"
+    | "guardrail"
+    | "routing"
+    | "compression"
+    | "llm_dispatch"
+    | "tool_execution"
+    | "response_eval";
+  timestamp?: string;
+  status: "success" | "warning" | "error" | "skipped";
+  durationMs?: number;
+  details?: Record<string, unknown> | string;
+}
+
 export interface RecentPromptRecord {
   prompt: string;
+  rawPrompt?: string;
   timestamp: string;
   systemPrompt?: string;
   model?: string;
@@ -74,6 +91,7 @@ export interface RecentPromptRecord {
   errorType?: string | null;
   errorSummary?: string | null;
   resilienceActions?: string | null;
+  pipelineStages?: PromptPipelineStage[];
 }
 
 export interface SessionSummary {

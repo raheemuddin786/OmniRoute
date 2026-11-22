@@ -262,12 +262,14 @@ export async function calculateProjectAnalytics(
       if (recentPrompts.length >= 100) break;
 
       let promptText = "";
+      let rawPromptText: string | undefined = undefined;
       let systemPromptText: string | undefined = undefined;
       let toolsUsed: string[] | undefined = undefined;
       let filesModified: string[] | undefined = undefined;
       let responseSummary: string | undefined = undefined;
+      const pipelineStages: PromptPipelineStage[] = [];
 
-      // 1. Try reading disk artifact if available to extract full message text and tools
+      // 1. Try reading disk artifact if available to extract full message text, tools, and pipeline stages
       if (row.artifact_relpath) {
         const fullPath = path.join(callLogsDir, row.artifact_relpath);
         if (fs.existsSync(fullPath)) {
@@ -412,6 +414,7 @@ export async function calculateProjectAnalytics(
                   const text = extractTextFromParts(userMsg.content).trim();
                   if (text.length > 0) {
                     promptText = text;
+                    rawPromptText = text;
                   }
                 }
               }
@@ -471,8 +474,115 @@ export async function calculateProjectAnalytics(
               ? Number(row.ledger_cost_usd)
               : 0;
 
+          // Construct intermediate request lifecycle pipeline stages
+          // 1. Client Input
+          const rawPromptOrClean = rawPromptText || cleanPrompt;
+          pipelineStages.push({
+            name: "Client Inbound Request",
+            type: "client_input",
+            timestamp: row.timestamp,
+            status: "success",
+            details: {
+              promptLength: rawPromptOrClean.length,
+              hasScaffolding: rawPromptOrClean !== cleanPrompt,
+              systemPromptLength: systemPromptText?.length ?? 0,
+            },
+          });
+
+          // 2. Guardrails & Directive Framing
+          const hasInvariants =
+            systemPromptText?.includes("[Auto-Recovery Directive") ||
+            systemPromptText?.includes("anti-loop") ||
+            Boolean(row.resilience_actions);
+          pipelineStages.push({
+            name: "Guardrails & Directive Framing",
+            type: "guardrail",
+            status: row.error_type === "prompt_injection" ? "error" : "success",
+            details: {
+              invariantsEnforced: hasInvariants,
+              resilienceActions: row.resilience_actions || "none",
+            },
+          });
+
+          // 3. Routing & Combo Strategy
+          const routingTarget = row.combo_name
+            ? `Combo (${row.combo_name}) -> ${row.model || row.requested_model || "dynamic"}`
+            : row.model || row.requested_model || "direct";
+          pipelineStages.push({
+            name: "Routing & Combo Strategy",
+            type: "routing",
+            status: row.status && row.status >= 500 ? "warning" : "success",
+            details: {
+              target: routingTarget,
+              comboName: row.combo_name || null,
+              provider: row.provider || null,
+              targetModel: row.model || row.requested_model || null,
+            },
+          });
+
+          // 4. Token Economics & Compression / Cache
+          const cacheRead = Number(row.tokens_cache_read ?? 0);
+          const cacheCreated = Number(row.tokens_cache_creation ?? 0);
+          pipelineStages.push({
+            name: "Context Optimization & Cache",
+            type: "compression",
+            status: "success",
+            details: {
+              tokensCacheRead: cacheRead,
+              tokensCacheCreation: cacheCreated,
+              cacheHit: cacheRead > 0,
+            },
+          });
+
+          // 5. Upstream LLM Dispatch
+          const httpStatus =
+            row.status !== null && row.status !== undefined ? Number(row.status) : 200;
+          const isHttpError = httpStatus >= 400;
+          pipelineStages.push({
+            name: "Upstream LLM Dispatch",
+            type: "llm_dispatch",
+            durationMs: Number(row.duration ?? 0),
+            status: isHttpError ? "error" : "success",
+            details: {
+              model: row.model || row.requested_model,
+              provider: row.provider,
+              status: httpStatus,
+              durationMs: Number(row.duration ?? 0),
+              tokensIn: inTokens,
+              tokensOut: outTokens,
+            },
+          });
+
+          // 6. Tool Execution & Actions (if agent invoked tools)
+          if ((toolsUsed && toolsUsed.length > 0) || (filesModified && filesModified.length > 0)) {
+            pipelineStages.push({
+              name: "Tool Invocations & Environment Actions",
+              type: "tool_execution",
+              status: "success",
+              details: {
+                tools: toolsUsed || [],
+                filesModified: filesModified || [],
+              },
+            });
+          }
+
+          // 7. Response Delivery & Evaluation
+          pipelineStages.push({
+            name: "Response Delivery",
+            type: "response_eval",
+            status: isHttpError ? "error" : "success",
+            details: {
+              status: httpStatus,
+              summary:
+                responseSummary ||
+                (row.error_summary ? `Error: ${row.error_summary}` : "Completed"),
+              hasError: isHttpError || Boolean(row.error_summary),
+            },
+          });
+
           recentPrompts.push({
             prompt: cleanPrompt,
+            rawPrompt: rawPromptText || promptText,
             systemPrompt: systemPromptText || undefined,
             timestamp: row.timestamp || new Date().toISOString(),
             model: row.model || row.requested_model || undefined,
@@ -496,6 +606,7 @@ export async function calculateProjectAnalytics(
             errorType: row.error_type,
             errorSummary: row.error_summary,
             resilienceActions: row.resilience_actions || undefined,
+            pipelineStages: pipelineStages.length > 0 ? pipelineStages : undefined,
           });
         }
       }

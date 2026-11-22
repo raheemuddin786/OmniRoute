@@ -7,10 +7,12 @@ import { copyToClipboard } from "@/shared/utils/clipboard";
 import { generatePromptsCSV, generatePromptsJSON, downloadFile } from "@/shared/utils/promptExport";
 import { fmtCompact } from "@/shared/utils/formatting";
 import { normalizeForSearch } from "@/shared/utils/turkishText";
+import type { PromptPipelineStage } from "@/lib/db/projectRegistry";
 
 interface PromptAnalyticsTabProps {
   recentPrompts?: Array<{
     prompt: string;
+    rawPrompt?: string;
     systemPrompt?: string;
     timestamp: string;
     model?: string;
@@ -32,6 +34,7 @@ interface PromptAnalyticsTabProps {
     errorType?: string | null;
     errorSummary?: string | null;
     resilienceActions?: string | null;
+    pipelineStages?: PromptPipelineStage[];
   }>;
   tokensInSuccess?: number;
   tokensOutSuccess?: number;
@@ -86,6 +89,7 @@ export function PromptAnalyticsTab({
       return {
         id: `prompt_${idx + 1}`,
         prompt: safePromptText,
+        rawPrompt: typeof rp.rawPrompt === "string" ? rp.rawPrompt : undefined,
         systemPrompt: safeSystemPromptText,
         timestamp: safeTimestamp,
         model: rp.model || rp.requestedModel || undefined,
@@ -107,6 +111,7 @@ export function PromptAnalyticsTab({
         resilienceActions: rp.resilienceActions,
         tokensCacheCreation: Number(rp.tokensCacheCreation ?? 0),
         tokensReasoning: Number(rp.tokensReasoning ?? 0),
+        pipelineStages: rp.pipelineStages,
       };
     });
 
@@ -292,6 +297,7 @@ export function PromptAnalyticsTab({
   const handleExportAll = (format: "json" | "csv") => {
     const exportRecords = promptList.map((p) => ({
       prompt: typeof p.prompt === "string" ? p.prompt : "",
+      rawPrompt: typeof p.rawPrompt === "string" ? p.rawPrompt : p.prompt,
       systemPrompt: typeof p.systemPrompt === "string" ? p.systemPrompt : undefined,
       timestamp: typeof p.timestamp === "string" ? p.timestamp : "",
       project: selectedProjectId || "Active Workspace",
@@ -299,7 +305,9 @@ export function PromptAnalyticsTab({
       costUsd: p.costUsd,
       tokensIn: p.tokensIn,
       tokensOut: p.tokensOut,
+      durationMs: p.durationMs,
       toolsUsed: p.toolsUsed,
+      pipelineStages: p.pipelineStages,
     }));
 
     const dateStr = new Date().toISOString().slice(0, 10);

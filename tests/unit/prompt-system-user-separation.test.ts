@@ -53,7 +53,7 @@ test("generatePromptsCSV preserves distinct columns for user prompt and system p
 
   assert.equal(
     lines[0],
-    "Timestamp,Prompt Text,System Prompt,Project,Model,Tokens In,Tokens Out,Estimated Cost (USD),Tools Used"
+    "Timestamp,Prompt Text (Extracted Intent),Raw Client Prompt,System Prompt,Project,Model,Tokens In,Tokens Out,Estimated Cost (USD),Tools Used,Pipeline Stages"
   );
 
   // Line 1 contains both user prompt and system prompt
@@ -62,7 +62,7 @@ test("generatePromptsCSV preserves distinct columns for user prompt and system p
 
   // Line 2 has empty system prompt (systemPrompt is optional)
   assert.ok(lines[2].includes("Show git status"));
-  const systemPromptCell2 = lines[2].split(",")[2];
+  const systemPromptCell2 = lines[2].split(",")[3];
   assert.equal(systemPromptCell2, ""); // system prompt cell is empty
 });
 

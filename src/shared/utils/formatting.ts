@@ -148,12 +148,18 @@ const SCAFFOLDING_PREFIXES = [
   "Developer:",
   "File read context:",
   "Prompt injection guard:",
+  "PROJECT CONTEXT",
+  "Conversation History:",
+  "DETECTED PROJECT STACK:",
+  "<system-reminder>",
+  "</system-reminder>",
+  "IMPORTANT: These instructions",
 ];
 
 /**
  * Extract a clean user intent line from prompt text by stripping leading
- * agent-framework scaffolding (e.g. "Memory context: ..."). Returns the
- * first non-scaffolding line, or the original first line if nothing matches.
+ * agent-framework scaffolding (e.g. "Memory context: ...", "PROJECT CONTEXT...",
+ * or embedded "USER PROMPT:\n..."). Returns the genuine human prompt.
  * Never mutates the stored source — display-only filtering.
  *
  * @param {string} prompt - Raw prompt text (may contain scaffolding prefixes)
@@ -162,7 +168,30 @@ const SCAFFOLDING_PREFIXES = [
 export function extractUserIntent(prompt: string): string {
   if (!prompt || typeof prompt !== "string") return "";
 
-  const lines = prompt.split("\n");
+  // 1. Check for explicit "USER PROMPT:" marker injected by frameworks
+  const userPromptMatch = prompt.match(/\bUSER PROMPT:\s*([\s\S]+)$/i);
+  if (userPromptMatch && userPromptMatch[1]) {
+    const afterMarker = userPromptMatch[1].trim();
+    // In case there is an embedded <system-reminder> right after USER PROMPT, strip it
+    const cleanLines = afterMarker
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(
+        (l) =>
+          l.length > 0 &&
+          !SCAFFOLDING_PREFIXES.some((p) => l.toLowerCase().startsWith(p.toLowerCase()))
+      );
+    if (cleanLines.length > 0) {
+      return cleanLines[0];
+    }
+  }
+
+  // 2. Strip leading system-reminder XML blocks if present
+  let cleaned = prompt.trim();
+  cleaned = cleaned.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "").trim();
+
+  // 3. Scan line-by-line for the first genuine user line
+  const lines = cleaned.split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
