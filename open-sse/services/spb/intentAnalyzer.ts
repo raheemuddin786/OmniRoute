@@ -64,6 +64,20 @@ export interface GuidanceContract {
   [key: string]: unknown;
 }
 
+export interface ToolFailureDiagnostic {
+  toolName?: string;
+  filePath?: string;
+  errorReason:
+    | "string_not_found"
+    | "multiple_matches"
+    | "no_changes"
+    | "file_modified_since_read"
+    | "tool_not_available"
+    | "json_parse_error"
+    | "generic_failure";
+  rawErrorSnippet: string;
+}
+
 export interface IntentProfile {
   taskPhase: TaskPhase;
   estimatedTokens: number;
@@ -73,6 +87,7 @@ export interface IntentProfile {
   isToolResultTurn: boolean;
   isCodeMutationToolResult?: boolean;
   isToolExecutionError?: boolean;
+  toolFailureDiagnostic?: ToolFailureDiagnostic;
   isDuplicateFileRead?: boolean;
   duplicateFilePath?: string;
   guidanceContract?: GuidanceContract;
@@ -88,6 +103,7 @@ interface ExtractedContent {
   hasVisualOrCrashData: boolean;
   hasTestOrDiagnosticFailure: boolean;
   hasToolExecutionError?: boolean;
+  toolFailureDiagnostic?: ToolFailureDiagnostic;
 }
 
 function extractMessageContent(msg: { role: string; content?: unknown }): ExtractedContent {
@@ -122,6 +138,47 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
   let hasVisualOrCrashData = false;
   let hasTestOrDiagnosticFailure = false;
   let hasToolExecutionError = false;
+  let toolFailureDiagnostic: ToolFailureDiagnostic | undefined;
+
+  const inspectToolResultForFailure = (
+    res: string,
+    isExplicitError: boolean,
+    toolName?: string,
+    filePath?: string
+  ): void => {
+    if (
+      isExplicitError ||
+      /(?:<tool_use_error>|InputValidationError|Target must exactly match|String to replace not found|Found \d+ matches of the string|No changes to make|File has been modified since read|No such tool available|PreToolUse.*?error|\[tool_error:\s*true\]|tool_error|outside this session|ENOENT|EACCES|command not found|exit code [1-9]|fatal:)/i.test(
+        res
+      )
+    ) {
+      hasToolExecutionError = true;
+
+      let errorReason: ToolFailureDiagnostic["errorReason"] = "generic_failure";
+      if (
+        /String to replace not found|Target must exactly match|could not find target/i.test(res)
+      ) {
+        errorReason = "string_not_found";
+      } else if (/Found \d+ matches|replace_all is false/i.test(res)) {
+        errorReason = "multiple_matches";
+      } else if (/No changes to make|exactly the same/i.test(res)) {
+        errorReason = "no_changes";
+      } else if (/File has been modified since read/i.test(res)) {
+        errorReason = "file_modified_since_read";
+      } else if (/No such tool available/i.test(res)) {
+        errorReason = "tool_not_available";
+      } else if (/could not be parsed as JSON|JSON\.parse|SyntaxError/i.test(res)) {
+        errorReason = "json_parse_error";
+      }
+
+      toolFailureDiagnostic = {
+        toolName,
+        filePath,
+        errorReason,
+        rawErrorSnippet: res.slice(0, 300),
+      };
+    }
+  };
 
   if (Array.isArray(content)) {
     for (const part of content) {
@@ -148,13 +205,7 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
           toolResultText += " " + res;
           if (crashKeywordsRegex.test(res)) hasVisualOrCrashData = true;
           if (testFailureRegex.test(res)) hasTestOrDiagnosticFailure = true;
-          const isToolErrorPattern =
-            /(?:PreToolUse.*?error|\[tool_error:\s*true\]|tool_error|outside this session|ENOENT|EACCES|command not found|exit code [1-9]|fatal:)/i.test(
-              res
-            );
-          if (isExplicitError || isToolErrorPattern) {
-            hasToolExecutionError = true;
-          }
+          inspectToolResultForFailure(res, isExplicitError);
         } else if (typeof item.text === "string") {
           userText += " " + item.text;
           if (crashKeywordsRegex.test(item.text)) hasVisualOrCrashData = true;
@@ -179,11 +230,13 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
 
     if (item.type === "tool_result" || item.tool_use_id) {
       hasToolResult = true;
+      const isExplicitError = item.is_error === true || item.status === "error";
       const res =
         typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? "");
       toolResultText += " " + res;
       if (crashKeywordsRegex.test(res)) hasVisualOrCrashData = true;
       if (testFailureRegex.test(res)) hasTestOrDiagnosticFailure = true;
+      inspectToolResultForFailure(res, isExplicitError);
     } else if (typeof item.text === "string") {
       userText += " " + item.text;
       if (crashKeywordsRegex.test(item.text)) hasVisualOrCrashData = true;
@@ -202,6 +255,7 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
     hasVisualOrCrashData,
     hasTestOrDiagnosticFailure,
     hasToolExecutionError,
+    toolFailureDiagnostic,
   };
 }
 
@@ -326,19 +380,39 @@ export function classifyIntent(
   const mutationToolNameRegex =
     /^(?:edit|write|write_file|edit_file|file_write|patch|apply_diff|save_file|create_file)$/i;
   let isMutationToolName = false;
+  let executedToolName: string | undefined;
+  let executedFilePath: string | undefined;
+
   if (isToolResultTurn) {
     // Check tool_use calls in the conversation matching the tool results
     const recentAssistant = [...messages].reverse().find((m) => m.role === "assistant");
     if (recentAssistant && Array.isArray(recentAssistant.content)) {
-      isMutationToolName = recentAssistant.content.some((part) => {
+      for (const part of recentAssistant.content) {
         if (part && typeof part === "object") {
           const item = part as Record<string, unknown>;
           if (item.type === "tool_use" && typeof item.name === "string") {
-            return mutationToolNameRegex.test(item.name);
+            executedToolName = item.name;
+            const input = item.input as Record<string, unknown> | undefined;
+            if (input && typeof input === "object") {
+              const fp = input.file_path || input.filePath || input.path || input.filename;
+              if (typeof fp === "string") executedFilePath = fp;
+            }
+            if (mutationToolNameRegex.test(item.name)) {
+              isMutationToolName = true;
+            }
           }
         }
-        return false;
-      });
+      }
+    }
+  }
+
+  // Enrich diagnostic with detected tool name and file path if available
+  if (latestExtracted.toolFailureDiagnostic) {
+    if (!latestExtracted.toolFailureDiagnostic.toolName && executedToolName) {
+      latestExtracted.toolFailureDiagnostic.toolName = executedToolName;
+    }
+    if (!latestExtracted.toolFailureDiagnostic.filePath && executedFilePath) {
+      latestExtracted.toolFailureDiagnostic.filePath = executedFilePath;
     }
   }
 
@@ -577,6 +651,7 @@ export function classifyIntent(
     isToolResultTurn,
     isCodeMutationToolResult: !!isCodeMutationToolResult,
     isToolExecutionError: Boolean(latestExtracted.hasToolExecutionError),
+    toolFailureDiagnostic: latestExtracted.toolFailureDiagnostic,
     isDuplicateFileRead,
     duplicateFilePath,
     originalPrompt: originalPromptText || "",

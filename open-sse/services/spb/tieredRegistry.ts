@@ -279,6 +279,118 @@ export function validateTier3Execution(
   return { isValid: false, tier: "tier_2_resilient" };
 }
 
+export interface ToolFailureRecoveryResult {
+  isDeadlocked: boolean;
+  correctiveDirective?: string;
+  newTaskPhase?: TaskPhase;
+  escalationTier?: "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
+  updatedConsecutiveFailures: number;
+}
+
+/**
+ * Detects repeated tool failures and generates actionable, prescriptive guidance
+ * to unblock agents stuck in repetitive error loops (e.g. failing edits).
+ */
+export function detectAndRecoverFromToolDeadlock(
+  toolFailureDiagnostic:
+    | {
+        toolName?: string;
+        filePath?: string;
+        errorReason: string;
+        rawErrorSnippet: string;
+      }
+    | undefined,
+  consecutiveToolFailures: number,
+  _taskPhase: TaskPhase,
+  customThreshold?: number
+): ToolFailureRecoveryResult {
+  const threshold = customThreshold ?? getTierConfig()?.spbConfig?.toolFailureThreshold ?? 2;
+
+  if (!toolFailureDiagnostic) {
+    return {
+      isDeadlocked: false,
+      updatedConsecutiveFailures: 0,
+    };
+  }
+
+  const newConsecutiveFailures = consecutiveToolFailures + 1;
+  if (newConsecutiveFailures < threshold) {
+    return {
+      isDeadlocked: false,
+      updatedConsecutiveFailures: newConsecutiveFailures,
+    };
+  }
+
+  const toolName = toolFailureDiagnostic.toolName || "the tool";
+  const file = toolFailureDiagnostic.filePath ? ` on ${toolFailureDiagnostic.filePath}` : "";
+  let specificAdvice = "";
+
+  switch (toolFailureDiagnostic.errorReason) {
+    case "string_not_found":
+      specificAdvice =
+        "The string you specified as target/old_string does NOT match the file content exactly.\n" +
+        "ACTION REQUIRED:\n" +
+        "1. Do NOT retry the same edit with the same old_string.\n" +
+        "2. Call Read/View on the exact line range first to inspect the current formatting, indentation, and characters.\n" +
+        "3. Use a shorter, unique anchor snippet instead of multi-line blocks that can mismatch whitespace.\n" +
+        "4. If surgical editing continues to fail, use the Write tool or bash sed/awk/node script to overwrite or rewrite cleanly.";
+      break;
+
+    case "multiple_matches":
+      specificAdvice =
+        "The string to replace appears multiple times in the file, causing ambiguity.\n" +
+        "ACTION REQUIRED:\n" +
+        "1. Expand the old_string target to include surrounding unique context lines (before and after).\n" +
+        "2. If replacing every occurrence across the file was your intent, set replace_all: true.";
+      break;
+
+    case "no_changes":
+      specificAdvice =
+        "The new_string is identical to old_string; no modification occurred.\n" +
+        "ACTION REQUIRED: Verify the changes you intended to make. Ensure new_string contains the actual fix.";
+      break;
+
+    case "file_modified_since_read":
+      specificAdvice =
+        "The file was modified on disk since your last read (e.g., by another tool or formatter).\n" +
+        "ACTION REQUIRED: Re-read the file immediately before executing your next edit.";
+      break;
+
+    case "tool_not_available":
+      specificAdvice =
+        `The tool "${toolName}" is not available in this environment.\n` +
+        "ACTION REQUIRED: Use standard shell commands via Bash (e.g., grep, find, sed) or installed workspace tools instead of calling unavailable tools.";
+      break;
+
+    case "json_parse_error":
+      specificAdvice =
+        "The tool argument payload was rejected because of invalid JSON formatting or unescaped characters.\n" +
+        "ACTION REQUIRED: Ensure tool arguments are clean, valid JSON without unescaped newlines or quotes.";
+      break;
+
+    default:
+      specificAdvice =
+        `Repeated failures (${newConsecutiveFailures} attempts) encountered executing ${toolName}${file}.\n` +
+        "ACTION REQUIRED:\n" +
+        "1. Stop repeating the same failing action.\n" +
+        "2. Switch strategies: inspect the target state, consider an alternative tool, or use Bash commands directly.";
+      break;
+  }
+
+  const correctiveDirective =
+    `[SPB Autonomous Execution Alert: REPEATED TOOL FAILURE DEADLOCK DETECTED (${newConsecutiveFailures} attempts)]\n` +
+    `Your calls to ${toolName}${file} have repeatedly failed with: "${toolFailureDiagnostic.rawErrorSnippet.slice(0, 150)}"\n\n` +
+    specificAdvice;
+
+  return {
+    isDeadlocked: true,
+    correctiveDirective,
+    newTaskPhase: "CODE_GENERATION",
+    escalationTier: "tier_2_resilient",
+    updatedConsecutiveFailures: newConsecutiveFailures,
+  };
+}
+
 /**
  * Enhanced stagnation detection with comprehensive recovery mechanism
  */

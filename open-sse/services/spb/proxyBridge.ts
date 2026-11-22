@@ -18,6 +18,7 @@ import {
   selectModelTier,
   TierAssignment,
   detectAndRecoverFromStagnation,
+  detectAndRecoverFromToolDeadlock,
   escalateFromStagnation,
 } from "./tieredRegistry.ts";
 import { getTierConfig } from "../tierResolver.ts";
@@ -460,6 +461,10 @@ export async function processSmartProxyRouting(
       typeof parsedStatePayload.lastPeriodicPromptTime === "number"
         ? (parsedStatePayload.lastPeriodicPromptTime as number)
         : 0;
+    const priorConsecutiveToolFailures =
+      typeof parsedStatePayload.consecutiveToolFailures === "number"
+        ? (parsedStatePayload.consecutiveToolFailures as number)
+        : 0;
 
     let updatedLastMutationTime = lastMutationTime;
 
@@ -525,9 +530,26 @@ export async function processSmartProxyRouting(
       }
     }
 
-    // On explicit tool execution error turns, inject targeted diagnostic guidance so the agent
-    // accurately inspects the reported failure rather than hallucinating or repeating blind commands.
-    if (intent.isToolExecutionError) {
+    // Detect and recover from repeated tool execution deadlock (e.g. 2+ failing edits or invalid payloads)
+    const toolDeadlockRecovery = detectAndRecoverFromToolDeadlock(
+      intent.toolFailureDiagnostic,
+      priorConsecutiveToolFailures,
+      intent.taskPhase
+    );
+    const updatedConsecutiveToolFailures = toolDeadlockRecovery.updatedConsecutiveFailures;
+
+    if (toolDeadlockRecovery.isDeadlocked && toolDeadlockRecovery.correctiveDirective) {
+      isStagnant = true;
+      stagnationDetected = true;
+      stagnationRecovered = true;
+      autoRecoveryDirective = autoRecoveryDirective
+        ? `${toolDeadlockRecovery.correctiveDirective}\n\n${autoRecoveryDirective}`
+        : toolDeadlockRecovery.correctiveDirective;
+      if (toolDeadlockRecovery.newTaskPhase) {
+        intent.taskPhase = toolDeadlockRecovery.newTaskPhase;
+      }
+    } else if (intent.isToolExecutionError) {
+      // Single/first-time tool execution error: provide targeted diagnostic guidance
       const toolDiagnosticDirective =
         "[SPB Diagnostic Guidance: A tool operation reported a failure or error output. " +
         "Examine the exact error message, verify file paths and permissions, and address the root cause directly before executing further actions. " +
@@ -745,11 +767,14 @@ export async function processSmartProxyRouting(
         combinedTargetFiles.length > 0
           ? `Target files: ${combinedTargetFiles.slice(0, 3).join(", ")}. `
           : "";
-      autoRecoveryDirective =
+      const stagnationRecoveryDirective =
         "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
         `Exploration checkpoint reached. ${targetSummary}` +
         "Resume and complete ongoing implementation using editing tools (Write/Edit) or execute verification tests. " +
         "Do not repeat exploratory read cycles or restart task formulation.";
+      autoRecoveryDirective = autoRecoveryDirective
+        ? `${autoRecoveryDirective}\n\n${stagnationRecoveryDirective}`
+        : stagnationRecoveryDirective;
     } else if (
       (intent.taskPhase === "ARCHITECTURAL_PLANNING" && !activeGuidanceContract) ||
       (!activeGuidanceContract &&
@@ -939,6 +964,7 @@ export async function processSmartProxyRouting(
           timestamp: Date.now(),
           modelName: selectedModel,
           lastMutationTime: updatedLastMutationTime,
+          consecutiveToolFailures: updatedConsecutiveToolFailures,
           lastPeriodicPromptTime:
             updatedCheckpoint?.lastPeriodicPromptTime !== undefined
               ? updatedCheckpoint.lastPeriodicPromptTime

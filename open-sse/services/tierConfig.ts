@@ -40,6 +40,11 @@ export const spbRuntimeConfigSchema = z
       .int()
       .min(10000)
       .default(DEFAULT_SPB_RUNTIME_CONFIG.stagnationIntervalMs),
+    toolFailureThreshold: z
+      .number()
+      .int()
+      .min(1)
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.toolFailureThreshold),
     enableSelfCorrectionPrompt: z
       .boolean()
       .default(DEFAULT_SPB_RUNTIME_CONFIG.enableSelfCorrectionPrompt),
