@@ -1638,6 +1638,49 @@ export function SmartProxyBridgeTab() {
                             className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
                           />
                         </div>
+                        <div>
+                          <label className="text-xs font-medium text-foreground block">
+                            Stagnation Interval (seconds)
+                          </label>
+                          <span className="text-xs text-muted-foreground block mb-1">
+                            Periodic stall check (default: 120s)
+                          </span>
+                          <input
+                            type="number"
+                            min="10"
+                            max="600"
+                            step="10"
+                            value={Math.round((spbConfig.stagnationIntervalMs || 120000) / 1000)}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                stagnationIntervalMs:
+                                  Math.max(10, parseInt(e.target.value, 10) || 120) * 1000,
+                              }))
+                            }
+                            className="block w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2 pt-5">
+                          <input
+                            type="checkbox"
+                            id="enableSelfCorrectionPrompt"
+                            checked={spbConfig.enableSelfCorrectionPrompt !== false}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                enableSelfCorrectionPrompt: e.target.checked,
+                              }))
+                            }
+                            className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                          />
+                          <label
+                            htmlFor="enableSelfCorrectionPrompt"
+                            className="text-xs font-medium text-foreground"
+                          >
+                            Self-Correction Prompting (every 2m)
+                          </label>
+                        </div>
                       </div>
                     </div>
 

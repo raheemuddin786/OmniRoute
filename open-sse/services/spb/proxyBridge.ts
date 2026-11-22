@@ -431,15 +431,38 @@ export async function processSmartProxyRouting(
     let stagnationRecovered = false;
     let isStagnant = false;
 
-    // Calculate cumulative non-mutating turn counter:
+    // Calculate cumulative non-mutating turn counter and elapsed time since last mutation:
     // Any turn that does NOT mutate code increments consecutiveReads.
     // Specifically:
     // 1. Read-only tool results (Read, Grep, Glob, Bash inspection) increment, regardless of taskPhase
     // 2. Inspection phases (INSPECTION_SYNTHESIS, DETERMINISTIC_ROUTING, TESTING_AND_VERIFICATION) increment
-    // 3. Only an actual code mutation tool result resets the counter to 0.
+    // 3. Only an actual code mutation tool result resets the counter to 0 and records lastMutationTime.
+    const now = Date.now();
     const priorConsecutiveReads = existingCheckpoint?.consecutiveReads ?? 0;
     const _priorStagnationRecovered = existingCheckpoint?.stagnationRecovered ?? false;
     const isNonMutatingToolResult = intent.isToolResultTurn && !intent.isCodeMutationToolResult;
+
+    // Parse existing checkpoint statePayload to retrieve lastMutationTime and lastPeriodicPromptTime
+    let parsedStatePayload: Record<string, unknown> = {};
+    try {
+      if (existingCheckpoint?.statePayload) {
+        parsedStatePayload = JSON.parse(existingCheckpoint.statePayload);
+      }
+    } catch {
+      parsedStatePayload = {};
+    }
+
+    const lastMutationTime =
+      typeof parsedStatePayload.lastMutationTime === "number"
+        ? (parsedStatePayload.lastMutationTime as number)
+        : (existingCheckpoint?.createdAt ?? now);
+    const lastPeriodicPromptTime =
+      typeof parsedStatePayload.lastPeriodicPromptTime === "number"
+        ? (parsedStatePayload.lastPeriodicPromptTime as number)
+        : 0;
+
+    let updatedLastMutationTime = lastMutationTime;
+
     // Visual crash inspection or active diagnostic error turns should NOT count as passive stagnation.
     // When the agent is diagnosing a crash screenshot, test failure, or stack trace, it must be granted
     // diagnostic latitude to inspect the relevant error line or visual artifact before editing code blindly.
@@ -455,8 +478,9 @@ export async function processSmartProxyRouting(
       (intent.taskPhase === "TESTING_AND_VERIFICATION" && !isDiagnosticOrVisualTurn);
 
     if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
-      // Confirmed code mutation: reset counter
+      // Confirmed code mutation: reset counter and update lastMutationTime
       consecutiveReads = 0;
+      updatedLastMutationTime = now;
     } else if (isDiagnosticOrVisualTurn) {
       // Diagnostic turn inspecting failure or visual crash output: preserve counter without incrementing
       consecutiveReads = priorConsecutiveReads || 0;
@@ -468,12 +492,21 @@ export async function processSmartProxyRouting(
       consecutiveReads = priorConsecutiveReads || 0;
     }
 
+    const elapsedSinceLastMutationMs = now - updatedLastMutationTime;
+
     // Detect stagnation using the unified recovery mechanism
     const stagnationRecovery = detectAndRecoverFromStagnation(
       sessionId,
       intent.taskPhase,
       consecutiveReads,
-      existingCheckpoint
+      {
+        ...existingCheckpoint,
+        lastMutationTime: updatedLastMutationTime,
+        lastPeriodicPromptTime,
+      },
+      {
+        elapsedSinceLastMutationMs,
+      }
     );
     // tieredRegistry now returns reset counter + stagnationRecovered flag + updatedCheckpoint
     isStagnant = stagnationRecovery.isStagnant;
@@ -905,6 +938,11 @@ export async function processSmartProxyRouting(
           messagesCount: messages.length,
           timestamp: Date.now(),
           modelName: selectedModel,
+          lastMutationTime: updatedLastMutationTime,
+          lastPeriodicPromptTime:
+            updatedCheckpoint?.lastPeriodicPromptTime !== undefined
+              ? updatedCheckpoint.lastPeriodicPromptTime
+              : lastPeriodicPromptTime,
         }),
         createdAt: Date.now(),
       });

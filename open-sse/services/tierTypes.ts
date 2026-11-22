@@ -63,6 +63,8 @@ export interface SpbTierProfile {
 
 export interface SpbRuntimeConfig {
   stagnationThreshold?: number;
+  stagnationIntervalMs?: number;
+  enableSelfCorrectionPrompt?: boolean;
   multiFileThreshold?: number;
   duplicateReadThreshold?: number;
   diffTimeoutMs?: number;
@@ -88,6 +90,8 @@ export interface SpbRuntimeConfig {
 
 export interface ConcreteSpbRuntimeConfig {
   stagnationThreshold: number;
+  stagnationIntervalMs: number;
+  enableSelfCorrectionPrompt: boolean;
   multiFileThreshold: number;
   duplicateReadThreshold: number;
   diffTimeoutMs: number;
@@ -113,6 +117,8 @@ export interface ConcreteSpbRuntimeConfig {
 
 export const DEFAULT_SPB_RUNTIME_CONFIG: ConcreteSpbRuntimeConfig = {
   stagnationThreshold: 2,
+  stagnationIntervalMs: 120000,
+  enableSelfCorrectionPrompt: true,
   multiFileThreshold: 3,
   duplicateReadThreshold: 3,
   diffTimeoutMs: 5000,

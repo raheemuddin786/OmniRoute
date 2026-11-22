@@ -290,6 +290,12 @@ export function detectAndRecoverFromStagnation(
     consecutiveReads?: number;
     modelTier?: string;
     guidanceContract?: GuidanceContract;
+    lastMutationTime?: number;
+    lastPeriodicPromptTime?: number;
+    stagnationRecovered?: boolean;
+  },
+  options?: {
+    elapsedSinceLastMutationMs?: number;
   }
 ): {
   isStagnant: boolean;
@@ -300,17 +306,70 @@ export function detectAndRecoverFromStagnation(
     consecutiveReads?: number;
     modelTier?: string;
     guidanceContract?: GuidanceContract;
+    lastMutationTime?: number;
+    lastPeriodicPromptTime?: number;
     stagnationRecovered?: boolean;
   };
 } {
   const currentConfig = getTierConfig();
   const stagnationThreshold = currentConfig?.spbConfig?.stagnationThreshold ?? 2;
+  const stagnationIntervalMs =
+    Number(process.env.OMNIROUTE_SPB_STAGNATION_INTERVAL_MS) > 0
+      ? Number(process.env.OMNIROUTE_SPB_STAGNATION_INTERVAL_MS)
+      : (currentConfig?.spbConfig?.stagnationIntervalMs ?? 120_000); // 2 minutes default
+  const enableSelfCorrectionPrompt =
+    process.env.OMNIROUTE_SPB_ENABLE_SELF_CORRECTION !== undefined
+      ? process.env.OMNIROUTE_SPB_ENABLE_SELF_CORRECTION === "true"
+      : (currentConfig?.spbConfig?.enableSelfCorrectionPrompt ?? true);
+
   let isStagnant = false;
   let recoveryDirective: string | undefined;
   let newTaskPhase: TaskPhase | undefined;
   let escalationTier: "tier_1_apex" | "tier_2_resilient" | "tier_3_local" | undefined;
 
-  // If previous turn already applied recovery, don't re-detect immediately.
+  const now = Date.now();
+  const elapsedSinceLastMutation = options?.elapsedSinceLastMutationMs ?? 0;
+  const lastPeriodicPrompt = existingCheckpoint?.lastPeriodicPromptTime ?? 0;
+  const timeSinceLastPrompt = now - lastPeriodicPrompt;
+
+  // Check 1: Periodic 2-Minute Stagnation / Self-Correction Alert
+  // If agent has had no verified code mutation for >= 2 minutes (120s) and at least 2 minutes have elapsed since the last alert
+  const isTimeStalled =
+    enableSelfCorrectionPrompt &&
+    elapsedSinceLastMutation >= stagnationIntervalMs &&
+    timeSinceLastPrompt >= stagnationIntervalMs;
+
+  if (isTimeStalled) {
+    isStagnant = true;
+    const elapsedMinutes = Math.round(elapsedSinceLastMutation / 60000);
+    recoveryDirective =
+      `[SPB Autonomous Self-Correction Alert: STALL / LOOP DETECTED (~${elapsedMinutes}m elapsed without code progress)]\n` +
+      `You have been executing tools on this task for over ${elapsedMinutes} minute(s) without verified code modifications.\n` +
+      `Perform an immediate self-audit before invoking another tool:\n` +
+      `1. Hallucination check: Are you looking for files, symbols, endpoints, or error signatures that do NOT exist in this repo?\n` +
+      `2. Divergence check: Have you drifted away from the primary user objective?\n` +
+      `3. Token waste check: Are you running redundant reads/searches or repeating failing commands without new insights?\n` +
+      `If you have gathered context, STOP reading and proceed directly to code implementation (Edit/Write) or test verification now.`;
+
+    const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
+    newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
+    escalationTier = "tier_2_resilient";
+
+    return {
+      isStagnant: true,
+      recoveryDirective,
+      newTaskPhase,
+      escalationTier,
+      updatedCheckpoint: {
+        ...existingCheckpoint,
+        consecutiveReads: 0,
+        lastPeriodicPromptTime: now,
+        stagnationRecovered: true,
+      },
+    };
+  }
+
+  // If previous turn already applied recovery, don't re-detect immediately on read turns.
   // Require consecutiveReads to re-accumulate to at least stagnationThreshold before re-triggering.
   if (existingCheckpoint?.stagnationRecovered && consecutiveReads < stagnationThreshold) {
     return {
@@ -319,17 +378,12 @@ export function detectAndRecoverFromStagnation(
       updatedCheckpoint: {
         ...existingCheckpoint,
         consecutiveReads,
-        stagnationRecovered: true,
+        stagnationRecovered: false, // Clear flag so future reads properly trigger detection
       },
     };
   }
 
   // Detect stagnation based on cumulative non-mutating turns.
-  // The counter now increments on ANY non-mutating tool result regardless of
-  // taskPhase (including CODE_GENERATION), so the guard must not be gated on
-  // taskPhase — otherwise a read-only loop classified as CODE_GENERATION evades
-  // detection entirely.
-  // Lower threshold (default 2 turns) to immediately catch read loops
   if (consecutiveReads >= stagnationThreshold) {
     isStagnant = true;
 
@@ -342,9 +396,6 @@ export function detectAndRecoverFromStagnation(
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
     // Escalate tier assignment:
-    // If already on tier_2_resilient and stagnation persists across repeated inspection cycles
-    // (consecutiveReads >= stagnationThreshold * 2), escalate to tier_1_apex for architectural re-evaluation.
-    // Otherwise, enforce concrete execution via tier_2_resilient.
     const currentTier = existingCheckpoint?.modelTier || "tier_2_resilient";
     if (currentTier === "tier_2_resilient" && consecutiveReads > 5) {
       escalationTier = "tier_1_apex";
@@ -354,20 +405,16 @@ export function detectAndRecoverFromStagnation(
         "Repeated non-mutating tool cycles detected on execution tier. Re-evaluating strategy with architectural guidance. " +
         "Synthesize gathered context and formulate a direct file-modification action plan.";
     } else if (currentTier === "tier_3_local") {
-      // Tier 3 stagnation -> escalate to Tier 2
       escalationTier = "tier_2_resilient";
     } else {
       escalationTier = "tier_2_resilient";
     }
 
-    // RESET consecutiveReads to 0 when recovery triggers.
-    // The recovery directive is injected into the prompt - agent MUST act on it next turn.
-    // If agent ignores and reads again, counter will increment from 0 and re-detect.
-    // This prevents infinite loop where same count triggers same directive repeatedly.
     if (existingCheckpoint) {
       existingCheckpoint = {
         ...existingCheckpoint,
         consecutiveReads: 0,
+        lastPeriodicPromptTime: now,
         stagnationRecovered: true,
       };
     }

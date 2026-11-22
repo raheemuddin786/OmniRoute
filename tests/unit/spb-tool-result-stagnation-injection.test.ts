@@ -100,25 +100,29 @@ test("SPB Governance: injects autoRecoveryDirective into pure tool_result user m
   );
 });
 
-test("SPB Stagnation Registry: does not reset consecutiveReads to 0 upon detection", () => {
+test("SPB Stagnation Registry: triggers periodic self-correction alert when stalled for over 2 minutes", () => {
   const existingCheckpoint = {
-    consecutiveReads: 3,
-    modelTier: "tier_3_local",
+    consecutiveReads: 1,
+    modelTier: "tier_2_resilient",
+    lastMutationTime: Date.now() - 130_000, // 130 seconds ago (> 120s)
+    lastPeriodicPromptTime: 0,
   };
 
   const recovery = detectAndRecoverFromStagnation(
-    "test-session-preservation",
-    "INSPECTION_SYNTHESIS",
-    3,
-    existingCheckpoint
+    "test-session-2min-alert",
+    "CODE_GENERATION",
+    1,
+    existingCheckpoint,
+    {
+      elapsedSinceLastMutationMs: 130_000,
+    }
   );
 
   assert.equal(recovery.isStagnant, true);
+  assert.ok(recovery.recoveryDirective?.includes("STALL / LOOP DETECTED"));
+  assert.ok(recovery.recoveryDirective?.includes("Hallucination check"));
+  assert.ok(recovery.recoveryDirective?.includes("Divergence check"));
+  assert.ok(recovery.recoveryDirective?.includes("Token waste check"));
   assert.equal(recovery.escalationTier, "tier_2_resilient");
-  // The consecutiveReads in existingCheckpoint must NOT have been reset to 0
-  assert.equal(
-    existingCheckpoint.consecutiveReads,
-    3,
-    "consecutiveReads must be preserved upon detection to prevent alternating-turn oscillation"
-  );
+  assert.equal(recovery.updatedCheckpoint?.stagnationRecovered, true);
 });

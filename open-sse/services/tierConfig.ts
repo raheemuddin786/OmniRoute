@@ -35,6 +35,14 @@ export const spbRuntimeConfigSchema = z
       .int()
       .min(1)
       .default(DEFAULT_SPB_RUNTIME_CONFIG.stagnationThreshold),
+    stagnationIntervalMs: z
+      .number()
+      .int()
+      .min(10000)
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.stagnationIntervalMs),
+    enableSelfCorrectionPrompt: z
+      .boolean()
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.enableSelfCorrectionPrompt),
     multiFileThreshold: z
       .number()
       .int()
