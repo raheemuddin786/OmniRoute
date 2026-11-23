@@ -9,10 +9,12 @@
 import { normalizeSessionCookieHeader } from "@/lib/providers/webCookieAuth";
 
 import { claudeWebFingerprint } from "../config/claudeWebFingerprint.ts";
-import { FETCH_TIMEOUT_MS } from "../config/constants.ts";
+import { FETCH_TIMEOUT_MS, CLAUDE_WEB_MIN_REQUEST_INTERVAL_MS } from "../config/constants.ts";
 import { tlsFetchClaude } from "../services/claudeTlsClient.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
+import { isSubscriptionQuotaText } from "../services/quotaTextCooldowns.ts";
+import { looksLikeQuotaExhausted } from "../../src/shared/utils/classify429";
 import { currentAppliedProxySink } from "../utils/proxyFetch.ts";
 import { acquire, buildAccountSemaphoreKey } from "../services/accountSemaphore.ts";
 import {
@@ -45,6 +47,13 @@ const MAX_ERROR_BODY_BYTES = 64 * 1024;
 const MAX_FORWARDED_RETRY_AFTER_SECONDS = 24 * 60 * 60;
 const HTTP_DATE_PATTERN =
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+// Per-account last request completion timestamp to enforce minimal interval spacing
+const lastAccountRequestTime = new Map<string, number>();
+
+export function __resetClaudeWebAccountPacingForTesting(): void {
+  lastAccountRequestTime.clear();
+}
 
 type SendClaudeWebTransport = (
   request: ClaudeWebTransportRequest
@@ -395,27 +404,7 @@ async function errorResponseForTransport(
     let failureKind: "rate_limit" | "quota_exhausted" | "transient" = "rate_limit";
     if (bodyText) {
       const lower = String(bodyText).toLowerCase();
-      // Quota exhaustion keywords (daily/monthly limits, billing, credits)
-      const QUOTA_PATTERNS = [
-        /daily.*limit/i,
-        /daily.*quota/i,
-        /per.?day.*limit/i,
-        /monthly.*limit/i,
-        /monthly.*quota/i,
-        /per.?month.*limit/i,
-        /limited\s+to\s+[\d,]+.*(?:calls?|requests?).*per\s+month/i,
-        /quota.*exceed/i,
-        /exceed.*quota/i,
-        /insufficient.*quota/i,
-        /billing.*cap/i,
-        /credit.*exhaust/i,
-        /exhausted.*credits/i,
-        /out of credits/i,
-        /hard.?limit/i,
-        /plan.*limit/i,
-      ];
-      const isQuotaExhausted = QUOTA_PATTERNS.some((p) => p.test(lower));
-      if (isQuotaExhausted) {
+      if (looksLikeQuotaExhausted(bodyText) || isSubscriptionQuotaText(lower, "claude-web")) {
         failureKind = "quota_exhausted";
       }
     }
@@ -588,6 +577,17 @@ export class ClaudeWebExecutor extends BaseExecutor {
         failFast: false,
       });
 
+      // Enforce minimal request interval (spacing) per account to avoid burst 429s from Claude
+      if (CLAUDE_WEB_MIN_REQUEST_INTERVAL_MS > 0) {
+        const lastTime = lastAccountRequestTime.get(turn.accountScope) ?? 0;
+        const elapsed = Date.now() - lastTime;
+        if (elapsed < CLAUDE_WEB_MIN_REQUEST_INTERVAL_MS) {
+          const waitMs = CLAUDE_WEB_MIN_REQUEST_INTERVAL_MS - elapsed;
+          if (signal?.aborted) throw new Error("Request aborted");
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+      }
+
       let transportResult: ClaudeWebTransportResult;
       if (forceBrowserTransport()) {
         transportResult = await this.sendBrowser(transportRequest);
@@ -652,6 +652,7 @@ export class ClaudeWebExecutor extends BaseExecutor {
       ) {
         const streamBody = response.body as ReadableStream<Uint8Array>;
         const wrappedBody = wrapReadableStreamWithFinalize(streamBody, () => {
+          lastAccountRequestTime.set(turn.accountScope, Date.now());
           if (releaseSemaphore) {
             releaseSemaphore();
             releaseSemaphore = null;
@@ -666,10 +667,12 @@ export class ClaudeWebExecutor extends BaseExecutor {
       }
 
       // Non-streaming (buffered): release immediately since the full response is ready.
+      lastAccountRequestTime.set(turn.accountScope, Date.now());
       releaseSemaphore();
       releaseSemaphore = null;
       return makeExecutionResult(response, auditBody, auditUrl, auditHeaders);
     } catch (error) {
+      lastAccountRequestTime.set(turn.accountScope, Date.now());
       invalidateClaudeWebTurn(turn);
       if (releaseSemaphore) {
         releaseSemaphore();

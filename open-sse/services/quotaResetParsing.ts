@@ -1,4 +1,6 @@
 import { looksLikeQuotaExhausted } from "../../src/shared/utils/classify429";
+import { isSubscriptionQuotaText } from "./quotaTextCooldowns.ts";
+import { isQuotaWindowProvider } from "./providerDefaultRateLimit.ts";
 
 // Re-exported so open-sse callers (accountFallback/concurrencyLimit429.ts) reach the
 // concurrency-429 classifier through this module's existing src/ import instead of adding
@@ -52,7 +54,12 @@ export function shouldPreserveQuotaSignals(
 ): boolean {
   if (!provider) return true;
   if (getProviderCategory(provider) === "oauth") return true;
-  return Boolean(errorText) && looksLikeQuotaExhausted(errorText);
+  if (isQuotaWindowProvider(provider)) return true;
+  return (
+    Boolean(errorText) &&
+    (looksLikeQuotaExhausted(errorText) ||
+      isSubscriptionQuotaText(errorText!.toLowerCase(), provider))
+  );
 }
 
 /**

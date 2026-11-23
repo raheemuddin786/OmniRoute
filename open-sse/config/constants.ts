@@ -298,6 +298,10 @@ function envInt(name: string, fallback: number): number {
 export const CLAUDE_WEB_COOLDOWN_JITTER_MS = envInt("CLAUDE_WEB_COOLDOWN_JITTER_MS", 15000);
 export const CLAUDE_WEB_TRANSIENT_429_MS = envInt("CLAUDE_WEB_TRANSIENT_429_MS", 60000);
 export const CLAUDE_WEB_429_BACKOFF_CAP_MS = envInt("CLAUDE_WEB_429_BACKOFF_CAP_MS", 300000);
+export const CLAUDE_WEB_MIN_REQUEST_INTERVAL_MS = envInt(
+  "CLAUDE_WEB_MIN_REQUEST_INTERVAL_MS",
+  3000
+);
 
 export const PROVIDER_PROFILES = {
   oauth: {

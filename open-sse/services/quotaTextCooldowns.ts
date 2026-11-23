@@ -13,6 +13,11 @@
 import { RateLimitReason } from "../config/constants.ts";
 import { parseDayGranularityResetMs, parseIsoDateTimeResetMs } from "./quotaResetParsing.ts";
 import { quotaTextSignalCountsForStatus } from "./accountFallback/creditsExhaustedForStatus.ts";
+import {
+  isQuotaWindowProvider,
+  DEFAULT_QUOTA_WINDOW_MS,
+  getProviderQuotaWindowMs,
+} from "./providerDefaultRateLimit.ts";
 
 type RateLimitReasonValue = (typeof RateLimitReason)[keyof typeof RateLimitReason];
 
@@ -116,9 +121,13 @@ export function buildSubscriptionQuotaFallback(
   const hint = getUpstreamRetryHint();
   const detected = detectRetryHint ? detectRetryHint() : null;
   const bodyHint = detected?.retryAfterMs ?? parseRetryFromErrorText(errorStr, provider);
+  const defaultCooldownMs =
+    provider && isQuotaWindowProvider(provider)
+      ? (getProviderQuotaWindowMs(provider) ?? DEFAULT_QUOTA_WINDOW_MS)
+      : SUBSCRIPTION_QUOTA_COOLDOWN_MS;
   return {
     shouldFallback: true,
-    cooldownMs: hint?.retryAfterMs ?? SUBSCRIPTION_QUOTA_COOLDOWN_MS,
+    cooldownMs: hint?.retryAfterMs ?? defaultCooldownMs,
     reason: RateLimitReason.QUOTA_EXHAUSTED,
     usedUpstreamRetryHint: Boolean(hint?.retryAfterMs),
     // Keep the applied hint's provenance: callers decide which cooldowns may shorten

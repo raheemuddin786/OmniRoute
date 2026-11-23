@@ -392,16 +392,8 @@ async function launchBrowser(options: BrowserPoolContextOptions): Promise<Browse
 function parseCookieString(
   raw: string,
   domain: string
-): Array<{
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expires: number;
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite: "Lax" | "Strict" | "None";
-}> {
+): Array<Parameters<BrowserContext["addCookies"]>[0][number]> {
+  const cleanDomain = domain.replace(/^\./, "");
   return raw
     .split(";")
     .map((p) => p.trim())
@@ -412,6 +404,15 @@ function parseCookieString(
       const name = pair.slice(0, eq).trim();
       const value = pair.slice(eq + 1).trim();
       if (!name || !value) return null;
+      // Per RFC 6265, __Host- cookies must not include a Domain attribute.
+      // Playwright expects an exact URL rather than a domain for __Host- cookies.
+      if (name.startsWith("__Host-")) {
+        return {
+          name,
+          value,
+          url: `https://${cleanDomain}/`,
+        };
+      }
       return {
         name,
         value,
@@ -423,16 +424,7 @@ function parseCookieString(
         sameSite: "Lax" as const,
       };
     })
-    .filter(Boolean) as Array<{
-    name: string;
-    value: string;
-    domain: string;
-    path: string;
-    expires: number;
-    httpOnly: boolean;
-    secure: boolean;
-    sameSite: "Lax" | "Strict" | "None";
-  }>;
+    .filter(Boolean) as Array<Parameters<BrowserContext["addCookies"]>[0][number]>;
 }
 
 // Clear a key from the pending-creation map once its promise settles, counting
