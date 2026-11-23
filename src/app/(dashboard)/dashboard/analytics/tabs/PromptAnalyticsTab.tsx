@@ -49,7 +49,11 @@ interface PromptAnalyticsTabProps {
     cached?: number;
     saved?: number;
     costUsd?: number;
+    totalCalls?: number;
   };
+  totalPromptsCount?: number;
+  uniquePromptsCount?: number;
+  totalSessionsCount?: number;
   sessionGroups?: SessionGroupData[];
   selectedProjectId?: string;
   onRefresh?: () => void;
@@ -62,6 +66,9 @@ export function PromptAnalyticsTab({
   tokensInSuccess: _tokensInSuccess = 0,
   tokensOutSuccess: _tokensOutSuccess = 0,
   tokenEconomics = {},
+  totalPromptsCount,
+  uniquePromptsCount,
+  totalSessionsCount,
   sessionGroups: initialSessionGroups = [],
   selectedProjectId,
   onRefresh,
@@ -428,12 +435,28 @@ export function PromptAnalyticsTab({
     }
   };
 
-  // Calculate metrics for display cards
+  // Calculate metrics for display cards (prefer dynamic database/aggregate totals when available)
   const metrics = useMemo(() => {
-    const totalPrompts = promptList.length;
-    const uniquePrompts = promptList.filter(
-      (p, idx, self) => idx === self.findIndex((t) => t.prompt === p.prompt)
-    ).length;
+    const totalPrompts =
+      typeof totalPromptsCount === "number" && totalPromptsCount > 0
+        ? totalPromptsCount
+        : tokenEconomics &&
+            typeof tokenEconomics.totalCalls === "number" &&
+            tokenEconomics.totalCalls > 0
+          ? tokenEconomics.totalCalls
+          : promptList.length;
+
+    const uniquePrompts =
+      typeof uniquePromptsCount === "number" && uniquePromptsCount > 0
+        ? uniquePromptsCount
+        : promptList.filter((p, idx, self) => idx === self.findIndex((t) => t.prompt === p.prompt))
+            .length;
+
+    const sessionCount =
+      typeof totalSessionsCount === "number" && totalSessionsCount > 0
+        ? totalSessionsCount
+        : sessionGroups.length;
+
     const totalCost =
       tokenEconomics && typeof tokenEconomics.costUsd === "number" && tokenEconomics.costUsd > 0
         ? tokenEconomics.costUsd
@@ -453,9 +476,16 @@ export function PromptAnalyticsTab({
       totalCost,
       totalTokens,
       cacheHits,
-      sessionCount: sessionGroups.length,
+      sessionCount,
     };
-  }, [promptList, sessionGroups, tokenEconomics]);
+  }, [
+    promptList,
+    sessionGroups,
+    tokenEconomics,
+    totalPromptsCount,
+    uniquePromptsCount,
+    totalSessionsCount,
+  ]);
 
   return (
     <div className="space-y-6">

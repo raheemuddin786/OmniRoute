@@ -955,6 +955,11 @@ export function ProjectsAnalyticsTab() {
               tokensInSuccess={activeAnalytics?.tokenEconomics?.success ?? 0}
               tokensOutSuccess={activeAnalytics?.tokenEconomics?.wasted ?? 0}
               tokenEconomics={activeAnalytics?.tokenEconomics}
+              totalPromptsCount={
+                activeAnalytics?.tokenEconomics?.totalCalls ?? activeAnalytics?.sessions?.total
+              }
+              uniquePromptsCount={activeAnalytics?.sessions?.uniquePrompts}
+              totalSessionsCount={activeAnalytics?.sessions?.total}
               selectedProjectId={isGlobalView ? "Global Application" : selectedProject?.name}
               onRefresh={handleCalculateAnalytics}
               calculating={calculatingAnalytics}

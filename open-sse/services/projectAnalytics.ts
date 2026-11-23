@@ -612,7 +612,7 @@ export async function calculateProjectAnalytics(
       // 2. If promptText is empty (e.g. large truncated body), attempt extracting from response reasoning or content
       if (!promptText && responseReasoning) {
         const userPromptMatch = responseReasoning.match(
-          /(?:The user is asking|User message|The user says|The user wrote|User prompt):\s*["']([^"']+)["']/i
+          /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt):\s*["']?([^"'\n]+)["']?/i
         );
         if (userPromptMatch && userPromptMatch[1]) {
           promptText = userPromptMatch[1].trim();
@@ -622,7 +622,20 @@ export async function calculateProjectAnalytics(
 
       // 3. Fallback to row.request_summary if promptText could not be extracted from artifact
       if (!promptText && row.request_summary) {
-        promptText = row.request_summary.trim();
+        // If request_summary is an internal upstream JSON blob, prefer extracting reasoning intent or clean label
+        if (row.request_summary.trim().startsWith("{") && responseReasoning) {
+          const reasoningMatch = responseReasoning.match(
+            /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt):\s*["']?([^"'\n]+)["']?/i
+          );
+          if (reasoningMatch && reasoningMatch[1]) {
+            promptText = reasoningMatch[1].trim();
+          } else {
+            promptText = responseReasoning.split("\n")[0].trim();
+          }
+          rawPromptText = promptText;
+        } else {
+          promptText = row.request_summary.trim();
+        }
       }
 
       // 4. Fallback to systemPromptText if request has only system instructions
@@ -630,11 +643,36 @@ export async function calculateProjectAnalytics(
         promptText = systemPromptText;
       }
 
+      // 5. Final fallback if promptText is still empty or raw upstream JSON without intent
+      if (!promptText && responseReasoning) {
+        promptText = responseReasoning.split("\n")[0].trim();
+      }
+
       if (promptText && promptText.trim().length > 0) {
         // Strip agent-framework scaffolding (e.g. "Memory context: ...") so the
         // stored prompt reflects genuine user intent, not injected context.
-        const cleanPrompt = extractUserIntent(promptText.trim());
+        let cleanPrompt = extractUserIntent(promptText.trim());
+        if (!cleanPrompt || cleanPrompt.startsWith("{")) {
+          if (responseReasoning) {
+            cleanPrompt = responseReasoning.split("\n")[0].trim();
+          } else {
+            cleanPrompt = `API Request (${row.model || row.requested_model || "completion"})`;
+          }
+        }
         if (!cleanPrompt) continue;
+
+        // Ensure chatMessagesList has both user and assistant turns for clean thread view
+        if (
+          !chatMessagesList.some((m) => m.role === "user") &&
+          cleanPrompt &&
+          !cleanPrompt.startsWith("{")
+        ) {
+          chatMessagesList.unshift({
+            role: "user",
+            content: cleanPrompt,
+            timestamp: row.timestamp || undefined,
+          });
+        }
         const callIdKey = row.id ?? `${row.timestamp}_${cleanPrompt}`;
         if (!seenCallIds.has(callIdKey)) {
           seenCallIds.add(callIdKey);
