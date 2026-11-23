@@ -17,6 +17,7 @@
 import { getDbInstance } from "../db/core";
 import { getProjectByBasePath, insertProject, type ProjectRegistry } from "../db/projectRegistry";
 import { extractWorkspaceFromContext, scanProjectDirectory } from "../projectScanner";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { randomUUID } from "node:crypto";
 
 export interface WorkspaceLinkerContext {
@@ -83,13 +84,23 @@ function resolveProjectForRoot(rootPath: string): ProjectRegistry | null {
  * backfilled so the analytics queries join cleanly.
  */
 export function resolveWorkspaceLinker(ctx: WorkspaceLinkerContext): WorkspaceLinkerResult {
-  const db = getDbInstance();
   const result: WorkspaceLinkerResult = {
     workspaceRoot: null,
     projectId: null,
     registeredProject: false,
     backfilled: 0,
   };
+
+  // Controlled via dynamic feature flag
+  try {
+    if (!isFeatureFlagEnabled("PROJECT_ANALYTICS_TRACKING_ENABLED")) {
+      return result;
+    }
+  } catch {
+    // If flag check fails, default to allowing best-effort linkage
+  }
+
+  const db = getDbInstance();
 
   let candidateRoot: string | null = null;
   try {

@@ -37,6 +37,7 @@ export function SessionAccordion({
   defaultExpanded = false,
 }: SessionAccordionProps) {
   const [expanded, setExpanded] = useState<boolean>(defaultExpanded);
+  const [expandAllTurns, setExpandAllTurns] = useState<boolean>(false);
   const [copiedSession, setCopiedSession] = useState<boolean>(false);
 
   const safeLastSeenAt = session?.lastSeenAt || session?.firstSeenAt || "";
@@ -208,6 +209,23 @@ export function SessionAccordion({
 
           <button
             type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!expanded) setExpanded(true);
+              setExpandAllTurns(!expandAllTurns);
+            }}
+            className={`px-2.5 py-1 text-xs rounded-lg transition-colors border font-medium flex items-center gap-1 ${
+              expandAllTurns && expanded
+                ? "bg-indigo-600/30 text-indigo-200 border-indigo-500/40"
+                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+            }`}
+            title="Expand or collapse detailed dialogue, background actions, and tools for all turns in this session"
+          >
+            <span>{expandAllTurns && expanded ? "⊟ Collapse Details" : "⊞ Detailed View"}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleCopySessionAll}
             className={`px-2.5 py-1 text-xs rounded-lg transition-colors border ${
               copiedSession
@@ -277,7 +295,12 @@ export function SessionAccordion({
           <div className="space-y-2.5">
             {promptsList.map((promptItem, pIdx) => (
               <div key={pIdx} id={`session-${session.sessionId}-turn-${pIdx + 1}`}>
-                <PromptListItem item={promptItem} index={pIdx} />
+                <PromptListItem
+                  key={`${session.sessionId}-${pIdx}-${expandAllTurns ? "expanded" : "compact"}`}
+                  item={promptItem}
+                  index={pIdx}
+                  defaultExpanded={expandAllTurns}
+                />
               </div>
             ))}
           </div>

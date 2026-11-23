@@ -440,10 +440,60 @@ export async function calculateProjectAnalytics(
                         ? "system"
                         : "user";
 
-                  if (text.length > 0) {
+                  // Check for tool_use or tool_result blocks in content array (Anthropic Claude Code format)
+                  let msgToolCalls:
+                    | Array<{
+                        id?: string;
+                        name: string;
+                        arguments?: string | Record<string, unknown>;
+                      }>
+                    | undefined = undefined;
+
+                  let toolNameStr: string | undefined = undefined;
+
+                  if (Array.isArray(msg.content)) {
+                    for (const part of msg.content) {
+                      if (part && typeof part === "object") {
+                        const pObj = part as Record<string, unknown>;
+                        if (pObj.type === "tool_use" && pObj.name) {
+                          if (!msgToolCalls) msgToolCalls = [];
+                          msgToolCalls.push({
+                            id: typeof pObj.id === "string" ? pObj.id : undefined,
+                            name: String(pObj.name),
+                            arguments: pObj.input as Record<string, unknown>,
+                          });
+                          toolNames.add(String(pObj.name));
+                        } else if (pObj.type === "tool_result") {
+                          toolNameStr =
+                            typeof pObj.tool_use_id === "string" ? pObj.tool_use_id : "tool";
+                        }
+                      }
+                    }
+                  }
+
+                  // Also check tool_calls property (OpenAI format)
+                  if (Array.isArray(msg.tool_calls)) {
+                    for (const tc of msg.tool_calls as ToolDefLike[]) {
+                      const fnName = tc?.function?.name || tc?.name;
+                      if (fnName) {
+                        if (!msgToolCalls) msgToolCalls = [];
+                        msgToolCalls.push({
+                          id: tc?.id,
+                          name: String(fnName),
+                          arguments: tc?.function?.arguments || tc?.arguments,
+                        });
+                        toolNames.add(String(fnName));
+                      }
+                    }
+                  }
+
+                  if (text.length > 0 || (msgToolCalls && msgToolCalls.length > 0)) {
                     chatMessagesList.push({
                       role: validRole,
                       content: text,
+                      toolCalls: msgToolCalls,
+                      toolName: toolNameStr,
+                      timestamp: row.timestamp || undefined,
                     });
                   }
                 }
@@ -476,11 +526,10 @@ export async function calculateProjectAnalytics(
               }
 
               if (typeof content === "string" && content.trim().length > 0) {
-                responseSummary =
-                  content.trim().slice(0, 500) + (content.length > 500 ? "..." : "");
+                responseSummary = content.trim();
               }
 
-              // Also check tool_calls in assistant response
+              // Also check tool_calls in assistant response (OpenAI choice message)
               const toolCalls = choiceMsg?.tool_calls;
               const parsedToolCalls: Array<{
                 id?: string;
@@ -496,6 +545,24 @@ export async function calculateProjectAnalytics(
                       name: String(fnName),
                       arguments: tc?.function?.arguments || tc?.arguments,
                     });
+                    toolNames.add(String(fnName));
+                  }
+                }
+              }
+
+              // Check Anthropic response content blocks for tool_use
+              if (Array.isArray(respBody.content)) {
+                for (const part of respBody.content) {
+                  if (part && typeof part === "object") {
+                    const pObj = part as Record<string, unknown>;
+                    if (pObj.type === "tool_use" && pObj.name) {
+                      parsedToolCalls.push({
+                        id: typeof pObj.id === "string" ? pObj.id : undefined,
+                        name: String(pObj.name),
+                        arguments: pObj.input as Record<string, unknown>,
+                      });
+                      toolNames.add(String(pObj.name));
+                    }
                   }
                 }
               }
@@ -515,15 +582,17 @@ export async function calculateProjectAnalytics(
                 });
               }
 
+              if (toolNames.size > 0) {
+                toolsUsed = Array.from(toolNames);
+              }
+
               // Also extract system prompt from request if available
               if (
                 !responseSummary &&
                 fileContent.requestBody?.system &&
                 typeof fileContent.requestBody.system === "string"
               ) {
-                responseSummary =
-                  fileContent.requestBody.system.trim().slice(0, 160) +
-                  (fileContent.requestBody.system.length > 160 ? "..." : "");
+                responseSummary = fileContent.requestBody.system.trim();
               }
             }
           } catch {

@@ -1467,4 +1467,16 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "info",
   },
+  {
+    key: "PROJECT_ANALYTICS_TRACKING_ENABLED",
+    label: "Project Analytics & Session Tracking",
+    description:
+      "Enable real-time extraction and tracking of workspace context, multi-turn chat sessions, tools, and background actions in OmniRoute call logs and analytics. When disabled, requests pass through without workspace linkage or detailed session aggregation.",
+    descriptionI18nKey: "featureFlagProjectAnalyticsTrackingEnabledDescription",
+    category: "runtime",
+    defaultValue: "true",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
 ];

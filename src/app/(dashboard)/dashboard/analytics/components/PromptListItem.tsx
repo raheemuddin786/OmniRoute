@@ -55,7 +55,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
   const [copiedSystem, setCopiedSystem] = useState<boolean>(false);
   const [copiedFull, setCopiedFull] = useState<boolean>(false);
   const [showReasoning, setShowReasoning] = useState<boolean>(false);
-  const [expandedToolIndex, setExpandedToolIndex] = useState<number | null>(null);
+  const [expandedToolIndex, setExpandedToolIndex] = useState<string | null>(null);
 
   // Defensive guards for prompt properties
   const safePrompt = typeof item?.prompt === "string" ? item.prompt : "";
@@ -342,14 +342,38 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                   <span className="text-slate-500">Chronological turn order</span>
                 </div>
                 {item.chatMessages!.map((msg, mIdx) => {
+                  const msgFormattedTime = msg.timestamp
+                    ? (() => {
+                        try {
+                          const d = new Date(msg.timestamp);
+                          return isNaN(d.getTime())
+                            ? ""
+                            : d.toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              });
+                        } catch {
+                          return "";
+                        }
+                      })()
+                    : "";
+
                   if (msg.role === "system") {
                     return (
                       <div
                         key={mIdx}
                         className="mx-auto max-w-xl p-2.5 rounded-lg bg-purple-950/20 border border-purple-800/40 text-purple-200 text-xs"
                       >
-                        <div className="flex items-center gap-1.5 font-semibold text-purple-300 text-[11px] mb-1">
-                          <span>🛡️</span> System Directive
+                        <div className="flex items-center justify-between text-[11px] mb-1 pb-1 border-b border-purple-800/30">
+                          <span className="flex items-center gap-1.5 font-semibold text-purple-300">
+                            <span>🛡️</span> System Directive
+                          </span>
+                          {msgFormattedTime && (
+                            <span className="text-purple-400/70 font-mono text-xs">
+                              {msgFormattedTime}
+                            </span>
+                          )}
                         </div>
                         <div className="font-mono text-xs whitespace-pre-wrap select-text leading-relaxed max-h-40 overflow-y-auto">
                           {msg.content}
@@ -367,9 +391,16 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                             <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
                               <span>👤</span> User
                             </span>
-                            <span className="text-indigo-400/80 font-mono text-[11px]">
-                              {msg.content.length} chars
-                            </span>
+                            <div className="flex items-center gap-2">
+                              {msgFormattedTime && (
+                                <span className="text-indigo-400/70 font-mono text-xs">
+                                  {msgFormattedTime}
+                                </span>
+                              )}
+                              <span className="text-indigo-400/80 font-mono text-[11px]">
+                                {msg.content.length} chars
+                              </span>
+                            </div>
                           </div>
                           <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
                             {intentContent}
@@ -393,9 +424,16 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                             <span className="font-mono flex items-center gap-1.5">
                               <span>🔧</span> Tool Output ({msg.toolName || "tool"})
                             </span>
-                            <span className="font-mono text-amber-400/70">
-                              {msg.content.length} chars
-                            </span>
+                            <div className="flex items-center gap-2">
+                              {msgFormattedTime && (
+                                <span className="text-amber-400/60 font-mono text-xs">
+                                  {msgFormattedTime}
+                                </span>
+                              )}
+                              <span className="font-mono text-amber-400/70">
+                                {msg.content.length} chars
+                              </span>
+                            </div>
                           </div>
                           <div className="font-mono text-xs text-amber-100 whitespace-pre-wrap select-text leading-relaxed max-h-48 overflow-y-auto bg-slate-950/60 p-2 rounded border border-amber-900/30">
                             {msg.content}
@@ -426,6 +464,11 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                               </span>
                             )}
                           </div>
+                          {msgFormattedTime && (
+                            <span className="text-slate-500 font-mono text-xs">
+                              {msgFormattedTime}
+                            </span>
+                          )}
                         </div>
 
                         {/* Collapsible Reasoning Block if present */}
@@ -456,7 +499,8 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                           <div className="space-y-1.5 pt-1">
                             <div className="flex flex-col gap-1.5">
                               {msg.toolCalls.map((tc, tcIdx) => {
-                                const isSelected = expandedToolIndex === tcIdx;
+                                const toolKey = `${mIdx}-${tcIdx}`;
+                                const isSelected = expandedToolIndex === toolKey;
                                 const rawArgs = tc.arguments;
                                 const parsedArgs: Record<string, unknown> | null =
                                   typeof rawArgs === "object" && rawArgs !== null
@@ -495,7 +539,7 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                                     <button
                                       type="button"
                                       onClick={() =>
-                                        setExpandedToolIndex(isSelected ? null : tcIdx)
+                                        setExpandedToolIndex(isSelected ? null : toolKey)
                                       }
                                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/70 text-xs font-mono text-slate-200 hover:text-white transition-all shadow-sm"
                                     >
