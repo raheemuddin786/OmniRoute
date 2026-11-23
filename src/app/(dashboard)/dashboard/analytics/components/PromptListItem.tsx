@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { copyToClipboard } from "@/shared/utils/clipboard";
 import { fmtCompact, extractUserIntent } from "@/shared/utils/formatting";
-import type { PromptPipelineStage } from "@/lib/db/projectRegistry";
+import type { PromptPipelineStage, ConversationChatMessage } from "@/lib/db/projectRegistry";
 
 export interface PromptItemData {
   id?: string;
@@ -24,6 +24,8 @@ export interface PromptItemData {
   filesModified?: string[];
   sessionTag?: string;
   responseSummary?: string;
+  responseReasoning?: string;
+  chatMessages?: ConversationChatMessage[];
   status?: number;
   provider?: string;
   comboName?: string;
@@ -52,6 +54,8 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
   const [copiedAgent, setCopiedAgent] = useState<boolean>(false);
   const [copiedSystem, setCopiedSystem] = useState<boolean>(false);
   const [copiedFull, setCopiedFull] = useState<boolean>(false);
+  const [showReasoning, setShowReasoning] = useState<boolean>(false);
+  const [expandedToolIndex, setExpandedToolIndex] = useState<number | null>(null);
 
   // Defensive guards for prompt properties
   const safePrompt = typeof item?.prompt === "string" ? item.prompt : "";
@@ -62,6 +66,11 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
     typeof item?.responseSummary === "string" && item.responseSummary.trim().length > 0
       ? item.responseSummary
       : undefined;
+  const safeResponseReasoning =
+    typeof item?.responseReasoning === "string" && item.responseReasoning.trim().length > 0
+      ? item.responseReasoning
+      : undefined;
+  const hasChatMessages = Array.isArray(item?.chatMessages) && item.chatMessages.length > 0;
   const safeTimestamp = typeof item?.timestamp === "string" && item.timestamp ? item.timestamp : "";
 
   // Extract clean one-liner preview — strip agent scaffolding first so the
@@ -321,134 +330,332 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
             </div>
           </div>
 
-          {/* TWO-SIDED CHAT BUBBLE VIEW */}
+          {/* TWO-SIDED CHAT BUBBLE VIEW OR MULTI-TURN CHAT THREAD */}
           <div className="space-y-3.5 pt-1">
-            {/* 1. USER MESSAGE BUBBLE */}
-            <div className="flex items-start gap-3 justify-end">
-              <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
-                <div className="flex items-center justify-between text-xs pb-1 border-b border-indigo-800/40">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
-                      <span>👤</span>
-                      User Prompt
-                    </span>
-                    {safeRawPrompt !== safePrompt && (
-                      <div className="inline-flex rounded-md border border-indigo-700/60 bg-indigo-900/60 p-0.5 text-[10px]">
+            {hasChatMessages ? (
+              /* Full Multi-Turn Interactive Conversation Thread */
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-[11px] text-slate-400 pb-1 border-b border-slate-800/50">
+                  <span className="font-mono">
+                    Thread View ({item.chatMessages!.length} messages)
+                  </span>
+                  <span className="text-slate-500">Chronological turn order</span>
+                </div>
+                {item.chatMessages!.map((msg, mIdx) => {
+                  if (msg.role === "system") {
+                    return (
+                      <div
+                        key={mIdx}
+                        className="mx-auto max-w-xl p-2.5 rounded-lg bg-purple-950/20 border border-purple-800/40 text-purple-200 text-xs"
+                      >
+                        <div className="flex items-center gap-1.5 font-semibold text-purple-300 text-[11px] mb-1">
+                          <span>🛡️</span> System Directive
+                        </div>
+                        <div className="font-mono text-xs whitespace-pre-wrap select-text leading-relaxed max-h-40 overflow-y-auto">
+                          {msg.content}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (msg.role === "user") {
+                    const intentContent = extractUserIntent(msg.content);
+                    return (
+                      <div key={mIdx} className="flex items-start gap-3 justify-end">
+                        <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
+                          <div className="flex items-center justify-between text-xs pb-1 border-b border-indigo-800/40">
+                            <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                              <span>👤</span> User
+                            </span>
+                            <span className="text-indigo-400/80 font-mono text-[11px]">
+                              {msg.content.length} chars
+                            </span>
+                          </div>
+                          <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
+                            {intentContent}
+                          </div>
+                        </div>
+                        <div
+                          className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-semibold shrink-0 mt-0.5 shadow-sm"
+                          title="User"
+                        >
+                          👤
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (msg.role === "tool") {
+                    return (
+                      <div key={mIdx} className="flex items-start gap-3 justify-start pl-11">
+                        <div className="flex-1 max-w-2xl bg-amber-950/20 border border-amber-800/40 rounded-xl p-2.5 shadow-sm space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] text-amber-300">
+                            <span className="font-mono flex items-center gap-1.5">
+                              <span>🔧</span> Tool Output ({msg.toolName || "tool"})
+                            </span>
+                            <span className="font-mono text-amber-400/70">
+                              {msg.content.length} chars
+                            </span>
+                          </div>
+                          <div className="font-mono text-xs text-amber-100 whitespace-pre-wrap select-text leading-relaxed max-h-48 overflow-y-auto bg-slate-950/60 p-2 rounded border border-amber-900/30">
+                            {msg.content}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Assistant role
+                  return (
+                    <div key={mIdx} className="flex items-start gap-3 justify-start">
+                      <div
+                        className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-200 text-xs shrink-0 mt-0.5 shadow-sm"
+                        title="AI Assistant"
+                      >
+                        🤖
+                      </div>
+                      <div className="flex-1 max-w-2xl bg-slate-900/90 border border-slate-800 rounded-2xl rounded-tl-sm p-3.5 shadow-sm space-y-2">
+                        <div className="flex items-center justify-between text-xs pb-1 border-b border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                              <span>🤖</span> Assistant
+                            </span>
+                            {item.model && (
+                              <span className="font-mono text-xs bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-slate-700">
+                                {item.model}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Collapsible Reasoning Block if present */}
+                        {msg.reasoningContent && (
+                          <div className="rounded-lg bg-indigo-950/30 border border-indigo-800/40 overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => setShowReasoning(!showReasoning)}
+                              className="w-full flex items-center justify-between p-2 text-xs text-indigo-300 hover:bg-indigo-900/20 transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5 font-medium">
+                                <span>🧠</span> Thought Process / Reasoning
+                              </span>
+                              <span className="font-mono text-[10px] text-indigo-400">
+                                {showReasoning ? "▾ Collapse" : "▸ Expand"}
+                              </span>
+                            </button>
+                            {showReasoning && (
+                              <div className="p-2.5 pt-1 border-t border-indigo-800/30 font-mono text-xs text-indigo-200 whitespace-pre-wrap select-text leading-relaxed max-h-60 overflow-y-auto bg-slate-950/50">
+                                {msg.reasoningContent}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Tool Calls execution list if present */}
+                        {msg.toolCalls && msg.toolCalls.length > 0 && (
+                          <div className="space-y-1.5 pt-1">
+                            <div className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
+                              <span>🛠️</span> Invocations ({msg.toolCalls.length}):
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {msg.toolCalls.map((tc, tcIdx) => {
+                                const isSelected = expandedToolIndex === tcIdx;
+                                return (
+                                  <div key={tcIdx} className="w-full">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedToolIndex(isSelected ? null : tcIdx)
+                                      }
+                                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-amber-300 transition-colors"
+                                    >
+                                      <span>⚡</span>
+                                      <span>{tc.name}</span>
+                                      <span className="text-[10px] text-slate-400">
+                                        {isSelected ? "▲" : "▼"}
+                                      </span>
+                                    </button>
+                                    {isSelected && tc.arguments && (
+                                      <pre className="mt-1.5 p-2 rounded bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 whitespace-pre-wrap overflow-x-auto">
+                                        {typeof tc.arguments === "object"
+                                          ? JSON.stringify(tc.arguments, null, 2)
+                                          : String(tc.arguments)}
+                                      </pre>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Assistant text content */}
+                        {msg.content ? (
+                          <div className="font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
+                            {msg.content}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Fallback Single-Turn Request / Response Bubble View */
+              <>
+                {/* 1. USER MESSAGE BUBBLE */}
+                <div className="flex items-start gap-3 justify-end">
+                  <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
+                    <div className="flex items-center justify-between text-xs pb-1 border-b border-indigo-800/40">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                          <span>👤</span>
+                          User Prompt
+                        </span>
+                        {safeRawPrompt !== safePrompt && (
+                          <div className="inline-flex rounded-md border border-indigo-700/60 bg-indigo-900/60 p-0.5 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => setPromptViewMode("clean")}
+                              className={`px-1.5 py-0.5 rounded transition-colors ${
+                                promptViewMode === "clean"
+                                  ? "bg-indigo-600 text-white font-medium"
+                                  : "text-indigo-300 hover:text-white"
+                              }`}
+                            >
+                              Intent
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPromptViewMode("raw")}
+                              className={`px-1.5 py-0.5 rounded transition-colors ${
+                                promptViewMode === "raw"
+                                  ? "bg-indigo-600 text-white font-medium"
+                                  : "text-indigo-300 hover:text-white"
+                              }`}
+                            >
+                              Raw Request
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-indigo-400/80 font-mono text-xs">
+                          {(promptViewMode === "raw" ? safeRawPrompt : safePrompt).length} chars
+                        </span>
                         <button
                           type="button"
-                          onClick={() => setPromptViewMode("clean")}
-                          className={`px-1.5 py-0.5 rounded transition-colors ${
-                            promptViewMode === "clean"
-                              ? "bg-indigo-600 text-white font-medium"
-                              : "text-indigo-300 hover:text-white"
-                          }`}
+                          onClick={handleCopyUserPrompt}
+                          className="text-xs text-indigo-300 hover:text-white transition-colors"
+                          title={
+                            promptViewMode === "raw" ? "Copy raw prompt" : "Copy extracted prompt"
+                          }
                         >
-                          Intent
+                          {promptViewMode === "raw"
+                            ? copiedRaw
+                              ? "✓ Copied Raw"
+                              : "Copy Raw"
+                            : copiedUser
+                              ? "✓ Copied"
+                              : "Copy"}
                         </button>
+                      </div>
+                    </div>
+                    <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
+                      {promptViewMode === "raw" ? safeRawPrompt : safePrompt}
+                    </div>
+                  </div>
+                  <div
+                    className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-semibold shrink-0 mt-0.5 shadow-sm"
+                    title="User"
+                  >
+                    👤
+                  </div>
+                </div>
+
+                {/* 2. ASSISTANT / AGENT RESPONSE BUBBLE */}
+                <div className="flex items-start gap-3 justify-start">
+                  <div
+                    className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-200 text-xs shrink-0 mt-0.5 shadow-sm"
+                    title="AI Assistant"
+                  >
+                    🤖
+                  </div>
+                  <div className="flex-1 max-w-2xl bg-slate-900/90 border border-slate-800 rounded-2xl rounded-tl-sm p-3.5 shadow-sm space-y-2">
+                    <div className="flex items-center justify-between text-xs pb-1 border-b border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                          <span>🤖</span>
+                          Assistant Response
+                        </span>
+                        {item.model && (
+                          <span className="font-mono text-xs bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-slate-700">
+                            {item.model}
+                          </span>
+                        )}
+                      </div>
+                      {safeResponseSummary && (
                         <button
                           type="button"
-                          onClick={() => setPromptViewMode("raw")}
-                          className={`px-1.5 py-0.5 rounded transition-colors ${
-                            promptViewMode === "raw"
-                              ? "bg-indigo-600 text-white font-medium"
-                              : "text-indigo-300 hover:text-white"
-                          }`}
+                          onClick={handleCopyAgentResponse}
+                          className="text-xs text-slate-400 hover:text-slate-200 transition-colors"
+                          title="Copy agent response"
                         >
-                          Raw Request
+                          {copiedAgent ? "✓ Copied" : "Copy"}
                         </button>
+                      )}
+                    </div>
+
+                    {/* Thinking / Reasoning Section if present */}
+                    {safeResponseReasoning && (
+                      <div className="rounded-lg bg-indigo-950/30 border border-indigo-800/40 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setShowReasoning(!showReasoning)}
+                          className="w-full flex items-center justify-between p-2 text-xs text-indigo-300 hover:bg-indigo-900/20 transition-colors"
+                        >
+                          <span className="flex items-center gap-1.5 font-medium">
+                            <span>🧠</span> Thought Process / Reasoning
+                          </span>
+                          <span className="font-mono text-[10px] text-indigo-400">
+                            {showReasoning ? "▾ Collapse" : "▸ Expand"}
+                          </span>
+                        </button>
+                        {showReasoning && (
+                          <div className="p-2.5 pt-1 border-t border-indigo-800/30 font-mono text-xs text-indigo-200 whitespace-pre-wrap select-text leading-relaxed max-h-60 overflow-y-auto bg-slate-950/50">
+                            {safeResponseReasoning}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {safeResponseSummary ? (
+                      <div className="font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
+                        {safeResponseSummary}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-400 italic py-1">
+                        Response stream completed ({item.durationMs || 0}ms latency, HTTP{" "}
+                        {item.status ?? 200}).
+                      </div>
+                    )}
+
+                    {/* Error Summary Callout if failed */}
+                    {item.errorSummary && (
+                      <div className="mt-2 p-2.5 rounded-lg bg-rose-950/40 border border-rose-800/50 text-rose-200 text-xs flex items-start gap-2">
+                        <span className="text-sm shrink-0">⚠️</span>
+                        <div>
+                          <span className="font-semibold text-rose-300 block">
+                            {item.errorType ? `Error (${item.errorType}):` : "Execution Error:"}
+                          </span>
+                          <p className="mt-0.5 font-mono text-xs">{item.errorSummary}</p>
+                        </div>
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-indigo-400/80 font-mono text-xs">
-                      {(promptViewMode === "raw" ? safeRawPrompt : safePrompt).length} chars
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCopyUserPrompt}
-                      className="text-xs text-indigo-300 hover:text-white transition-colors"
-                      title={promptViewMode === "raw" ? "Copy raw prompt" : "Copy extracted prompt"}
-                    >
-                      {promptViewMode === "raw"
-                        ? copiedRaw
-                          ? "✓ Copied Raw"
-                          : "Copy Raw"
-                        : copiedUser
-                          ? "✓ Copied"
-                          : "Copy"}
-                    </button>
-                  </div>
                 </div>
-                <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
-                  {promptViewMode === "raw" ? safeRawPrompt : safePrompt}
-                </div>
-              </div>
-              <div
-                className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-semibold shrink-0 mt-0.5 shadow-sm"
-                title="User"
-              >
-                👤
-              </div>
-            </div>
-
-            {/* 2. ASSISTANT / AGENT RESPONSE BUBBLE */}
-            <div className="flex items-start gap-3 justify-start">
-              <div
-                className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-200 text-xs shrink-0 mt-0.5 shadow-sm"
-                title="AI Assistant"
-              >
-                🤖
-              </div>
-              <div className="flex-1 max-w-2xl bg-slate-900/90 border border-slate-800 rounded-2xl rounded-tl-sm p-3.5 shadow-sm space-y-2">
-                <div className="flex items-center justify-between text-xs pb-1 border-b border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-slate-200 flex items-center gap-1.5">
-                      <span>🤖</span>
-                      Assistant Response
-                    </span>
-                    {item.model && (
-                      <span className="font-mono text-xs bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-slate-700">
-                        {item.model}
-                      </span>
-                    )}
-                  </div>
-                  {safeResponseSummary && (
-                    <button
-                      type="button"
-                      onClick={handleCopyAgentResponse}
-                      className="text-xs text-slate-400 hover:text-slate-200 transition-colors"
-                      title="Copy agent response"
-                    >
-                      {copiedAgent ? "✓ Copied" : "Copy"}
-                    </button>
-                  )}
-                </div>
-
-                {safeResponseSummary ? (
-                  <div className="font-mono text-xs text-slate-200 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
-                    {safeResponseSummary}
-                  </div>
-                ) : (
-                  <div className="text-xs text-slate-400 italic py-1">
-                    Response stream completed ({item.durationMs || 0}ms latency, HTTP{" "}
-                    {item.status ?? 200}).
-                  </div>
-                )}
-
-                {/* Error Summary Callout if failed */}
-                {item.errorSummary && (
-                  <div className="mt-2 p-2.5 rounded-lg bg-rose-950/40 border border-rose-800/50 text-rose-200 text-xs flex items-start gap-2">
-                    <span className="text-sm shrink-0">⚠️</span>
-                    <div>
-                      <span className="font-semibold text-rose-300 block">
-                        {item.errorType ? `Error (${item.errorType}):` : "Execution Error:"}
-                      </span>
-                      <p className="mt-0.5 font-mono text-xs">{item.errorSummary}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+              </>
+            )}
           </div>
 
           {/* 3. PIPELINE & TECHNICAL EXECUTION DRAWER */}

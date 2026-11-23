@@ -29,6 +29,8 @@ interface PromptAnalyticsTabProps {
     filesModified?: string[];
     sessionTag?: string;
     responseSummary?: string;
+    responseReasoning?: string;
+    chatMessages?: import("@/lib/db/projectRegistry").ConversationChatMessage[];
     provider?: string;
     comboName?: string;
     errorType?: string | null;
@@ -104,6 +106,8 @@ export function PromptAnalyticsTab({
           rp.filesModified && rp.filesModified.length > 0 ? rp.filesModified : undefined,
         sessionTag: rp.sessionTag,
         responseSummary: rp.responseSummary,
+        responseReasoning: rp.responseReasoning,
+        chatMessages: rp.chatMessages,
         provider: rp.provider,
         comboName: rp.comboName,
         errorType: rp.errorType,

@@ -67,6 +67,20 @@ export interface PromptPipelineStage {
   details?: Record<string, unknown> | string;
 }
 
+export interface ConversationChatMessage {
+  id?: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  reasoningContent?: string;
+  toolCalls?: Array<{
+    id?: string;
+    name: string;
+    arguments?: string | Record<string, unknown>;
+  }>;
+  toolName?: string;
+  timestamp?: string;
+}
+
 export interface RecentPromptRecord {
   prompt: string;
   rawPrompt?: string;
@@ -86,6 +100,8 @@ export interface RecentPromptRecord {
   filesModified?: string[];
   sessionTag?: string;
   responseSummary?: string;
+  responseReasoning?: string;
+  chatMessages?: ConversationChatMessage[];
   provider?: string;
   comboName?: string;
   errorType?: string | null;

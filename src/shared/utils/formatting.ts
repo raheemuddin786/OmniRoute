@@ -102,10 +102,15 @@ export function formatApiKeyLabel(
  * @returns {string}
  */
 export function fmtCompact(n: number | null | undefined) {
-  if (n && n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n && n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n && n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return new Intl.NumberFormat().format(n || 0);
+  if (n === null || n === undefined || isNaN(n)) return "0";
+  if (n === 0) return "0";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  // Rollover thresholds: abs / 1e6 >= 0.99995 rounds to 1.0M with toFixed(1)
+  if (abs >= 999_950_000) return `${sign}${(abs / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 999_950) return `${sign}${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
+  return `${sign}${new Intl.NumberFormat().format(abs)}`;
 }
 
 /**
@@ -154,12 +159,16 @@ const SCAFFOLDING_PREFIXES = [
   "<system-reminder>",
   "</system-reminder>",
   "IMPORTANT: These instructions",
+  "EXISTING INTENT LEDGER:",
+  "NEW USER MESSAGE:",
+  "<pasted_content",
+  "</pasted_content>",
 ];
 
 /**
  * Extract a clean user intent line from prompt text by stripping leading
  * agent-framework scaffolding (e.g. "Memory context: ...", "PROJECT CONTEXT...",
- * or embedded "USER PROMPT:\n..."). Returns the genuine human prompt.
+ * "NEW USER MESSAGE:", or embedded "USER PROMPT:\n..."). Returns the genuine human prompt.
  * Never mutates the stored source — display-only filtering.
  *
  * @param {string} prompt - Raw prompt text (may contain scaffolding prefixes)
@@ -168,11 +177,38 @@ const SCAFFOLDING_PREFIXES = [
 export function extractUserIntent(prompt: string): string {
   if (!prompt || typeof prompt !== "string") return "";
 
-  // 1. Check for explicit "USER PROMPT:" marker injected by frameworks
-  const userPromptMatch = prompt.match(/\bUSER PROMPT:\s*([\s\S]+)$/i);
-  if (userPromptMatch && userPromptMatch[1]) {
-    const afterMarker = userPromptMatch[1].trim();
-    // In case there is an embedded <system-reminder> right after USER PROMPT, strip it
+  const trimmedPrompt = prompt.trim();
+
+  // If prompt is a raw JSON payload containing upstreamHttp metadata (e.g. proxy telemetry),
+  // summarize the logical HTTP transaction rather than displaying raw JSON braces in preview.
+  if (trimmedPrompt.startsWith("{") && trimmedPrompt.includes('"upstreamHttp"')) {
+    try {
+      const parsed = JSON.parse(trimmedPrompt) as {
+        upstreamHttp?: {
+          send?: {
+            method?: string;
+            provider?: string;
+            model?: string;
+            status?: number;
+            durationMs?: number;
+          };
+        };
+      };
+      if (parsed.upstreamHttp?.send) {
+        const s = parsed.upstreamHttp.send;
+        return `[HTTP Call] ${s.method || "POST"} ${s.provider || "provider"}/${s.model || "model"} (${s.status || 200}, ${s.durationMs || 0}ms)`;
+      }
+    } catch {
+      // Fall through to general processing
+    }
+  }
+
+  // 1. Check for explicit "NEW USER MESSAGE:" or "USER PROMPT:" marker injected by frameworks
+  const explicitMarkerMatch = prompt.match(
+    /\b(?:NEW USER MESSAGE|USER PROMPT):\s*([\s\S]+?)(?=(?:<pasted_content|<\/pasted_content>|$))/i
+  );
+  if (explicitMarkerMatch && explicitMarkerMatch[1]) {
+    const afterMarker = explicitMarkerMatch[1].trim();
     const cleanLines = afterMarker
       .split("\n")
       .map((l) => l.trim())

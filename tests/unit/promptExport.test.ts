@@ -30,7 +30,7 @@ test("generatePromptsCSV outputs valid header and escaped CSV rows", () => {
   const csv = generatePromptsCSV(records);
   assert.ok(
     csv.includes(
-      "Timestamp,Prompt Text,System Prompt,Project,Model,Tokens In,Tokens Out,Estimated Cost (USD),Tools Used"
+      "Timestamp,Prompt Text (Extracted Intent),Raw Client Prompt,System Prompt,Project,Model,Tokens In,Tokens Out,Estimated Cost (USD),Tools Used,Pipeline Stages"
     )
   );
   assert.ok(csv.includes("You are a helpful coding assistant."));

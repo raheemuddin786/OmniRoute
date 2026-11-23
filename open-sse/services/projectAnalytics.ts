@@ -360,6 +360,21 @@ export async function calculateProjectAnalytics(
               return "";
             };
 
+            let responseReasoning: string | undefined = undefined;
+            const chatMessagesList: Array<{
+              id?: string;
+              role: "system" | "user" | "assistant" | "tool";
+              content: string;
+              reasoningContent?: string;
+              toolCalls?: Array<{
+                id?: string;
+                name: string;
+                arguments?: string | Record<string, unknown>;
+              }>;
+              toolName?: string;
+              timestamp?: string;
+            }> = [];
+
             // 1. Anthropic Claude format: body.system (string or array of text blocks)
             if (body && typeof body === "object") {
               const rec = body as Record<string, unknown>;
@@ -367,6 +382,10 @@ export async function calculateProjectAnalytics(
                 const sys = extractTextFromParts(rec.system).trim();
                 if (sys.length > 0) {
                   systemPromptText = sys;
+                  chatMessagesList.push({
+                    role: "system",
+                    content: sys,
+                  });
                 }
               }
 
@@ -380,6 +399,10 @@ export async function calculateProjectAnalytics(
                 const sys = extractTextFromParts(parts).trim();
                 if (sys.length > 0) {
                   systemPromptText = sys;
+                  chatMessagesList.push({
+                    role: "system",
+                    content: sys,
+                  });
                 }
               }
 
@@ -397,11 +420,26 @@ export async function calculateProjectAnalytics(
                 for (const msg of rawMsgs) {
                   if (!msg || typeof msg !== "object") continue;
                   const role = String(msg.role || "").toLowerCase();
+                  const text = extractTextFromParts(msg.content).trim();
                   if (role === "system" || role === "developer") {
-                    const text = extractTextFromParts(msg.content).trim();
                     if (text.length > 0 && !sysParts.includes(text)) {
                       sysParts.push(text);
                     }
+                  }
+
+                  // Accumulate into chronological chat messages
+                  const validRole =
+                    role === "user" || role === "assistant" || role === "tool" || role === "system"
+                      ? (role as "system" | "user" | "assistant" | "tool")
+                      : role === "developer"
+                        ? "system"
+                        : "user";
+
+                  if (text.length > 0) {
+                    chatMessagesList.push({
+                      role: validRole,
+                      content: text,
+                    });
                   }
                 }
                 if (sysParts.length > 0) {
@@ -420,15 +458,58 @@ export async function calculateProjectAnalytics(
               }
             }
 
-            // Extract response summary from artifact responseBody if present
+            // Extract response summary & reasoning from artifact responseBody if present
             const respBody = fileContent.responseBody;
             if (respBody) {
               const choice = respBody.choices?.[0];
-              const content = choice?.message?.content || respBody.content?.[0]?.text;
+              const choiceMsg = choice?.message;
+              const content = choiceMsg?.content || respBody.content?.[0]?.text;
+              const reasoning = choiceMsg?.reasoning_content || choiceMsg?.reasoning;
+
+              if (typeof reasoning === "string" && reasoning.trim().length > 0) {
+                responseReasoning = reasoning.trim();
+              }
+
               if (typeof content === "string" && content.trim().length > 0) {
                 responseSummary =
-                  content.trim().slice(0, 160) + (content.length > 160 ? "..." : "");
+                  content.trim().slice(0, 500) + (content.length > 500 ? "..." : "");
               }
+
+              // Also check tool_calls in assistant response
+              const toolCalls = choiceMsg?.tool_calls;
+              const parsedToolCalls: Array<{
+                id?: string;
+                name: string;
+                arguments?: string | Record<string, unknown>;
+              }> = [];
+              if (Array.isArray(toolCalls)) {
+                for (const tc of toolCalls) {
+                  const fnName = tc?.function?.name || tc?.name;
+                  if (fnName) {
+                    parsedToolCalls.push({
+                      id: tc?.id,
+                      name: String(fnName),
+                      arguments: tc?.function?.arguments || tc?.arguments,
+                    });
+                  }
+                }
+              }
+
+              // If assistant replied or used tools/reasoning, append assistant turn
+              if (
+                (content && typeof content === "string") ||
+                responseReasoning ||
+                parsedToolCalls.length > 0
+              ) {
+                chatMessagesList.push({
+                  role: "assistant",
+                  content: typeof content === "string" ? content : "",
+                  reasoningContent: responseReasoning,
+                  toolCalls: parsedToolCalls.length > 0 ? parsedToolCalls : undefined,
+                  timestamp: row.timestamp || undefined,
+                });
+              }
+
               // Also extract system prompt from request if available
               if (
                 !responseSummary &&
@@ -601,6 +682,8 @@ export async function calculateProjectAnalytics(
             sessionTag: row.session_tag || undefined,
             responseSummary:
               responseSummary || (row.error_summary ? `Error: ${row.error_summary}` : undefined),
+            responseReasoning,
+            chatMessages: chatMessagesList.length > 0 ? chatMessagesList : undefined,
             provider: row.provider || undefined,
             comboName: row.combo_name || undefined,
             errorType: row.error_type,
