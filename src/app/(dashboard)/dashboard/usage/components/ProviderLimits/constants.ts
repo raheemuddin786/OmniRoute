@@ -6,6 +6,7 @@ export const PROVIDER_LABEL: Record<string, string> = {
   "amazon-q": "Amazon Q",
   codex: "OpenAI Codex",
   claude: "Claude Code",
+  "claude-web": "Claude Web",
   glm: "GLM (Z.AI)",
   zai: "Z.AI",
   glmt: "GLM Thinking",
