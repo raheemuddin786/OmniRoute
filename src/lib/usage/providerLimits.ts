@@ -74,6 +74,7 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
   "glmt",
   "opencode-go",
   "ollama-cloud",
+  "claude-web",
   "minimax",
   "minimax-cn",
   "crof",

@@ -174,6 +174,10 @@ export async function getUsageForProvider(
       return await getClaudeUsage(accessToken, id || "", {
         forceRefresh: options.forceRefresh === true,
       });
+    case "claude-web":
+      return await (
+        await import("./usage/claudeWeb.ts")
+      ).getClaudeWebUsage(id || "", connection as unknown as Record<string, unknown>);
     case "codex":
       // The Codex leaf gates at the actual fetch boundary, after proxy
       // resolution, so lazy setup cannot consume part of the spacing interval.

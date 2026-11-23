@@ -25,6 +25,7 @@ export const USAGE_FETCHER_PROVIDERS = [
   "antigravity",
   "agy",
   "claude",
+  "claude-web",
   "anthropic",
   "codex",
   "cursor",

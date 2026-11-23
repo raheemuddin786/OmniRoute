@@ -252,7 +252,7 @@ export async function calculateProjectAnalytics(
       FROM call_logs cl
       LEFT JOIN request_cost_ledger rcl ON cl.id = rcl.request_id
       ${detailedWhereSql}
-      ORDER BY cl.id DESC
+      ORDER BY cl.timestamp DESC
       LIMIT 250
     `;
     const logRows = (db.prepare(detailedLogsSql).all(...params) ?? []) as DetailedCallLogRow[];

@@ -546,7 +546,7 @@ function parseProviderQuotas(providerId: string, data: any) {
   if (GLM_FAMILY_PROVIDERS.includes(providerId)) return parseGlmFamily(data);
   if (providerId === "antigravity" || providerId === "agy") return parseAntigravity(data);
   if (providerId === "codex") return parseCodex(data);
-  if (providerId === "claude") return parseClaude(data);
+  if (providerId === "claude" || providerId === "claude-web") return parseClaude(data);
   if (providerId === "deepseek") return parseDeepseek(data);
   if (providerId === "kilocode") return parseKilocode(data);
   // TokenRouter shares the `quotas.balance` USD credits-row shape (usage/tokenrouter.ts).
