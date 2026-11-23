@@ -5,7 +5,7 @@ import { PromptListItem, type PromptItemData } from "../components/PromptListIte
 import { SessionAccordion, type SessionGroupData } from "../components/SessionAccordion";
 import { copyToClipboard } from "@/shared/utils/clipboard";
 import { generatePromptsCSV, generatePromptsJSON, downloadFile } from "@/shared/utils/promptExport";
-import { fmtCompact } from "@/shared/utils/formatting";
+import { fmtCompact, extractUserIntent } from "@/shared/utils/formatting";
 import { normalizeForSearch } from "@/shared/utils/turkishText";
 import type { PromptPipelineStage } from "@/lib/db/projectRegistry";
 
