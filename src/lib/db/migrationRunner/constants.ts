@@ -764,7 +764,19 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toName: "spb_session_branching",
   },
   {
+    fromVersion: "226",
+    fromName: "spb_session_branching",
+    toVersion: "20261120100002",
+    toName: "spb_session_branching",
+  },
+  {
     fromVersion: "218",
+    fromName: "project_registry_analytics_in_memory_relevance",
+    toVersion: "20261120100003",
+    toName: "project_registry_analytics_in_memory_relevance",
+  },
+  {
+    fromVersion: "231",
     fromName: "project_registry_analytics_in_memory_relevance",
     toVersion: "20261120100003",
     toName: "project_registry_analytics_in_memory_relevance",
@@ -782,6 +794,12 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toName: "spb_checkpoints_guidance_contract",
   },
   {
+    fromVersion: "228",
+    fromName: "spb_checkpoints_guidance_contract",
+    toVersion: "20261120100004",
+    toName: "spb_checkpoints_guidance_contract",
+  },
+  {
     fromVersion: "236",
     fromName: "spb_checkpoints_guidance_contract",
     toVersion: "20261120100004",
@@ -789,6 +807,12 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
   },
   {
     fromVersion: "216",
+    fromName: "spb_stagnation_telemetry",
+    toVersion: "20261120100005",
+    toName: "spb_stagnation_telemetry",
+  },
+  {
+    fromVersion: "229",
     fromName: "spb_stagnation_telemetry",
     toVersion: "20261120100005",
     toName: "spb_stagnation_telemetry",
@@ -806,6 +830,12 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toName: "project_registry_and_analytics",
   },
   {
+    fromVersion: "230",
+    fromName: "project_registry_and_analytics",
+    toVersion: "20261120100006",
+    toName: "project_registry_and_analytics",
+  },
+  {
     fromVersion: "238",
     fromName: "project_registry_and_analytics",
     toVersion: "20261120100006",
@@ -813,6 +843,12 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
   },
   {
     fromVersion: "220",
+    fromName: "project_registry_provenance_status",
+    toVersion: "20261120100007",
+    toName: "project_registry_provenance_status",
+  },
+  {
+    fromVersion: "233",
     fromName: "project_registry_provenance_status",
     toVersion: "20261120100007",
     toName: "project_registry_provenance_status",
