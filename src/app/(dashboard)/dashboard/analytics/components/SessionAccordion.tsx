@@ -71,8 +71,9 @@ export function SessionAccordion({
     firstLinePreview.length > 80 ? `${firstLinePreview.slice(0, 80)}...` : firstLinePreview;
 
   // Calculate session-level cache savings
-  const totalInTokens = session.prompts.reduce((sum, p) => sum + (p.tokensIn || 0), 0);
-  const totalCacheTokens = session.prompts.reduce((sum, p) => sum + (p.tokensCacheRead || 0), 0);
+  const promptsList = Array.isArray(session?.prompts) ? session.prompts : [];
+  const totalInTokens = promptsList.reduce((sum, p) => sum + (p?.tokensIn || 0), 0);
+  const totalCacheTokens = promptsList.reduce((sum, p) => sum + (p?.tokensCacheRead || 0), 0);
   const cacheRatioPct =
     totalInTokens > 0 && totalCacheTokens > 0
       ? Math.min(100, Math.round((totalCacheTokens / (totalInTokens + totalCacheTokens)) * 100))
@@ -80,7 +81,7 @@ export function SessionAccordion({
 
   const handleCopySessionAll = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const allText = session.prompts
+    const allText = promptsList
       .map((p, idx) => {
         const sys = typeof p.systemPrompt === "string" ? p.systemPrompt : "";
         const usr = typeof p.prompt === "string" ? p.prompt : "";
@@ -100,7 +101,7 @@ export function SessionAccordion({
 
   const handleExportSession = (e: React.MouseEvent, format: "json" | "csv") => {
     e.stopPropagation();
-    const exportRecords: PromptExportRecord[] = session.prompts.map((p) => ({
+    const exportRecords: PromptExportRecord[] = promptsList.map((p) => ({
       prompt: typeof p.prompt === "string" ? p.prompt : "",
       systemPrompt: typeof p.systemPrompt === "string" ? p.systemPrompt : undefined,
       timestamp: typeof p.timestamp === "string" ? p.timestamp : "",
@@ -113,7 +114,9 @@ export function SessionAccordion({
     }));
 
     const dateStr = new Date().toISOString().slice(0, 10);
-    const cleanSessionName = session.sessionId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 16);
+    const cleanSessionName = (session.sessionId || "session")
+      .replace(/[^a-zA-Z0-9_-]/g, "")
+      .slice(0, 16);
 
     if (format === "csv") {
       const csv = generatePromptsCSV(exportRecords);
@@ -247,16 +250,16 @@ export function SessionAccordion({
                 Sequential Conversation Flow
               </span>
               <span className="text-xs text-slate-500 bg-slate-800/60 px-2 py-0.5 rounded-full">
-                Chronological Order (Turn #1 → Turn #{session.prompts.length})
+                Chronological Order (Turn #1 → Turn #{promptsList.length})
               </span>
             </div>
             <div className="flex items-center gap-2">
-              {session.prompts.length > 5 && (
+              {promptsList.length > 5 && (
                 <button
                   type="button"
                   onClick={() => {
                     const el = document.getElementById(
-                      `session-${session.sessionId}-turn-${session.prompts.length}`
+                      `session-${session.sessionId}-turn-${promptsList.length}`
                     );
                     el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                   }}
@@ -266,13 +269,13 @@ export function SessionAccordion({
                 </button>
               )}
               <span className="text-xs font-mono text-slate-500">
-                {session.prompts.length} user prompt turn{session.prompts.length !== 1 ? "s" : ""}
+                {promptsList.length} user prompt turn{promptsList.length !== 1 ? "s" : ""}
               </span>
             </div>
           </div>
 
           <div className="space-y-2.5">
-            {session.prompts.map((promptItem, pIdx) => (
+            {promptsList.map((promptItem, pIdx) => (
               <div key={pIdx} id={`session-${session.sessionId}-turn-${pIdx + 1}`}>
                 <PromptListItem item={promptItem} index={pIdx} />
               </div>

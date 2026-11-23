@@ -1185,6 +1185,7 @@
     "serverDisconnectedMsg": "The proxy server has been stopped or is restarting.",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
+    "toggleSidebar": "Toggle sidebar",
     "createTheme": "Create theme",
     "chooseColor": "Pick one color",
     "cliToolsShort": "Tools",
