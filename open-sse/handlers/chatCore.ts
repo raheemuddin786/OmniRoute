@@ -3186,6 +3186,20 @@ async function handleChatCoreInner({
             label: "GCP project required",
             suffix: "routing to other accounts (enter a Project ID to restore)",
           });
+        } else if (errorType === PROVIDER_ERROR_TYPES.FINGERPRINT_REJECTION) {
+          // Cloudflare challenge or fingerprint rejection: non-terminal transient edge block,
+          // never a credential ban. Exclude connection briefly so combos fall over to other accounts.
+          const cfCooldownMs = retryAfterMs || COOLDOWN_MS.rateLimit;
+          await excludeConnectionForCooldown({
+            connectionId: errorConnectionId,
+            errorType,
+            message: persistentMessage,
+            statusCode,
+            cooldownMs: cfCooldownMs,
+            skipCooldownForProbe: true,
+            label: "Cloudflare challenge/fingerprint rejection",
+            suffix: "connection stays active, falling over to other accounts",
+          });
         } else if (errorType === PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND) {
           const notFoundCooldownMs = COOLDOWN_MS.notFound;
           if (!(await shouldIsolateProbeFailures())) {

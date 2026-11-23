@@ -314,6 +314,10 @@ const CLOUDFLARE_CHALLENGE_MARKERS = [
   "cdn-cgi/challenge-platform",
   'id="challenge-error-text"',
   String.raw`id=\"challenge-error-text\"`,
+  "cf_mitigated_challenge",
+  "cloudflare browser challenge",
+  "<title>just a moment",
+  "<title>attention required",
 ] as const;
 
 export function isCloudflareChallengeInterstitial(errorText: string): boolean {
@@ -327,6 +331,8 @@ export function isCloudflareFingerprintRejection(errorText: string): boolean {
     CLOUDFLARE_1010_REGEX.test(text) ||
     text.includes("browser_signature_banned") ||
     text.includes("fingerprint_rejection") ||
+    text.includes("cloudflare browser challenge") ||
+    text.includes("cf_mitigated_challenge") ||
     isCloudflareChallengeInterstitial(text)
   );
 }

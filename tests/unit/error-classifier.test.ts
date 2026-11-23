@@ -505,6 +505,27 @@ test("isCloudflareChallengeInterstitial: prose mentioning a challenge is NOT a m
   assert.equal(isCloudflareChallengeInterstitial(""), false, "empty body");
 });
 
+test("classifyProviderError: Claude Web Cloudflare challenge => FINGERPRINT_REJECTION, not FORBIDDEN", () => {
+  const syntheticError = JSON.stringify({
+    error: {
+      message:
+        "[claude-web/claude-sonnet-5-5] Claude Web returned a Cloudflare browser challenge (reset after 16s)",
+      type: "cloudflare_challenge",
+      code: "cf_mitigated_challenge",
+    },
+  });
+  const result = classifyProviderError(403, syntheticError, "claude-web");
+  assert.equal(result, PROVIDER_ERROR_TYPES.FINGERPRINT_REJECTION);
+  assert.notEqual(result, PROVIDER_ERROR_TYPES.FORBIDDEN);
+});
+
+test("classifyProviderError: Claude Web <title>Just a moment 403 HTML => FINGERPRINT_REJECTION", () => {
+  const htmlBody =
+    "<html><head><title>Just a moment...</title></head><body>cf challenge</body></html>";
+  const result = classifyProviderError(403, htmlBody, "claude-web");
+  assert.equal(result, PROVIDER_ERROR_TYPES.FINGERPRINT_REJECTION);
+});
+
 test("classifyProviderError: the terminal 403 paths are unchanged by the challenge branch", () => {
   // Regression guard for the neighbouring carve-outs: a genuine permission 403
   // still bans, and ChatGPT Web's Sentinel/Turnstile 403 (#8813) stays FORBIDDEN.
