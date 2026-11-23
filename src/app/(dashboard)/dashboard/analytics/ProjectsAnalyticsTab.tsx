@@ -440,752 +440,699 @@ export function ProjectsAnalyticsTab() {
         </div>
       )}
 
-      {/* Main Two-Panel Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Panel: Tree & Project List (4 cols) */}
-        <div className="lg:col-span-4 space-y-4">
-          <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800/80">
-              <div className="flex items-center space-x-2">
-                <span className="text-lg">🌿</span>
-                <h3 className="font-semibold text-slate-100">Workspaces & Projects</h3>
-              </div>
-              <div className="flex items-center space-x-1.5">
+      {/* Top Workspace & Project Selector (Horizontal Scrolling Carousel) */}
+      <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+          <div className="flex items-center space-x-2">
+            <span className="text-lg">🌿</span>
+            <h3 className="font-semibold text-slate-100">Workspaces & Projects</h3>
+            <span className="px-2 py-0.5 text-xs rounded-full bg-slate-800 text-slate-300 font-mono">
+              {projects.length}
+            </span>
+          </div>
+
+          <div className="flex items-center space-x-2 flex-wrap">
+            {/* Search filter */}
+            <div className="relative w-48 sm:w-64">
+              <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-500 text-xs">
+                🔍
+              </span>
+              <input
+                type="text"
+                placeholder="Filter workspaces..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-7 pr-6 py-1 text-xs rounded-lg bg-slate-950/80 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              />
+              {searchQuery && (
                 <button
-                  onClick={handleRefreshProjects}
-                  disabled={scanning}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 hover:text-white transition-colors border border-slate-700/80 flex items-center justify-center"
-                  title="Refresh / auto-discover workspaces and sync project linkages"
-                  aria-label="Refresh workspaces"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-500 hover:text-slate-300 text-xs"
                 >
-                  <span className={`inline-block text-xs ${scanning ? "animate-spin" : ""}`}>
-                    🔄
-                  </span>
+                  ✕
                 </button>
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors flex items-center space-x-1"
-                  title="Add manual project directory"
-                >
-                  <span>+</span>
-                  <span>Manual</span>
-                </button>
-              </div>
+              )}
             </div>
 
-            {/* Global Application View Option */}
-            <div className="mb-4">
-              <button
-                onClick={() => setSelectedProjectId("__global__")}
-                className={`w-full text-left p-3.5 rounded-xl border transition-all flex items-center justify-between ${
-                  isGlobalView
-                    ? "bg-indigo-950/40 border-indigo-500/50 shadow-sm"
-                    : "bg-slate-950/40 border-slate-800/60 hover:border-slate-700/80 hover:bg-slate-800/40"
-                }`}
-              >
-                <div className="flex items-center space-x-3 min-w-0">
-                  <div
-                    className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold ${
-                      isGlobalView ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300"
-                    }`}
-                  >
-                    🌐
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-semibold text-slate-100 text-sm truncate">
-                        Global Application
-                      </span>
-                      <span className="px-1.5 py-0.5 text-xs rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                        Aggregated
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 truncate mt-0.5">
-                      All proxy routes, sessions & workspaces
-                    </p>
-                  </div>
-                </div>
-                <span className="text-xs text-slate-500 font-mono shrink-0 ml-2">
-                  {projects.filter((p) => p.status !== "archiving").length} active
-                </span>
-              </button>
-            </div>
+            {/* Source dropdown */}
+            <select
+              value={filterProvenance}
+              onChange={(e) => setFilterProvenance(e.target.value as "all" | "derived" | "manual")}
+              className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 text-xs focus:outline-none focus:border-indigo-500"
+              aria-label="Filter by source"
+            >
+              <option value="all">All Sources</option>
+              <option value="derived">Derived</option>
+              <option value="manual">Manual</option>
+            </select>
 
-            {/* Active vs Archived Sub-tabs */}
-            <div className="flex border-b border-slate-800/80 mb-3 text-xs">
+            {/* Sort dropdown */}
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "name" | "files" | "tokens" | "updated")}
+              className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 text-xs focus:outline-none focus:border-indigo-500"
+              aria-label="Sort projects"
+            >
+              <option value="updated">Recent</option>
+              <option value="tokens">Token Spend</option>
+              <option value="files">Files Count</option>
+              <option value="name">Name</option>
+            </select>
+
+            {/* Active / Archived pills */}
+            <div className="inline-flex rounded-lg border border-slate-800 bg-slate-950/60 p-0.5 text-xs">
               <button
                 type="button"
                 onClick={() => setShowArchived(false)}
-                className={`flex-1 py-1.5 px-3 text-center font-medium border-b-2 transition-colors flex items-center justify-center space-x-1.5 ${
+                className={`px-2.5 py-1 rounded-md transition-all ${
                   !showArchived
-                    ? "border-indigo-500 text-indigo-400 bg-indigo-500/5"
-                    : "border-transparent text-slate-400 hover:text-slate-300"
+                    ? "bg-indigo-600 text-white font-medium"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                <span>Active</span>
-                <span className="px-1.5 py-0.2 rounded-full text-xs bg-slate-800 text-slate-400 font-mono">
-                  {projects.filter((p) => p.status !== "archiving").length}
-                </span>
+                Active ({projects.filter((p) => p.status !== "archiving").length})
               </button>
               <button
                 type="button"
                 onClick={() => setShowArchived(true)}
-                className={`flex-1 py-1.5 px-3 text-center font-medium border-b-2 transition-colors flex items-center justify-center space-x-1.5 ${
+                className={`px-2.5 py-1 rounded-md transition-all ${
                   showArchived
-                    ? "border-amber-500 text-amber-400 bg-amber-500/5"
-                    : "border-transparent text-slate-400 hover:text-slate-300"
+                    ? "bg-amber-600 text-white font-medium"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                <span>Archived</span>
-                <span className="px-1.5 py-0.2 rounded-full text-xs bg-slate-800 text-slate-400 font-mono">
-                  {projects.filter((p) => p.status === "archiving").length}
-                </span>
+                Archived ({projects.filter((p) => p.status === "archiving").length})
               </button>
             </div>
 
-            {/* Search, Filter & Sort Controls */}
-            <div className="space-y-2 mb-3">
-              <div className="relative">
-                <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500 text-xs">
-                  🔍
-                </span>
-                <input
-                  type="text"
-                  placeholder="Filter by name, path, tech..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg bg-slate-950/80 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery("")}
-                    className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-500 hover:text-slate-300 text-xs"
-                  >
-                    ✕
-                  </button>
-                )}
+            <button
+              onClick={handleRefreshProjects}
+              disabled={scanning}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 hover:text-white transition-colors border border-slate-700/80 flex items-center justify-center"
+              title="Refresh / auto-discover workspaces and sync project linkages"
+              aria-label="Refresh workspaces"
+            >
+              <span className={`inline-block text-xs ${scanning ? "animate-spin" : ""}`}>🔄</span>
+            </button>
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-2.5 py-1 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors flex items-center space-x-1"
+              title="Add manual project directory"
+            >
+              <span>+</span>
+              <span>Manual</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Horizontal Card Carousel */}
+        {loading ? (
+          <div className="py-6 text-center text-slate-500 text-sm animate-pulse">
+            Discovering workspaces & routing corpuses...
+          </div>
+        ) : (
+          <div className="flex items-stretch gap-3 overflow-x-auto pb-2 pt-1 custom-scrollbar">
+            {/* 1. Global Application Card */}
+            <div
+              onClick={() => setSelectedProjectId("__global__")}
+              className={`shrink-0 w-64 p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                isGlobalView
+                  ? "bg-indigo-950/40 border-indigo-500/80 shadow-md ring-1 ring-indigo-500/40"
+                  : "bg-slate-950/40 border-slate-800/60 hover:border-slate-700 hover:bg-slate-850"
+              }`}
+            >
+              <div className="flex items-center space-x-2.5 mb-2">
+                <div
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold ${
+                    isGlobalView ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300"
+                  }`}
+                >
+                  🌐
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-1.5">
+                    <span className="font-semibold text-slate-100 text-xs truncate">
+                      Global Application
+                    </span>
+                    <span className="px-1 py-0.2 text-[10px] rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      All
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 truncate mt-0.5">Full proxy traffic</p>
+                </div>
               </div>
-
-              <div className="flex items-center justify-between text-xs text-slate-400 gap-1.5">
-                <div className="flex items-center space-x-1">
-                  <span className="text-slate-500">Source:</span>
-                  <select
-                    value={filterProvenance}
-                    onChange={(e) =>
-                      setFilterProvenance(e.target.value as "all" | "derived" | "manual")
-                    }
-                    className="bg-slate-950 border border-slate-800 rounded px-1.5 py-1 text-slate-300 text-xs focus:outline-none focus:border-indigo-500"
-                  >
-                    <option value="all">All</option>
-                    <option value="derived">Auto-Derived</option>
-                    <option value="manual">Manual</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center space-x-1">
-                  <span className="text-slate-500">Sort:</span>
-                  <select
-                    value={sortBy}
-                    onChange={(e) =>
-                      setSortBy(e.target.value as "name" | "files" | "tokens" | "updated")
-                    }
-                    className="bg-slate-950 border border-slate-800 rounded px-1.5 py-1 text-slate-300 text-xs focus:outline-none focus:border-indigo-500"
-                  >
-                    <option value="updated">Recent</option>
-                    <option value="tokens">Token Spend</option>
-                    <option value="files">Files Count</option>
-                    <option value="name">Name</option>
-                  </select>
-                </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-2 border-t border-slate-800/60">
+                <span>{projects.filter((p) => p.status !== "archiving").length} active</span>
+                <span className="text-indigo-400">View Aggregated →</span>
               </div>
             </div>
 
-            {/* Tree / Project List */}
-            {loading ? (
-              <div className="py-12 text-center text-slate-500 text-sm animate-pulse">
-                Discovering workspaces & routing corpuses...
-              </div>
-            ) : filteredProjects.length === 0 ? (
-              <div className="py-8 text-center text-slate-500 text-sm">
-                No matching projects found.
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-                {filteredProjects.map((p) => {
-                  const isSelected = selectedProject?.id === p.id;
-                  const isAuto = (p.provenance || "derived") === "derived";
-                  return (
-                    <div
-                      key={p.id}
-                      onClick={() => setSelectedProjectId(p.id)}
-                      className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                        isSelected
-                          ? "bg-slate-850 dark:bg-slate-800/90 border-indigo-500/60 shadow-sm"
-                          : "bg-slate-950/40 border-slate-800/60 hover:border-slate-700/80 hover:bg-slate-800/40"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="min-w-0 pr-2">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-semibold text-slate-100 text-sm truncate">
-                              {p.name}
-                            </span>
-                            <span
-                              className={`px-1.5 py-0.2 rounded text-xs font-mono border ${
-                                isAuto
-                                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                                  : "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                              }`}
-                            >
-                              {isAuto ? "auto-derived" : "manual"}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-400 font-mono truncate mt-0.5">
-                            {p.basePath}
-                          </p>
-                        </div>
-                        <span
-                          className="text-xs text-slate-500 font-mono shrink-0"
-                          title={`${p.filesCount} files tracked`}
-                        >
-                          {fmtCompact(p.filesCount)} files
-                        </span>
-                      </div>
+            {/* Project Cards */}
+            {filteredProjects.map((p) => {
+              const isSelected = selectedProject?.id === p.id;
+              const isAuto = (p.provenance || "derived") === "derived";
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => setSelectedProjectId(p.id)}
+                  className={`shrink-0 w-64 p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                    isSelected
+                      ? "bg-slate-850 dark:bg-slate-800/90 border-indigo-500/80 shadow-md ring-1 ring-indigo-500/40"
+                      : "bg-slate-950/40 border-slate-800/60 hover:border-slate-700 hover:bg-slate-850"
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-1 mb-1.5">
+                      <span
+                        className="font-semibold text-slate-100 text-xs truncate block max-w-[140px]"
+                        title={p.name}
+                      >
+                        {p.name}
+                      </span>
+                      <span
+                        className={`px-1 py-0.2 rounded text-[10px] font-mono shrink-0 border ${
+                          isAuto
+                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                            : "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                        }`}
+                      >
+                        {isAuto ? "derived" : "manual"}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-mono truncate" title={p.basePath}>
+                      {p.basePath}
+                    </p>
+                  </div>
 
-                      {/* Tech stack badges preview */}
-                      {p.techStack && p.techStack.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {p.techStack.slice(0, 3).map((tech) => (
-                            <span
-                              key={tech}
-                              className="px-1.5 py-0.5 text-xs font-medium rounded bg-slate-800 text-slate-300"
-                            >
-                              {tech}
-                            </span>
-                          ))}
-                          {p.techStack.length > 3 && (
-                            <span className="px-1.5 py-0.5 text-xs rounded bg-slate-800/60 text-slate-500">
-                              +{p.techStack.length - 3}
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Per-project actions: archive / delete */}
-                      <div className="flex items-center justify-end gap-1.5 mt-2 pt-2 border-t border-slate-800/60">
-                        {p.status !== "archiving" && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleArchiveProject(p.id, true);
-                            }}
-                            className="px-2 py-1 text-xs font-medium rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors"
-                            title="Archive project (preserves linkage & analytics cache)"
-                          >
-                            Archive
-                          </button>
-                        )}
-                        {p.status === "archiving" && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleArchiveProject(p.id, false);
-                            }}
-                            className="px-2 py-1 text-xs font-medium rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors"
-                            title="Restore project to active"
-                          >
-                            Restore
-                          </button>
-                        )}
+                  <div className="mt-2.5 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
+                    <span className="text-slate-500 font-mono">
+                      {fmtCompact(p.filesCount)} files
+                    </span>
+                    <div className="flex items-center space-x-1">
+                      {p.status !== "archiving" ? (
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            void handleDeleteProject(p.id);
+                            void handleArchiveProject(p.id, true);
                           }}
-                          className="px-2 py-1 text-xs font-medium rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-colors"
-                          title="Remove project from registry"
+                          className="px-1.5 py-0.5 text-[10px] rounded hover:bg-amber-500/20 text-amber-400 transition-colors"
+                          title="Archive"
                         >
-                          Delete
+                          Archive
                         </button>
-                      </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleArchiveProject(p.id, false);
+                          }}
+                          className="px-1.5 py-0.5 text-[10px] rounded hover:bg-emerald-500/20 text-emerald-400 transition-colors"
+                          title="Restore"
+                        >
+                          Restore
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleDeleteProject(p.id);
+                        }}
+                        className="px-1.5 py-0.5 text-[10px] rounded hover:bg-rose-500/20 text-rose-400 transition-colors"
+                        title="Delete"
+                      >
+                        ✕
+                      </button>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </div>
+        )}
+      </div>
 
-        {/* Right Panel: Project Details & On-Demand Analytics (8 cols) */}
-        <div className="lg:col-span-8 space-y-6">
-          {/* Header Card: Project Identity / Global Overview */}
-          <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
-              <div>
-                <div className="flex items-center space-x-3">
-                  <h2 className="text-xl font-semibold text-slate-100">
-                    {isGlobalView ? "Global Application Overview" : selectedProject?.name}
-                  </h2>
-                  <span
-                    className={`px-2 py-0.5 text-xs font-semibold rounded-full border ${
-                      isGlobalView
-                        ? "bg-indigo-500/10 text-indigo-400 border-indigo-500/30"
-                        : selectedProject?.status === "active"
-                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                          : "bg-slate-800 text-slate-400 border-slate-700"
-                    }`}
-                  >
-                    {isGlobalView ? "Aggregated Proxy Mesh" : (selectedProject?.status ?? "active")}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 font-mono mt-1 break-all">
-                  {isGlobalView
-                    ? "Observability and token economics aggregated across all proxy routing requests"
-                    : selectedProject?.basePath}
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {/* View Mode Switcher - Available in both Global and Project Scopes */}
-                <div className="flex items-center space-x-1 bg-slate-950/60 rounded-lg border border-slate-700 p-0.5">
-                  <button
-                    onClick={() => setProjectViewMode("overview")}
-                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                      projectViewMode === "overview"
-                        ? "bg-slate-800 text-slate-200 shadow-sm"
-                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
-                    }`}
-                  >
-                    Overview
-                  </button>
-                  <button
-                    onClick={() => {
-                      setProjectViewMode("prompts");
-                      const currentAnalytics = isGlobalView
-                        ? globalAnalytics
-                        : selectedProject?.analyticsCache;
-                      if (!currentAnalytics && !calculatingAnalytics) {
-                        void handleCalculateAnalytics();
-                      }
-                    }}
-                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                      projectViewMode === "prompts"
-                        ? "bg-slate-800 text-slate-200 shadow-sm"
-                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
-                    }`}
-                  >
-                    Prompt Analytics
-                  </button>
-                </div>
-
-                {!isGlobalView && selectedProject && (
-                  <>
-                    <button
-                      onClick={handleOpenEditModal}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700"
-                    >
-                      Edit Metadata
-                    </button>
-                    {selectedProject.status !== "archiving" ? (
-                      <button
-                        onClick={() => void handleArchiveProject(selectedProject.id, true)}
-                        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors border border-amber-500/30"
-                        title="Archive project (keeps call logs and analytics cache)"
-                      >
-                        Archive
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => void handleArchiveProject(selectedProject.id, false)}
-                        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 transition-colors border border-emerald-500/30"
-                        title="Restore project to active"
-                      >
-                        Restore
-                      </button>
-                    )}
-                    <button
-                      onClick={() => void handleDeleteProject(selectedProject.id)}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-colors border border-rose-500/30"
-                      title="Delete project from registry"
-                    >
-                      Delete
-                    </button>
-                  </>
-                )}
-                <button
-                  onClick={handleCalculateAnalytics}
-                  disabled={calculatingAnalytics}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white transition-colors flex items-center space-x-1.5 shadow-sm"
+      {/* Main Full-Width Details & Analytics Section */}
+      <div className="space-y-6">
+        {/* Header Card: Project Identity / Global Overview */}
+        <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
+            <div>
+              <div className="flex items-center space-x-3">
+                <h2 className="text-xl font-semibold text-slate-100">
+                  {isGlobalView ? "Global Application Overview" : selectedProject?.name}
+                </h2>
+                <span
+                  className={`px-2 py-0.5 text-xs font-semibold rounded-full border ${
+                    isGlobalView
+                      ? "bg-indigo-500/10 text-indigo-400 border-indigo-500/30"
+                      : selectedProject?.status === "active"
+                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                        : "bg-slate-800 text-slate-400 border-slate-700"
+                  }`}
                 >
-                  <span>{calculatingAnalytics ? "⚡" : "📊"}</span>
-                  <span>
-                    {calculatingAnalytics
-                      ? "Calculating..."
-                      : activeAnalytics
-                        ? "Refresh Analytics"
-                        : "Calculate Analytics"}
-                  </span>
-                </button>
-                <button
-                  onClick={handleGenerateBrief}
-                  disabled={generatingBrief}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white transition-colors flex items-center space-x-1.5 shadow-sm"
-                >
-                  <span>{generatingBrief ? "⏳" : "✨"}</span>
-                  <span>
-                    {generatingBrief
-                      ? "Generating..."
-                      : activeBrief
-                        ? "Update Brief More"
-                        : "Generate Executive Brief"}
-                  </span>
-                </button>
+                  {isGlobalView ? "Aggregated Proxy Mesh" : (selectedProject?.status ?? "active")}
+                </span>
               </div>
+              <p className="text-xs text-slate-400 font-mono mt-1 break-all">
+                {isGlobalView
+                  ? "Observability and token economics aggregated across all proxy routing requests"
+                  : selectedProject?.basePath}
+              </p>
             </div>
 
-            {/* Static Metadata Cards */}
-            {!isGlobalView && selectedProject && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-2">
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
-                  <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
-                    Files Tracked
-                  </span>
-                  <div
-                    className="text-lg font-semibold text-slate-100 mt-1"
-                    title={`${selectedProject.filesCount ?? 0} files tracked`}
-                  >
-                    {fmtCompact(selectedProject.filesCount ?? 0)}
-                  </div>
-                </div>
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
-                  <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
-                    Docs & Corpuses
-                  </span>
-                  <div
-                    className="text-lg font-semibold text-slate-100 mt-1"
-                    title={`${selectedProject.docsCount ?? 0} documents`}
-                  >
-                    {fmtCompact(selectedProject.docsCount ?? 0)}
-                  </div>
-                </div>
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
-                  <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
-                    RAG / Index Status
-                  </span>
-                  <div className="text-sm font-semibold text-emerald-400 mt-1.5 flex items-center space-x-1">
-                    <span>●</span>
-                    <span className="capitalize">{selectedProject.ragStatus ?? "healthy"}</span>
-                  </div>
-                </div>
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
-                  <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
-                    Provenance
-                  </span>
-                  <div className="text-sm font-semibold text-slate-200 mt-1.5 capitalize">
-                    {selectedProject.provenance ?? "derived"}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Tech Stack & Stacks */}
-            {!isGlobalView && selectedProject && (
-              <div className="mt-4 pt-4 border-t border-slate-800/60 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                <div>
-                  <span className="text-slate-400 font-medium block mb-1.5">Tech Stack:</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedProject.techStack && selectedProject.techStack.length > 0 ? (
-                      selectedProject.techStack.map((tech) => (
-                        <span
-                          key={tech}
-                          className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-xs"
-                        >
-                          {tech}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-slate-500">None detected</span>
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-medium block mb-1.5">Cloud Stack:</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedProject.cloudStack && selectedProject.cloudStack.length > 0 ? (
-                      selectedProject.cloudStack.map((cloud) => (
-                        <span
-                          key={cloud}
-                          className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-xs"
-                        >
-                          {cloud}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-slate-500">None detected</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Conditional View: Prompts Analytics vs Standard Overview */}
-          {projectViewMode === "prompts" ? (
-            <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center space-x-2">
-                  <span className="text-lg">💬</span>
-                  <h3 className="font-semibold text-slate-100">
-                    Comprehensive Prompt Analytics & Session History
-                  </h3>
-                </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* View Mode Switcher - Available in both Global and Project Scopes */}
+              <div className="flex items-center space-x-1 bg-slate-950/60 rounded-lg border border-slate-700 p-0.5">
                 <button
-                  type="button"
                   onClick={() => setProjectViewMode("overview")}
-                  className="px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                    projectViewMode === "overview"
+                      ? "bg-slate-800 text-slate-200 shadow-sm"
+                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
+                  }`}
                 >
-                  ← Back to Overview
+                  Overview
+                </button>
+                <button
+                  onClick={() => {
+                    setProjectViewMode("prompts");
+                    const currentAnalytics = isGlobalView
+                      ? globalAnalytics
+                      : selectedProject?.analyticsCache;
+                    if (!currentAnalytics && !calculatingAnalytics) {
+                      void handleCalculateAnalytics();
+                    }
+                  }}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                    projectViewMode === "prompts"
+                      ? "bg-slate-800 text-slate-200 shadow-sm"
+                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
+                  }`}
+                >
+                  Prompt Analytics
                 </button>
               </div>
 
-              <PromptAnalyticsTab
-                recentPrompts={activeAnalytics?.sessions?.recentPrompts ?? []}
-                tokensInSuccess={activeAnalytics?.tokenEconomics?.success ?? 0}
-                tokensOutSuccess={activeAnalytics?.tokenEconomics?.wasted ?? 0}
-                tokenEconomics={activeAnalytics?.tokenEconomics}
-                selectedProjectId={isGlobalView ? "Global Application" : selectedProject?.name}
-                onRefresh={handleCalculateAnalytics}
-                calculating={calculatingAnalytics}
-              />
-            </div>
-          ) : (
-            <>
-              {/* Token Economics Section (6 Key Dimensions) */}
-              <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-lg">💎</span>
-                    <h3 className="font-semibold text-slate-100">
-                      {isGlobalView
-                        ? "Global Token Economics & Consumption"
-                        : "Project Token Economics & Consumption"}
-                    </h3>
-                  </div>
-                  {activeAnalytics ? (
-                    <span className="text-xs text-slate-500 font-mono">
-                      Computed:{" "}
-                      {new Date(activeAnalytics.lastComputedAt * 1000).toLocaleTimeString()}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-amber-400/90 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                      On-Demand (Click Calculate to Load)
-                    </span>
-                  )}
-                </div>
-
-                {activeAnalytics ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                    {/* 1. Success Tokens */}
-                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-emerald-500/20">
-                      <span className="text-xs text-emerald-400 font-medium uppercase tracking-wider block">
-                        Success
-                      </span>
-                      <div
-                        className="text-base font-semibold text-slate-100 mt-1 font-mono"
-                        title={`${activeAnalytics.tokenEconomics.success.toLocaleString()} tokens`}
-                      >
-                        {fmtCompact(activeAnalytics.tokenEconomics.success)}
-                      </div>
-                      <span className="text-xs text-slate-500 block mt-0.5">2xx responses</span>
-                    </div>
-
-                    {/* 2. Wasted Tokens */}
-                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-rose-500/20">
-                      <span className="text-xs text-rose-400 font-medium uppercase tracking-wider block">
-                        Wasted
-                      </span>
-                      <div
-                        className="text-base font-semibold text-slate-100 mt-1 font-mono"
-                        title={`${activeAnalytics.tokenEconomics.wasted.toLocaleString()} tokens`}
-                      >
-                        {fmtCompact(activeAnalytics.tokenEconomics.wasted)}
-                      </div>
-                      <span className="text-xs text-slate-500 block mt-0.5">Errors / Aborts</span>
-                    </div>
-
-                    {/* 3. Cache Hits */}
-                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-blue-500/20">
-                      <span className="text-xs text-blue-400 font-medium uppercase tracking-wider block">
-                        Cache Hits
-                      </span>
-                      <div
-                        className="text-base font-semibold text-slate-100 mt-1 font-mono"
-                        title={`${activeAnalytics.tokenEconomics.cached.toLocaleString()} tokens`}
-                      >
-                        {fmtCompact(activeAnalytics.tokenEconomics.cached)}
-                      </div>
-                      <span className="text-xs text-slate-500 block mt-0.5">
-                        Prompt cache reads
-                      </span>
-                    </div>
-
-                    {/* 4. Saved Tokens */}
-                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-indigo-500/20">
-                      <span className="text-xs text-indigo-400 font-medium uppercase tracking-wider block">
-                        Saved Tokens
-                      </span>
-                      <div
-                        className="text-base font-semibold text-slate-100 mt-1 font-mono"
-                        title={`${activeAnalytics.tokenEconomics.saved.toLocaleString()} tokens`}
-                      >
-                        {fmtCompact(activeAnalytics.tokenEconomics.saved)}
-                      </div>
-                      <span className="text-xs text-slate-500 block mt-0.5">Combo & Caching</span>
-                    </div>
-
-                    {/* 5. Pricing / USD */}
-                    <div className="bg-slate-950/60 p-3.5 rounded-xl border border-amber-500/20">
-                      <span className="text-xs text-amber-400 font-medium uppercase tracking-wider block">
-                        Pricing (USD)
-                      </span>
-                      <div className="text-base font-semibold text-slate-100 mt-1 font-mono">
-                        ${activeAnalytics.tokenEconomics.costUsd.toFixed(4)}
-                      </div>
-                      <span className="text-xs text-slate-500 block mt-0.5">Ledger cost</span>
-                    </div>
-
-                    {/* 6. Unique Prompts */}
-                    <div
-                      onClick={() => setProjectViewMode("prompts")}
-                      className="bg-slate-950/60 p-3.5 rounded-xl border border-purple-500/20 hover:border-purple-500/50 hover:bg-slate-950/80 cursor-pointer transition-all duration-200 group"
-                      title="Click to view detailed prompt analytics and session history"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-purple-400 font-medium uppercase tracking-wider block">
-                          Unique Prompts
-                        </span>
-                        <span className="text-xs text-purple-400/70 group-hover:text-purple-300 transition-colors">
-                          View ↗
-                        </span>
-                      </div>
-                      <div
-                        className="text-base font-semibold text-slate-100 mt-1 font-mono group-hover:text-purple-200 transition-colors"
-                        title={`${activeAnalytics.sessions.uniquePrompts.toLocaleString()} unique prompts`}
-                      >
-                        {fmtCompact(activeAnalytics.sessions.uniquePrompts)}
-                      </div>
-                      <span className="text-xs text-slate-500 block mt-0.5">Distinct queries</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="py-8 text-center bg-slate-950/30 rounded-xl border border-slate-800/40">
-                    <p className="text-xs text-slate-400">
-                      Token analytics are computed on-demand to maintain zero overhead on inference.
-                    </p>
+              {!isGlobalView && selectedProject && (
+                <>
+                  <button
+                    onClick={handleOpenEditModal}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700"
+                  >
+                    Edit Metadata
+                  </button>
+                  {selectedProject.status !== "archiving" ? (
                     <button
-                      onClick={handleCalculateAnalytics}
-                      className="mt-3 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                      onClick={() => void handleArchiveProject(selectedProject.id, true)}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors border border-amber-500/30"
+                      title="Archive project (keeps call logs and analytics cache)"
                     >
-                      ⚡ Run On-Demand Analytics
+                      Archive
                     </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Model Distribution & Agents/Combos breakdown */}
-              {activeAnalytics && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Models used */}
-                  <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
-                    <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
-                      <span>🤖</span>
-                      <span>Models Distribution</span>
-                    </h4>
-                    {activeAnalytics.agents.models?.byModel &&
-                    Object.keys(activeAnalytics.agents.models.byModel).length > 0 ? (
-                      <div className="space-y-2">
-                        {Object.entries(activeAnalytics.agents.models.byModel).map(
-                          ([model, count]) => (
-                            <div key={model} className="flex items-center justify-between text-xs">
-                              <span className="font-mono text-slate-300 truncate pr-2">
-                                {model}
-                              </span>
-                              <span className="font-mono text-slate-500">{count} calls</span>
-                            </div>
-                          )
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-500">No model calls recorded yet.</p>
-                    )}
-                  </div>
-
-                  {/* Combos & Agents */}
-                  <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
-                    <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
-                      <span>⚡</span>
-                      <span>Agents & Routing Combos</span>
-                    </h4>
-                    <div className="space-y-2 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Total Skills Enabled:</span>
-                        <span className="font-mono text-slate-200">
-                          {activeAnalytics.agents.skills.total}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400">MCP Server Tools:</span>
-                        <span className="font-mono text-slate-200">
-                          {activeAnalytics.agents.mcpTools ?? 110}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Active Combos:</span>
-                        <span className="font-mono text-slate-200">
-                          {(activeAnalytics.agents.combos ?? []).join(", ") || "Auto-Combo"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                  ) : (
+                    <button
+                      onClick={() => void handleArchiveProject(selectedProject.id, false)}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 transition-colors border border-emerald-500/30"
+                      title="Restore project to active"
+                    >
+                      Restore
+                    </button>
+                  )}
+                  <button
+                    onClick={() => void handleDeleteProject(selectedProject.id)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-colors border border-rose-500/30"
+                    title="Delete project from registry"
+                  >
+                    Delete
+                  </button>
+                </>
               )}
+              <button
+                onClick={handleCalculateAnalytics}
+                disabled={calculatingAnalytics}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white transition-colors flex items-center space-x-1.5 shadow-sm"
+              >
+                <span>{calculatingAnalytics ? "⚡" : "📊"}</span>
+                <span>
+                  {calculatingAnalytics
+                    ? "Calculating..."
+                    : activeAnalytics
+                      ? "Refresh Analytics"
+                      : "Calculate Analytics"}
+                </span>
+              </button>
+              <button
+                onClick={handleGenerateBrief}
+                disabled={generatingBrief}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white transition-colors flex items-center space-x-1.5 shadow-sm"
+              >
+                <span>{generatingBrief ? "⏳" : "✨"}</span>
+                <span>
+                  {generatingBrief
+                    ? "Generating..."
+                    : activeBrief
+                      ? "Update Brief More"
+                      : "Generate Executive Brief"}
+                </span>
+              </button>
+            </div>
+          </div>
 
-              {/* Executive Brief & Optimization Suggestions */}
-              {activeBrief && (
-                <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-6 shadow-sm space-y-4">
-                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-lg">✨</span>
-                      <h3 className="font-semibold text-slate-100">
-                        Executive Brief & Optimization
-                      </h3>
-                    </div>
-                    <span className="text-xs text-slate-500 font-mono">
-                      Generated: {new Date(activeBrief.generatedAt * 1000).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  <p className="text-sm text-slate-300 leading-relaxed">{activeBrief.summary}</p>
+          {/* Static Metadata Cards */}
+          {!isGlobalView && selectedProject && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-2">
+              <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                  Files Tracked
+                </span>
+                <div
+                  className="text-lg font-semibold text-slate-100 mt-1"
+                  title={`${selectedProject.filesCount ?? 0} files tracked`}
+                >
+                  {fmtCompact(selectedProject.filesCount ?? 0)}
+                </div>
+              </div>
+              <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                  Docs & Corpuses
+                </span>
+                <div
+                  className="text-lg font-semibold text-slate-100 mt-1"
+                  title={`${selectedProject.docsCount ?? 0} documents`}
+                >
+                  {fmtCompact(selectedProject.docsCount ?? 0)}
+                </div>
+              </div>
+              <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                  RAG / Index Status
+                </span>
+                <div className="text-sm font-semibold text-emerald-400 mt-1.5 flex items-center space-x-1">
+                  <span>●</span>
+                  <span className="capitalize">{selectedProject.ragStatus ?? "healthy"}</span>
+                </div>
+              </div>
+              <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                  Provenance
+                </span>
+                <div className="text-sm font-semibold text-slate-200 mt-1.5 capitalize">
+                  {selectedProject.provenance ?? "derived"}
+                </div>
+              </div>
+            </div>
+          )}
 
-                  {activeBrief.optimizations && activeBrief.optimizations.length > 0 && (
-                    <div className="pt-2">
-                      <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider block mb-2">
-                        Optimization Insights:
+          {/* Tech Stack & Stacks */}
+          {!isGlobalView && selectedProject && (
+            <div className="mt-4 pt-4 border-t border-slate-800/60 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div>
+                <span className="text-slate-400 font-medium block mb-1.5">Tech Stack:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedProject.techStack && selectedProject.techStack.length > 0 ? (
+                    selectedProject.techStack.map((tech) => (
+                      <span
+                        key={tech}
+                        className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-xs"
+                      >
+                        {tech}
                       </span>
-                      <ul className="list-disc list-inside space-y-1 text-xs text-slate-300">
-                        {activeBrief.optimizations.map((opt, idx) => (
-                          <li key={idx}>{opt}</li>
-                        ))}
-                      </ul>
-                    </div>
+                    ))
+                  ) : (
+                    <span className="text-slate-500">None detected</span>
                   )}
                 </div>
-              )}
-            </>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium block mb-1.5">Cloud Stack:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedProject.cloudStack && selectedProject.cloudStack.length > 0 ? (
+                    selectedProject.cloudStack.map((cloud) => (
+                      <span
+                        key={cloud}
+                        className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-xs"
+                      >
+                        {cloud}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-slate-500">None detected</span>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
         </div>
+
+        {/* Conditional View: Prompts Analytics vs Standard Overview */}
+        {projectViewMode === "prompts" ? (
+          <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <span className="text-lg">💬</span>
+                <h3 className="font-semibold text-slate-100">
+                  Comprehensive Prompt Analytics & Session History
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProjectViewMode("overview")}
+                className="px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+              >
+                ← Back to Overview
+              </button>
+            </div>
+
+            <PromptAnalyticsTab
+              recentPrompts={activeAnalytics?.sessions?.recentPrompts ?? []}
+              tokensInSuccess={activeAnalytics?.tokenEconomics?.success ?? 0}
+              tokensOutSuccess={activeAnalytics?.tokenEconomics?.wasted ?? 0}
+              tokenEconomics={activeAnalytics?.tokenEconomics}
+              selectedProjectId={isGlobalView ? "Global Application" : selectedProject?.name}
+              onRefresh={handleCalculateAnalytics}
+              calculating={calculatingAnalytics}
+            />
+          </div>
+        ) : (
+          <>
+            {/* Token Economics Section (6 Key Dimensions) */}
+            <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center space-x-2">
+                  <span className="text-lg">💎</span>
+                  <h3 className="font-semibold text-slate-100">
+                    {isGlobalView
+                      ? "Global Token Economics & Consumption"
+                      : "Project Token Economics & Consumption"}
+                  </h3>
+                </div>
+                {activeAnalytics ? (
+                  <span className="text-xs text-slate-500 font-mono">
+                    Computed: {new Date(activeAnalytics.lastComputedAt * 1000).toLocaleTimeString()}
+                  </span>
+                ) : (
+                  <span className="text-xs text-amber-400/90 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                    On-Demand (Click Calculate to Load)
+                  </span>
+                )}
+              </div>
+
+              {activeAnalytics ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                  {/* 1. Success Tokens */}
+                  <div className="bg-slate-950/60 p-3.5 rounded-xl border border-emerald-500/20">
+                    <span className="text-xs text-emerald-400 font-medium uppercase tracking-wider block">
+                      Success
+                    </span>
+                    <div
+                      className="text-base font-semibold text-slate-100 mt-1 font-mono"
+                      title={`${activeAnalytics.tokenEconomics.success.toLocaleString()} tokens`}
+                    >
+                      {fmtCompact(activeAnalytics.tokenEconomics.success)}
+                    </div>
+                    <span className="text-xs text-slate-500 block mt-0.5">2xx responses</span>
+                  </div>
+
+                  {/* 2. Wasted Tokens */}
+                  <div className="bg-slate-950/60 p-3.5 rounded-xl border border-rose-500/20">
+                    <span className="text-xs text-rose-400 font-medium uppercase tracking-wider block">
+                      Wasted
+                    </span>
+                    <div
+                      className="text-base font-semibold text-slate-100 mt-1 font-mono"
+                      title={`${activeAnalytics.tokenEconomics.wasted.toLocaleString()} tokens`}
+                    >
+                      {fmtCompact(activeAnalytics.tokenEconomics.wasted)}
+                    </div>
+                    <span className="text-xs text-slate-500 block mt-0.5">Errors / Aborts</span>
+                  </div>
+
+                  {/* 3. Cache Hits */}
+                  <div className="bg-slate-950/60 p-3.5 rounded-xl border border-blue-500/20">
+                    <span className="text-xs text-blue-400 font-medium uppercase tracking-wider block">
+                      Cache Hits
+                    </span>
+                    <div
+                      className="text-base font-semibold text-slate-100 mt-1 font-mono"
+                      title={`${activeAnalytics.tokenEconomics.cached.toLocaleString()} tokens`}
+                    >
+                      {fmtCompact(activeAnalytics.tokenEconomics.cached)}
+                    </div>
+                    <span className="text-xs text-slate-500 block mt-0.5">Prompt cache reads</span>
+                  </div>
+
+                  {/* 4. Saved Tokens */}
+                  <div className="bg-slate-950/60 p-3.5 rounded-xl border border-indigo-500/20">
+                    <span className="text-xs text-indigo-400 font-medium uppercase tracking-wider block">
+                      Saved Tokens
+                    </span>
+                    <div
+                      className="text-base font-semibold text-slate-100 mt-1 font-mono"
+                      title={`${activeAnalytics.tokenEconomics.saved.toLocaleString()} tokens`}
+                    >
+                      {fmtCompact(activeAnalytics.tokenEconomics.saved)}
+                    </div>
+                    <span className="text-xs text-slate-500 block mt-0.5">Combo & Caching</span>
+                  </div>
+
+                  {/* 5. Pricing / USD */}
+                  <div className="bg-slate-950/60 p-3.5 rounded-xl border border-amber-500/20">
+                    <span className="text-xs text-amber-400 font-medium uppercase tracking-wider block">
+                      Pricing (USD)
+                    </span>
+                    <div className="text-base font-semibold text-slate-100 mt-1 font-mono">
+                      ${activeAnalytics.tokenEconomics.costUsd.toFixed(4)}
+                    </div>
+                    <span className="text-xs text-slate-500 block mt-0.5">Ledger cost</span>
+                  </div>
+
+                  {/* 6. Unique Prompts */}
+                  <div
+                    onClick={() => setProjectViewMode("prompts")}
+                    className="bg-slate-950/60 p-3.5 rounded-xl border border-purple-500/20 hover:border-purple-500/50 hover:bg-slate-950/80 cursor-pointer transition-all duration-200 group"
+                    title="Click to view detailed prompt analytics and session history"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-purple-400 font-medium uppercase tracking-wider block">
+                        Unique Prompts
+                      </span>
+                      <span className="text-xs text-purple-400/70 group-hover:text-purple-300 transition-colors">
+                        View ↗
+                      </span>
+                    </div>
+                    <div
+                      className="text-base font-semibold text-slate-100 mt-1 font-mono group-hover:text-purple-200 transition-colors"
+                      title={`${activeAnalytics.sessions.uniquePrompts.toLocaleString()} unique prompts`}
+                    >
+                      {fmtCompact(activeAnalytics.sessions.uniquePrompts)}
+                    </div>
+                    <span className="text-xs text-slate-500 block mt-0.5">Distinct queries</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-8 text-center bg-slate-950/30 rounded-xl border border-slate-800/40">
+                  <p className="text-xs text-slate-400">
+                    Token analytics are computed on-demand to maintain zero overhead on inference.
+                  </p>
+                  <button
+                    onClick={handleCalculateAnalytics}
+                    className="mt-3 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                  >
+                    ⚡ Run On-Demand Analytics
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Model Distribution & Agents/Combos breakdown */}
+            {activeAnalytics && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Models used */}
+                <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
+                    <span>🤖</span>
+                    <span>Models Distribution</span>
+                  </h4>
+                  {activeAnalytics.agents.models?.byModel &&
+                  Object.keys(activeAnalytics.agents.models.byModel).length > 0 ? (
+                    <div className="space-y-2">
+                      {Object.entries(activeAnalytics.agents.models.byModel).map(
+                        ([model, count]) => (
+                          <div key={model} className="flex items-center justify-between text-xs">
+                            <span className="font-mono text-slate-300 truncate pr-2">{model}</span>
+                            <span className="font-mono text-slate-500">{count} calls</span>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">No model calls recorded yet.</p>
+                  )}
+                </div>
+
+                {/* Combos & Agents */}
+                <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center space-x-2">
+                    <span>⚡</span>
+                    <span>Agents & Routing Combos</span>
+                  </h4>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Total Skills Enabled:</span>
+                      <span className="font-mono text-slate-200">
+                        {activeAnalytics.agents.skills.total}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">MCP Server Tools:</span>
+                      <span className="font-mono text-slate-200">
+                        {activeAnalytics.agents.mcpTools ?? 110}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Active Combos:</span>
+                      <span className="font-mono text-slate-200">
+                        {(activeAnalytics.agents.combos ?? []).join(", ") || "Auto-Combo"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Executive Brief & Optimization Suggestions */}
+            {activeBrief && (
+              <div className="bg-slate-900/60 dark:bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-lg">✨</span>
+                    <h3 className="font-semibold text-slate-100">Executive Brief & Optimization</h3>
+                  </div>
+                  <span className="text-xs text-slate-500 font-mono">
+                    Generated: {new Date(activeBrief.generatedAt * 1000).toLocaleTimeString()}
+                  </span>
+                </div>
+                <p className="text-sm text-slate-300 leading-relaxed">{activeBrief.summary}</p>
+
+                {activeBrief.optimizations && activeBrief.optimizations.length > 0 && (
+                  <div className="pt-2">
+                    <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider block mb-2">
+                      Optimization Insights:
+                    </span>
+                    <ul className="list-disc list-inside space-y-1 text-xs text-slate-300">
+                      {activeBrief.optimizations.map((opt, idx) => (
+                        <li key={idx}>{opt}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Add Workspace Modal (Manual Fallback) */}

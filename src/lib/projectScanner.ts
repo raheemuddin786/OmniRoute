@@ -150,6 +150,18 @@ export function extractWorkspaceFromContext(
         }
       }
 
+      // 4. Project/CLAUDE.md metadata banner: "Path: /Users/.../project"
+      const pathMatch = text.match(/(?:^|[\r\n])(?:Path|Project Path|Root Path):\s*([/\\].+)/i);
+      if (pathMatch && pathMatch[1]) {
+        const cand = pathMatch[1]
+          .trim()
+          .split(/[\r\n]+/)[0]
+          .trim();
+        if (cand && isValidWorkspaceRoot(cand)) {
+          return path.resolve(cand);
+        }
+      }
+
       return null;
     };
 

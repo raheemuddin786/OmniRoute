@@ -532,12 +532,23 @@ export async function calculateProjectAnalytics(
         }
       }
 
-      // 2. Fallback to row.request_summary if promptText could not be extracted from artifact
+      // 2. If promptText is empty (e.g. large truncated body), attempt extracting from response reasoning or content
+      if (!promptText && responseReasoning) {
+        const userPromptMatch = responseReasoning.match(
+          /(?:The user is asking|User message|The user says|The user wrote|User prompt):\s*["']([^"']+)["']/i
+        );
+        if (userPromptMatch && userPromptMatch[1]) {
+          promptText = userPromptMatch[1].trim();
+          rawPromptText = promptText;
+        }
+      }
+
+      // 3. Fallback to row.request_summary if promptText could not be extracted from artifact
       if (!promptText && row.request_summary) {
         promptText = row.request_summary.trim();
       }
 
-      // 3. Fallback to systemPromptText if request has only system instructions
+      // 4. Fallback to systemPromptText if request has only system instructions
       if (!promptText && systemPromptText) {
         promptText = systemPromptText;
       }
