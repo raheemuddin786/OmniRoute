@@ -28,6 +28,7 @@ interface SessionAccordionProps {
   index: number;
   projectName?: string;
   defaultExpanded?: boolean;
+  onSelectProject?: (projectId: string) => void;
 }
 
 export function SessionAccordion({
@@ -35,6 +36,7 @@ export function SessionAccordion({
   index,
   projectName = "Active Workspace",
   defaultExpanded = false,
+  onSelectProject,
 }: SessionAccordionProps) {
   const [expanded, setExpanded] = useState<boolean>(defaultExpanded);
   const [expandAllTurns, setExpandAllTurns] = useState<boolean>(false);
@@ -300,6 +302,7 @@ export function SessionAccordion({
                   item={promptItem}
                   index={pIdx}
                   defaultExpanded={expandAllTurns}
+                  onSelectProject={onSelectProject}
                 />
               </div>
             ))}

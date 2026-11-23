@@ -201,6 +201,7 @@ export async function calculateProjectAnalytics(
     cached: cachedTokens,
     saved: savedTokens,
     costUsd: Math.round(totalCostUsd * 10000) / 10000,
+    totalCalls: Number(logAgg.totalCalls ?? 0),
   };
 
   // 3. Sessions & Prompt Histories

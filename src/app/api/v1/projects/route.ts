@@ -85,6 +85,33 @@ export function ensureWorkspacesDerived() {
           }
         }
       }
+
+      // Backfill any unlinked turns whose session_tag has a known project_id
+      if (hasProjectCol) {
+        try {
+          db.prepare(
+            `UPDATE call_logs
+             SET project_id = (
+               SELECT s.project_id FROM call_logs s
+               WHERE s.session_tag = call_logs.session_tag AND s.project_id IS NOT NULL AND s.project_id != ''
+               LIMIT 1
+             ),
+             workspace_root = COALESCE(call_logs.workspace_root, (
+               SELECT s.workspace_root FROM call_logs s
+               WHERE s.session_tag = call_logs.session_tag AND s.workspace_root IS NOT NULL AND s.workspace_root != ''
+               LIMIT 1
+             ))
+             WHERE session_tag IS NOT NULL
+               AND (project_id IS NULL OR project_id = '')
+               AND EXISTS (
+                 SELECT 1 FROM call_logs s
+                 WHERE s.session_tag = call_logs.session_tag AND s.project_id IS NOT NULL AND s.project_id != ''
+               )`
+          ).run();
+        } catch {
+          // Best-effort session affinity backfill
+        }
+      }
     }
   } catch {
     // Graceful fallback if call_logs schema or query fails
@@ -202,6 +229,34 @@ export async function POST_REFRESH(request: Request) {
             .run(project.id, rootPath);
           backfilled += result?.changes ?? 0;
         }
+      }
+
+      // Also backfill any unlinked rows whose session_tag has a known project_id
+      try {
+        const sessionBackfill = db
+          .prepare(
+            `UPDATE call_logs
+             SET project_id = (
+               SELECT s.project_id FROM call_logs s
+               WHERE s.session_tag = call_logs.session_tag AND s.project_id IS NOT NULL AND s.project_id != ''
+               LIMIT 1
+             ),
+             workspace_root = COALESCE(call_logs.workspace_root, (
+               SELECT s.workspace_root FROM call_logs s
+               WHERE s.session_tag = call_logs.session_tag AND s.workspace_root IS NOT NULL AND s.workspace_root != ''
+               LIMIT 1
+             ))
+             WHERE session_tag IS NOT NULL
+               AND (project_id IS NULL OR project_id = '')
+               AND EXISTS (
+                 SELECT 1 FROM call_logs s
+                 WHERE s.session_tag = call_logs.session_tag AND s.project_id IS NOT NULL AND s.project_id != ''
+               )`
+          )
+          .run();
+        backfilled += sessionBackfill?.changes ?? 0;
+      } catch {
+        // Best-effort session affinity backfill
       }
 
       const linked = db

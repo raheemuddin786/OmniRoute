@@ -75,6 +75,13 @@ export function ProjectsAnalyticsTab() {
         if (!ignore && data.success && Array.isArray(data.projects)) {
           setProjects(data.projects);
         }
+
+        // Fetch global analytics in parallel so global view is populated immediately
+        const gRes = await fetch("/api/v1/projects/__global__/analytics", { method: "POST" });
+        const gData = await gRes.json();
+        if (!ignore && gData.success && gData.analytics) {
+          setGlobalAnalytics(gData.analytics);
+        }
       } catch {
         if (!ignore) showNotice("error", "Failed to fetch connected projects");
       } finally {
@@ -92,6 +99,43 @@ export function ProjectsAnalyticsTab() {
     if (isGlobalView) return null;
     return projects.find((p) => p.id === selectedProjectId) ?? null;
   }, [isGlobalView, projects, selectedProjectId]);
+
+  // Auto-fetch project-scoped analytics when switching to a project that lacks cached analytics
+  useEffect(() => {
+    let ignore = false;
+    if (!isGlobalView && selectedProjectId && selectedProject && !selectedProject.analyticsCache) {
+      async function fetchProjectAnalytics() {
+        setCalculatingAnalytics(true);
+        try {
+          const res = await fetch(`/api/v1/projects/${selectedProjectId}/analytics`, {
+            method: "POST",
+          });
+          const data = await res.json();
+          if (!ignore && data.success && data.analytics) {
+            setProjects((prev) =>
+              prev.map((p) =>
+                p.id === selectedProjectId
+                  ? {
+                      ...p,
+                      analyticsCache: data.analytics,
+                      analyticsCachedAt: data.analytics.lastComputedAt,
+                    }
+                  : p
+              )
+            );
+          }
+        } catch {
+          // Non-blocking auto-fetch
+        } finally {
+          if (!ignore) setCalculatingAnalytics(false);
+        }
+      }
+      void fetchProjectAnalytics();
+    }
+    return () => {
+      ignore = true;
+    };
+  }, [isGlobalView, selectedProjectId, selectedProject]);
 
   // Filtered and sorted projects
   const filteredProjects = useMemo(() => {
@@ -914,6 +958,11 @@ export function ProjectsAnalyticsTab() {
               selectedProjectId={isGlobalView ? "Global Application" : selectedProject?.name}
               onRefresh={handleCalculateAnalytics}
               calculating={calculatingAnalytics}
+              onSelectProject={(projectId) => {
+                setSelectedProjectId(projectId);
+                // Keep the prompt analytics view open for the newly selected project
+                setProjectViewMode("prompts");
+              }}
             />
           </div>
         ) : (

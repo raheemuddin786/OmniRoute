@@ -54,6 +54,7 @@ interface PromptAnalyticsTabProps {
   selectedProjectId?: string;
   onRefresh?: () => void;
   calculating?: boolean;
+  onSelectProject?: (projectId: string) => void;
 }
 
 export function PromptAnalyticsTab({
@@ -65,6 +66,7 @@ export function PromptAnalyticsTab({
   selectedProjectId,
   onRefresh,
   calculating = false,
+  onSelectProject,
 }: PromptAnalyticsTabProps) {
   const [viewMode, setViewMode] = useState<"hierarchical" | "flat">("hierarchical");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -672,6 +674,7 @@ export function PromptAnalyticsTab({
                     index={globalIndex}
                     projectName={selectedProjectId || "Active Workspace"}
                     defaultExpanded={globalIndex === 0}
+                    onSelectProject={onSelectProject}
                   />
                 );
               })}
@@ -690,7 +693,12 @@ export function PromptAnalyticsTab({
             {paginatedPrompts.map((item, idx) => {
               const globalIndex = (safePromptPage - 1) * promptsPerPage + idx;
               return (
-                <PromptListItem key={item.id || globalIndex} item={item} index={globalIndex} />
+                <PromptListItem
+                  key={item.id || globalIndex}
+                  item={item}
+                  index={globalIndex}
+                  onSelectProject={onSelectProject}
+                />
               );
             })}
           </div>

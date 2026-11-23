@@ -49,6 +49,7 @@ export interface TokenEconomics {
   cached: number;
   saved: number;
   costUsd: number;
+  totalCalls?: number;
 }
 
 export interface PromptPipelineStage {

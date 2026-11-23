@@ -42,9 +42,15 @@ interface PromptListItemProps {
   item: PromptItemData;
   index: number;
   defaultExpanded?: boolean;
+  onSelectProject?: (projectId: string) => void;
 }
 
-export function PromptListItem({ item, index, defaultExpanded = false }: PromptListItemProps) {
+export function PromptListItem({
+  item,
+  index,
+  defaultExpanded = false,
+  onSelectProject,
+}: PromptListItemProps) {
   const [expanded, setExpanded] = useState<boolean>(defaultExpanded);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState<boolean>(false);
   const [activeTechnicalTab, setActiveTechnicalTab] = useState<
@@ -248,15 +254,35 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
               {/* Project / Workspace Badge */}
               {(item.projectName || item.workspaceRoot) && (
                 <span
-                  className="text-xs font-mono px-1.5 py-0.5 rounded border bg-emerald-950/40 text-emerald-300 border-emerald-800/40 flex items-center gap-1"
+                  onClick={
+                    item.projectId && onSelectProject
+                      ? (e) => {
+                          e.stopPropagation();
+                          onSelectProject(item.projectId!);
+                        }
+                      : undefined
+                  }
+                  className={`text-xs font-mono px-1.5 py-0.5 rounded border bg-emerald-950/40 text-emerald-300 border-emerald-800/40 flex items-center gap-1 ${
+                    item.projectId && onSelectProject
+                      ? "cursor-pointer hover:bg-emerald-900/60 hover:text-emerald-200 hover:border-emerald-600 transition-colors"
+                      : ""
+                  }`}
                   title={
-                    item.workspaceRoot
-                      ? `Workspace: ${item.workspaceRoot}`
-                      : `Project: ${item.projectName}`
+                    item.projectId && onSelectProject
+                      ? `Jump to project: ${item.projectName || item.projectId}`
+                      : item.workspaceRoot
+                        ? `Workspace: ${item.workspaceRoot}`
+                        : `Project: ${item.projectName}`
                   }
                 >
                   <span>📁</span>
-                  <span>{item.projectName || item.workspaceRoot?.split("/").pop()}</span>
+                  <span
+                    className={
+                      item.projectId && onSelectProject ? "underline underline-offset-2" : ""
+                    }
+                  >
+                    {item.projectName || item.workspaceRoot?.split("/").pop()}
+                  </span>
                 </span>
               )}
 

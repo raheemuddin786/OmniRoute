@@ -136,7 +136,7 @@ export function resolveWorkspaceLinker(ctx: WorkspaceLinkerContext): WorkspaceLi
     project.createdAt === project.updatedAt ||
     Math.abs((project.updatedAt ?? 0) - (project.createdAt ?? 0)) < 1;
 
-  // Backfill dangling rows so analytics joins never see NULL project_id.
+  // Backfill dangling rows so analytics joins never see NULL project_id or workspace_root.
   if (hasColumn(db, "call_logs", "project_id")) {
     try {
       const r = db
@@ -147,6 +147,19 @@ export function resolveWorkspaceLinker(ctx: WorkspaceLinkerContext): WorkspaceLi
         )
         .run(project.id, candidateRoot);
       result.backfilled = r?.changes ?? 0;
+
+      // Also backfill prior turns in the same session that were created before
+      // workspace was detected (e.g. early turn before environment was sent)
+      if (ctx.sessionTag && hasColumn(db, "call_logs", "workspace_root")) {
+        const sessionBackfill = db
+          .prepare(
+            `UPDATE call_logs
+             SET project_id = ?, workspace_root = ?
+             WHERE session_tag = ? AND (project_id IS NULL OR project_id = '')`
+          )
+          .run(project.id, candidateRoot, ctx.sessionTag);
+        result.backfilled += sessionBackfill?.changes ?? 0;
+      }
     } catch {
       // Best-effort
     }
