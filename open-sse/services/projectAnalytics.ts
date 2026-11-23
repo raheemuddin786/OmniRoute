@@ -72,6 +72,9 @@ interface DetailedCallLogRow {
   request_summary: string | null;
   resilience_actions: string | null;
   ledger_cost_usd: number | null;
+  project_id: string | null;
+  workspace_root: string | null;
+  project_name: string | null;
 }
 
 interface ConversationTurnRow {
@@ -248,9 +251,13 @@ export async function calculateProjectAnalytics(
         cl.artifact_relpath,
         cl.request_summary,
         cl.resilience_actions,
+        cl.project_id,
+        cl.workspace_root,
+        pr.name AS project_name,
         rcl.amount_usd AS ledger_cost_usd
       FROM call_logs cl
       LEFT JOIN request_cost_ledger rcl ON cl.id = rcl.request_id
+      LEFT JOIN project_registry pr ON cl.project_id = pr.id
       ${detailedWhereSql}
       ORDER BY cl.timestamp DESC
       LIMIT 250
@@ -775,6 +782,9 @@ export async function calculateProjectAnalytics(
             errorSummary: row.error_summary,
             resilienceActions: row.resilience_actions || undefined,
             pipelineStages: pipelineStages.length > 0 ? pipelineStages : undefined,
+            projectId: row.project_id || undefined,
+            projectName: row.project_name || undefined,
+            workspaceRoot: row.workspace_root || undefined,
           });
         }
       }

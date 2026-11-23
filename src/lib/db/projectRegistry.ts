@@ -145,6 +145,9 @@ export interface RecentPromptRecord {
   resilienceActions?: string | null;
   pipelineStages?: PromptPipelineStage[];
   conversationTurn?: ConversationSessionTurn;
+  projectId?: string;
+  projectName?: string;
+  workspaceRoot?: string;
 }
 
 export interface SessionSummary {

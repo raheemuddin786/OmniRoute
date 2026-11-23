@@ -37,6 +37,9 @@ interface PromptAnalyticsTabProps {
     errorSummary?: string | null;
     resilienceActions?: string | null;
     pipelineStages?: PromptPipelineStage[];
+    projectId?: string;
+    projectName?: string;
+    workspaceRoot?: string;
   }>;
   tokensInSuccess?: number;
   tokensOutSuccess?: number;
@@ -116,6 +119,9 @@ export function PromptAnalyticsTab({
         tokensCacheCreation: Number(rp.tokensCacheCreation ?? 0),
         tokensReasoning: Number(rp.tokensReasoning ?? 0),
         pipelineStages: rp.pipelineStages,
+        projectId: rp.projectId,
+        projectName: rp.projectName,
+        workspaceRoot: rp.workspaceRoot,
       };
     });
 

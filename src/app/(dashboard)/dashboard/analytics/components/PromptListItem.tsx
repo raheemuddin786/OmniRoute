@@ -33,6 +33,9 @@ export interface PromptItemData {
   errorSummary?: string | null;
   resilienceActions?: string | null;
   pipelineStages?: PromptPipelineStage[];
+  projectId?: string;
+  projectName?: string;
+  workspaceRoot?: string;
 }
 
 interface PromptListItemProps {
@@ -239,6 +242,36 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                   title={item.resilienceActions}
                 >
                   🛡️ Resilience
+                </span>
+              )}
+
+              {/* Project / Workspace Badge */}
+              {(item.projectName || item.workspaceRoot) && (
+                <span
+                  className="text-xs font-mono px-1.5 py-0.5 rounded border bg-emerald-950/40 text-emerald-300 border-emerald-800/40 flex items-center gap-1"
+                  title={
+                    item.workspaceRoot
+                      ? `Workspace: ${item.workspaceRoot}`
+                      : `Project: ${item.projectName}`
+                  }
+                >
+                  <span>📁</span>
+                  <span>{item.projectName || item.workspaceRoot?.split("/").pop()}</span>
+                </span>
+              )}
+
+              {/* Session Tag Badge */}
+              {item.sessionTag && (
+                <span
+                  className="text-xs font-mono px-1.5 py-0.5 rounded border bg-purple-950/40 text-purple-300 border-purple-800/40 flex items-center gap-1"
+                  title={`Session Tag: ${item.sessionTag}`}
+                >
+                  <span>💬</span>
+                  <span>
+                    {item.sessionTag.startsWith("conv_")
+                      ? item.sessionTag.slice(5, 13)
+                      : item.sessionTag.slice(0, 8)}
+                  </span>
                 </span>
               )}
             </div>
