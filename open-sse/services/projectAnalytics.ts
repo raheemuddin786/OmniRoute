@@ -267,6 +267,20 @@ export async function calculateProjectAnalytics(
       let toolsUsed: string[] | undefined = undefined;
       let filesModified: string[] | undefined = undefined;
       let responseSummary: string | undefined = undefined;
+      let responseReasoning: string | undefined = undefined;
+      const chatMessagesList: Array<{
+        id?: string;
+        role: "system" | "user" | "assistant" | "tool";
+        content: string;
+        reasoningContent?: string;
+        toolCalls?: Array<{
+          id?: string;
+          name: string;
+          arguments?: string | Record<string, unknown>;
+        }>;
+        toolName?: string;
+        timestamp?: string;
+      }> = [];
       const pipelineStages: PromptPipelineStage[] = [];
 
       // 1. Try reading disk artifact if available to extract full message text, tools, and pipeline stages
@@ -359,21 +373,6 @@ export async function calculateProjectAnalytics(
               }
               return "";
             };
-
-            let responseReasoning: string | undefined = undefined;
-            const chatMessagesList: Array<{
-              id?: string;
-              role: "system" | "user" | "assistant" | "tool";
-              content: string;
-              reasoningContent?: string;
-              toolCalls?: Array<{
-                id?: string;
-                name: string;
-                arguments?: string | Record<string, unknown>;
-              }>;
-              toolName?: string;
-              timestamp?: string;
-            }> = [];
 
             // 1. Anthropic Claude format: body.system (string or array of text blocks)
             if (body && typeof body === "object") {
@@ -696,7 +695,7 @@ export async function calculateProjectAnalytics(
     }
 
     // If still empty, inspect agentic_conversations turn counts
-    if (seenPrompts.size === 0) {
+    if (seenCallIds.size === 0) {
       try {
         const convSql = isGlobal
           ? `SELECT last_messages_hash, last_seen_at FROM agentic_conversations ORDER BY rowid DESC LIMIT 50`
@@ -710,8 +709,8 @@ export async function calculateProjectAnalytics(
           isGlobal ? db.prepare(convSql).all() : db.prepare(convSql).all(...params)
         ) as ConversationTurnRow[];
         for (const row of convRows) {
-          if (row.last_messages_hash && !seenPrompts.has(row.last_messages_hash)) {
-            seenPrompts.add(row.last_messages_hash);
+          if (row.last_messages_hash && !seenCallIds.has(row.last_messages_hash)) {
+            seenCallIds.add(row.last_messages_hash);
             recentPrompts.push({
               prompt: `Agent turn session (${row.last_messages_hash.slice(0, 12)}...)`,
               timestamp: row.last_seen_at || new Date().toISOString(),
@@ -728,7 +727,7 @@ export async function calculateProjectAnalytics(
       }
     }
 
-    uniquePrompts = seenPrompts.size > 0 ? seenPrompts.size : Number(logAgg.totalCalls ?? 0);
+    uniquePrompts = seenCallIds.size > 0 ? seenCallIds.size : Number(logAgg.totalCalls ?? 0);
   } catch {
     uniquePrompts = Number(logAgg.totalCalls ?? 0);
   }
