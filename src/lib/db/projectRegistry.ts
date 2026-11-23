@@ -81,6 +81,42 @@ export interface ConversationChatMessage {
   timestamp?: string;
 }
 
+export interface ConversationTurnStep {
+  id: string;
+  timestamp: string;
+  model?: string;
+  provider?: string;
+  status?: number;
+  durationMs?: number;
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensCacheRead?: number;
+  tokensReasoning?: number;
+  costUsd?: number;
+  thought?: string;
+  content?: string;
+  tools?: Array<{
+    id?: string;
+    name: string;
+    arguments?: string | Record<string, unknown>;
+  }>;
+  filesModified?: string[];
+  error?: string | null;
+  pipelineStages?: PromptPipelineStage[];
+}
+
+export interface ConversationSessionTurn {
+  id: string;
+  turnIndex: number;
+  userPrompt: string;
+  rawUserPrompt?: string;
+  timestamp: string;
+  steps: ConversationTurnStep[];
+  totalTokens?: number;
+  totalCostUsd?: number;
+  primaryModel?: string;
+}
+
 export interface RecentPromptRecord {
   prompt: string;
   rawPrompt?: string;
@@ -108,12 +144,14 @@ export interface RecentPromptRecord {
   errorSummary?: string | null;
   resilienceActions?: string | null;
   pipelineStages?: PromptPipelineStage[];
+  conversationTurn?: ConversationSessionTurn;
 }
 
 export interface SessionSummary {
   total: number;
   uniquePrompts: number;
   recentPrompts?: RecentPromptRecord[];
+  conversationTurns?: ConversationSessionTurn[];
 }
 
 export interface AgentUsageSummary {

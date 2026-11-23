@@ -16,6 +16,9 @@ import type {
   TokenEconomics,
   SessionSummary,
   RecentPromptRecord,
+  ConversationSessionTurn,
+  ConversationTurnStep,
+  PromptPipelineStage,
   AgentUsageSummary,
   ProjectBrief,
 } from "../../src/lib/db/projectRegistry.ts";
@@ -285,7 +288,10 @@ export async function calculateProjectAnalytics(
 
       // 1. Try reading disk artifact if available to extract full message text, tools, and pipeline stages
       if (row.artifact_relpath) {
-        const fullPath = path.join(callLogsDir, row.artifact_relpath);
+        let fullPath = path.join(callLogsDir, row.artifact_relpath);
+        if (!fs.existsSync(fullPath)) {
+          fullPath = path.join(dataDir, row.artifact_relpath);
+        }
         if (fs.existsSync(fullPath)) {
           try {
             const fileContent = JSON.parse(fs.readFileSync(fullPath, "utf8"));
@@ -732,10 +738,130 @@ export async function calculateProjectAnalytics(
     uniquePrompts = Number(logAgg.totalCalls ?? 0);
   }
 
+  // Construct structured conversationTurns from recentPrompts for natural chat thread visualization
+  const conversationTurns: ConversationSessionTurn[] = [];
+  try {
+    // Sort recent prompts chronologically ascending
+    const chronologicalPrompts = [...recentPrompts].sort((a, b) => {
+      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return timeA - timeB;
+    });
+
+    let currentTurn: ConversationSessionTurn | null = null;
+    for (const p of chronologicalPrompts) {
+      const cleanPrompt = extractUserIntent(p.prompt);
+      const isSystemScaffold =
+        cleanPrompt.startsWith("Directory Structure:") ||
+        cleanPrompt.startsWith("PROJECT CONTEXT") ||
+        cleanPrompt.startsWith("DETECTED PROJECT STACK") ||
+        cleanPrompt.startsWith("CRITICAL SECURITY DIRECTIVE") ||
+        cleanPrompt.startsWith("EXISTING INTENT LEDGER") ||
+        cleanPrompt.startsWith("[HTTP Call]");
+
+      const isNewHumanTurn =
+        !isSystemScaffold &&
+        cleanPrompt.trim().length > 0 &&
+        (!currentTurn || currentTurn.userPrompt !== cleanPrompt);
+
+      if (isNewHumanTurn) {
+        currentTurn = {
+          id: p.sessionTag
+            ? `${p.sessionTag}-turn-${conversationTurns.length + 1}`
+            : `turn-${conversationTurns.length + 1}`,
+          turnIndex: conversationTurns.length + 1,
+          userPrompt: cleanPrompt,
+          rawUserPrompt: p.rawPrompt || p.prompt,
+          timestamp: p.timestamp,
+          steps: [],
+          totalTokens: 0,
+          totalCostUsd: 0,
+          primaryModel: p.model,
+        };
+        conversationTurns.push(currentTurn);
+      }
+
+      if (!currentTurn) {
+        currentTurn = {
+          id: p.sessionTag ? `${p.sessionTag}-turn-1` : "turn-1",
+          turnIndex: 1,
+          userPrompt: cleanPrompt || "Initial request",
+          rawUserPrompt: p.rawPrompt || p.prompt,
+          timestamp: p.timestamp,
+          steps: [],
+          totalTokens: 0,
+          totalCostUsd: 0,
+          primaryModel: p.model,
+        };
+        conversationTurns.push(currentTurn);
+      }
+
+      // Collect tool calls from chatMessages if available
+      const stepTools: Array<{
+        id?: string;
+        name: string;
+        arguments?: string | Record<string, unknown>;
+      }> = [];
+      if (Array.isArray(p.chatMessages)) {
+        for (const msg of p.chatMessages) {
+          if (Array.isArray(msg.toolCalls)) {
+            stepTools.push(...msg.toolCalls);
+          }
+        }
+      } else if (Array.isArray(p.toolsUsed)) {
+        for (const t of p.toolsUsed) {
+          stepTools.push({ name: t });
+        }
+      }
+
+      // Assistant text content
+      let assistantText = p.responseSummary;
+      if (Array.isArray(p.chatMessages)) {
+        const lastAssistant = p.chatMessages.filter((m) => m.role === "assistant").pop();
+        if (lastAssistant?.content) {
+          assistantText = lastAssistant.content;
+        }
+      }
+
+      const step: ConversationTurnStep = {
+        id:
+          (p.pipelineStages?.[0]?.details as { callId?: string })?.callId ||
+          `step-${currentTurn.steps.length + 1}`,
+        timestamp: p.timestamp,
+        model: p.model,
+        provider: p.provider,
+        status: p.status,
+        durationMs: p.durationMs,
+        tokensIn: p.tokensIn,
+        tokensOut: p.tokensOut,
+        tokensCacheRead: p.tokensCacheRead,
+        tokensReasoning: p.tokensReasoning,
+        costUsd: p.costUsd,
+        thought: p.responseReasoning,
+        content: assistantText,
+        tools: stepTools.length > 0 ? stepTools : undefined,
+        filesModified: p.filesModified,
+        error: p.errorSummary,
+        pipelineStages: p.pipelineStages,
+      };
+
+      currentTurn.steps.push(step);
+      currentTurn.totalTokens =
+        (currentTurn.totalTokens || 0) + (p.tokensIn || 0) + (p.tokensOut || 0);
+      currentTurn.totalCostUsd = (currentTurn.totalCostUsd || 0) + (p.costUsd || 0);
+      if (p.model && !currentTurn.primaryModel) {
+        currentTurn.primaryModel = p.model;
+      }
+    }
+  } catch {
+    // Non-critical fallback
+  }
+
   const sessions: SessionSummary = {
     total: totalSessions,
     uniquePrompts,
     recentPrompts: recentPrompts.slice(0, 50),
+    conversationTurns: conversationTurns.length > 0 ? conversationTurns : undefined,
   };
 
   // 4. Models & Combos breakdown

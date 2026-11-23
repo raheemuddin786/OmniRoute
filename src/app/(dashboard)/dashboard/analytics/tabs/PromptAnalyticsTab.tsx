@@ -162,6 +162,95 @@ export function PromptAnalyticsTab({
         return timeA - timeB;
       });
 
+      // Group into real conversation turns: User message -> associated AI steps/tools/response
+      // This eliminates the artificial 20-30 separate "Turn #1..#30" HTTP dumps for intermediate agent tool steps
+      const aggregatedTurns: PromptItemData[] = [];
+      let activeTurnItem: PromptItemData | null = null;
+
+      for (const p of sortedPrompts) {
+        const cleanP = extractUserIntent(p.prompt || "");
+        const isScaffold =
+          cleanP.startsWith("Directory Structure:") ||
+          cleanP.startsWith("PROJECT CONTEXT") ||
+          cleanP.startsWith("DETECTED PROJECT STACK") ||
+          cleanP.startsWith("CRITICAL SECURITY DIRECTIVE") ||
+          cleanP.startsWith("EXISTING INTENT LEDGER") ||
+          cleanP.startsWith("[HTTP Call]");
+
+        const isNewHumanTurn =
+          !isScaffold &&
+          cleanP.trim().length > 0 &&
+          (!activeTurnItem || activeTurnItem.prompt !== cleanP);
+
+        if (isNewHumanTurn) {
+          activeTurnItem = {
+            ...p,
+            prompt: cleanP,
+            rawPrompt: p.rawPrompt || p.prompt,
+            chatMessages: p.chatMessages ? [...p.chatMessages] : [],
+            pipelineStages: p.pipelineStages ? [...p.pipelineStages] : [],
+            toolsUsed: p.toolsUsed ? [...p.toolsUsed] : [],
+            filesModified: p.filesModified ? [...p.filesModified] : [],
+          };
+          aggregatedTurns.push(activeTurnItem);
+        } else if (activeTurnItem) {
+          // Accumulate intermediate AI thoughts, tools, tokens, and response into the current active turn
+          activeTurnItem.tokensIn = (activeTurnItem.tokensIn || 0) + (p.tokensIn || 0);
+          activeTurnItem.tokensOut = (activeTurnItem.tokensOut || 0) + (p.tokensOut || 0);
+          activeTurnItem.tokensCacheRead =
+            (activeTurnItem.tokensCacheRead || 0) + (p.tokensCacheRead || 0);
+          activeTurnItem.tokensReasoning =
+            (activeTurnItem.tokensReasoning || 0) + (p.tokensReasoning || 0);
+          activeTurnItem.costUsd = (activeTurnItem.costUsd || 0) + (p.costUsd || 0);
+          activeTurnItem.durationMs = (activeTurnItem.durationMs || 0) + (p.durationMs || 0);
+          if (p.model) activeTurnItem.model = p.model;
+          if (p.provider) activeTurnItem.provider = p.provider;
+          if (p.status !== undefined && p.status >= 400) activeTurnItem.status = p.status;
+          if (p.errorSummary) activeTurnItem.errorSummary = p.errorSummary;
+
+          // Merge tools used
+          if (Array.isArray(p.toolsUsed)) {
+            const currentTools = new Set(activeTurnItem.toolsUsed || []);
+            p.toolsUsed.forEach((t) => currentTools.add(t));
+            activeTurnItem.toolsUsed = Array.from(currentTools);
+          }
+          if (Array.isArray(p.filesModified)) {
+            const currentFiles = new Set(activeTurnItem.filesModified || []);
+            p.filesModified.forEach((f) => currentFiles.add(f));
+            activeTurnItem.filesModified = Array.from(currentFiles);
+          }
+
+          // Merge chat messages and latest response summary
+          if (Array.isArray(p.chatMessages) && p.chatMessages.length > 0) {
+            if (!activeTurnItem.chatMessages) activeTurnItem.chatMessages = [];
+            activeTurnItem.chatMessages.push(...p.chatMessages);
+          }
+          if (p.responseReasoning) {
+            activeTurnItem.responseReasoning = p.responseReasoning;
+          }
+          if (p.responseSummary) {
+            activeTurnItem.responseSummary = p.responseSummary;
+          }
+          if (Array.isArray(p.pipelineStages) && p.pipelineStages.length > 0) {
+            if (!activeTurnItem.pipelineStages) activeTurnItem.pipelineStages = [];
+            activeTurnItem.pipelineStages.push(...p.pipelineStages);
+          }
+        } else {
+          // If first item was non-human, create an initial container
+          activeTurnItem = {
+            ...p,
+            prompt: cleanP || "Initial Request",
+            rawPrompt: p.rawPrompt || p.prompt,
+            chatMessages: p.chatMessages ? [...p.chatMessages] : [],
+            pipelineStages: p.pipelineStages ? [...p.pipelineStages] : [],
+            toolsUsed: p.toolsUsed ? [...p.toolsUsed] : [],
+            filesModified: p.filesModified ? [...p.filesModified] : [],
+          };
+          aggregatedTurns.push(activeTurnItem);
+        }
+      }
+
+      const displayTurns = aggregatedTurns.length > 0 ? aggregatedTurns : sortedPrompts;
       const sessionCost = sortedPrompts.reduce((sum, p) => sum + (p.costUsd || 0), 0);
       const sessionTokens = sortedPrompts.reduce(
         (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0),
@@ -175,8 +264,8 @@ export function PromptAnalyticsTab({
         sessionId: key,
         firstSeenAt: sortedPrompts[0]?.timestamp || "",
         lastSeenAt: sortedPrompts[sortedPrompts.length - 1]?.timestamp || "",
-        turnCount: sortedPrompts.length,
-        prompts: sortedPrompts,
+        turnCount: displayTurns.length,
+        prompts: displayTurns,
         totalTokens: sessionTokens,
         totalCostUsd: sessionCost,
         modelUsed: latestModel,

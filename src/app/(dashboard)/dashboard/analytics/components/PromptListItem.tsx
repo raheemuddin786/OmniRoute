@@ -454,12 +454,42 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                         {/* Tool Calls execution list if present */}
                         {msg.toolCalls && msg.toolCalls.length > 0 && (
                           <div className="space-y-1.5 pt-1">
-                            <div className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
-                              <span>🛠️</span> Invocations ({msg.toolCalls.length}):
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
+                            <div className="flex flex-col gap-1.5">
                               {msg.toolCalls.map((tc, tcIdx) => {
                                 const isSelected = expandedToolIndex === tcIdx;
+                                const rawArgs = tc.arguments;
+                                const parsedArgs: Record<string, unknown> | null =
+                                  typeof rawArgs === "object" && rawArgs !== null
+                                    ? (rawArgs as Record<string, unknown>)
+                                    : typeof rawArgs === "string"
+                                      ? (() => {
+                                          try {
+                                            return JSON.parse(rawArgs);
+                                          } catch {
+                                            return null;
+                                          }
+                                        })()
+                                      : null;
+
+                                const targetPath =
+                                  (parsedArgs?.path as string) ||
+                                  (parsedArgs?.file_path as string) ||
+                                  (parsedArgs?.target_file as string) ||
+                                  (parsedArgs?.file as string) ||
+                                  "";
+
+                                const commandStr =
+                                  (parsedArgs?.command as string) ||
+                                  (parsedArgs?.cmd as string) ||
+                                  "";
+
+                                const labelDetail = targetPath
+                                  ? targetPath.split("/").pop()
+                                  : commandStr
+                                    ? commandStr.slice(0, 35) +
+                                      (commandStr.length > 35 ? "..." : "")
+                                    : "";
+
                                 return (
                                   <div key={tcIdx} className="w-full">
                                     <button
@@ -467,19 +497,25 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                                       onClick={() =>
                                         setExpandedToolIndex(isSelected ? null : tcIdx)
                                       }
-                                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-amber-300 transition-colors"
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/70 text-xs font-mono text-slate-200 hover:text-white transition-all shadow-sm"
                                     >
-                                      <span>⚡</span>
-                                      <span>{tc.name}</span>
-                                      <span className="text-[10px] text-slate-400">
-                                        {isSelected ? "▲" : "▼"}
+                                      <span className="text-amber-400 font-semibold">
+                                        {tc.name}
+                                      </span>
+                                      {labelDetail && (
+                                        <span className="text-slate-300 font-normal">
+                                          {labelDetail}
+                                        </span>
+                                      )}
+                                      <span className="text-[10px] text-slate-400 ml-1">
+                                        {isSelected ? "▾" : "▸"}
                                       </span>
                                     </button>
-                                    {isSelected && tc.arguments && (
-                                      <pre className="mt-1.5 p-2 rounded bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 whitespace-pre-wrap overflow-x-auto">
-                                        {typeof tc.arguments === "object"
-                                          ? JSON.stringify(tc.arguments, null, 2)
-                                          : String(tc.arguments)}
+                                    {isSelected && rawArgs && (
+                                      <pre className="mt-1.5 p-2.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 whitespace-pre-wrap overflow-x-auto shadow-inner leading-relaxed">
+                                        {typeof rawArgs === "object"
+                                          ? JSON.stringify(rawArgs, null, 2)
+                                          : String(rawArgs)}
                                       </pre>
                                     )}
                                   </div>
@@ -626,6 +662,27 @@ export function PromptListItem({ item, index, defaultExpanded = false }: PromptL
                             {safeResponseReasoning}
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* Compact Tool Invocations if tools were used in this turn */}
+                    {item.toolsUsed && item.toolsUsed.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {item.toolsUsed.map((toolName, tIdx) => {
+                          const matchedFile = item.filesModified?.[tIdx] || item.filesModified?.[0];
+                          const fileBaseName = matchedFile ? matchedFile.split("/").pop() : "";
+                          return (
+                            <span
+                              key={tIdx}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/70 text-xs font-mono text-slate-200 shadow-sm"
+                            >
+                              <span className="text-amber-400 font-semibold">{toolName}</span>
+                              {fileBaseName && (
+                                <span className="text-slate-300">{fileBaseName}</span>
+                              )}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
 
