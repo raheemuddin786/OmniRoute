@@ -121,5 +121,17 @@ export function truncateForLog(value: unknown): Record<string, unknown> | null |
   if (Array.isArray(obj.contents)) summary.contentCount = obj.contents.length;
   if (typeof obj.stream === "boolean") summary.stream = obj.stream;
   if (Array.isArray(obj.tools)) summary.tools = cloneBoundedChatLogPayload(obj.tools);
+
+  // Preserve the last user message turn so prompt and intent analytics can
+  // extract human intent even when full multi-MB conversation history is truncated.
+  if (Array.isArray(obj.messages)) {
+    const lastUserTurn = (obj.messages as Array<Record<string, unknown>>)
+      .filter((m) => m && (m.role === "user" || m.role === "human"))
+      .pop();
+    if (lastUserTurn) {
+      summary.lastUserMessage = cloneBoundedChatLogPayload(lastUserTurn);
+    }
+  }
+
   return summary;
 }

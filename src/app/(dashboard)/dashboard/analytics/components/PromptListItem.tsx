@@ -443,6 +443,15 @@ export function PromptListItem({
 
                   if (msg.role === "user") {
                     const intentContent = extractUserIntent(msg.content);
+                    // Filter out internal scaffolding tool output messages falsely marked as user
+                    if (
+                      !intentContent ||
+                      intentContent.startsWith("<system-reminder>") ||
+                      intentContent.startsWith("Called the Read tool") ||
+                      intentContent.startsWith("Result of calling the Read tool")
+                    ) {
+                      return null;
+                    }
                     return (
                       <div key={mIdx} className="flex items-start gap-3 justify-end">
                         <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
@@ -457,7 +466,7 @@ export function PromptListItem({
                                 </span>
                               )}
                               <span className="text-indigo-400/80 font-mono text-[11px]">
-                                {msg.content.length} chars
+                                {intentContent.length} chars
                               </span>
                             </div>
                           </div>

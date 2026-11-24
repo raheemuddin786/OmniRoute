@@ -168,7 +168,8 @@ const SCAFFOLDING_PREFIXES = [
 /**
  * Extract a clean user intent line from prompt text by stripping leading
  * agent-framework scaffolding (e.g. "Memory context: ...", "PROJECT CONTEXT...",
- * "NEW USER MESSAGE:", or embedded "USER PROMPT:\n..."). Returns the genuine human prompt.
+ * "NEW USER MESSAGE:", XML tags like `<system-reminder>`, `<local-command-caveat>`,
+ * or embedded "USER PROMPT:\n..."). Returns the genuine human prompt.
  * Never mutates the stored source — display-only filtering.
  *
  * @param {string} prompt - Raw prompt text (may contain scaffolding prefixes)
@@ -180,7 +181,7 @@ export function extractUserIntent(prompt: string): string {
   const trimmedPrompt = prompt.trim();
 
   // If prompt is a raw JSON payload containing upstreamHttp metadata (e.g. proxy telemetry),
-  // summarize the logical HTTP transaction rather than displaying raw JSON braces in preview.
+  // do NOT return raw JSON or format as [HTTP Call] if there's any way to represent it cleanly.
   if (trimmedPrompt.startsWith("{") && trimmedPrompt.includes('"upstreamHttp"')) {
     try {
       const parsed = JSON.parse(trimmedPrompt) as {
@@ -196,49 +197,48 @@ export function extractUserIntent(prompt: string): string {
       };
       if (parsed.upstreamHttp?.send) {
         const s = parsed.upstreamHttp.send;
-        return `[HTTP Call] ${s.method || "POST"} ${s.provider || "provider"}/${s.model || "model"} (${s.status || 200}, ${s.durationMs || 0}ms)`;
+        return `API Request (${s.model || s.provider || "completion"})`;
       }
     } catch {
       // Fall through to general processing
     }
   }
 
-  // 1. Check for explicit "NEW USER MESSAGE:" or "USER PROMPT:" marker injected by frameworks
-  const explicitMarkerMatch = prompt.match(
-    /\b(?:NEW USER MESSAGE|USER PROMPT):\s*([\s\S]+?)(?=(?:<pasted_content|<\/pasted_content>|$))/i
-  );
-  if (explicitMarkerMatch && explicitMarkerMatch[1]) {
-    const afterMarker = explicitMarkerMatch[1].trim();
-    const cleanLines = afterMarker
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(
-        (l) =>
-          l.length > 0 &&
-          !SCAFFOLDING_PREFIXES.some((p) => l.toLowerCase().startsWith(p.toLowerCase()))
-      );
-    if (cleanLines.length > 0) {
-      return cleanLines[0];
-    }
-  }
+  // Strip all agentic scaffolding XML-like blocks and system directives upfront
+  let cleaned = trimmedPrompt
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, "")
+    .replace(/<command-name>[\s\S]*?<\/command-name>/gi, "")
+    .replace(/<command-message>[\s\S]*?<\/command-message>/gi, "")
+    .replace(/<command-args>[\s\S]*?<\/command-args>/gi, "")
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, "")
+    .replace(/<pasted_content>[\s\S]*?<\/pasted_content>/gi, "")
+    .replace(/EXISTING INTENT LEDGER:[\s\S]*?(?:NEW USER MESSAGE:|$)/gi, "")
+    .replace(/NEW USER MESSAGE:\s*/gi, "")
+    .replace(/USER PROMPT:\s*/gi, "")
+    .trim();
 
-  // 2. Strip leading system-reminder XML blocks if present
-  let cleaned = prompt.trim();
-  cleaned = cleaned.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "").trim();
-
-  // 3. Scan line-by-line for the first genuine user line
+  // Scan line-by-line for genuine human user lines
   const lines = cleaned.split("\n");
+  const genuineLines: string[] = [];
+
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
     const isScaffolding = SCAFFOLDING_PREFIXES.some((prefix) =>
       trimmed.toLowerCase().startsWith(prefix.toLowerCase())
     );
-    if (!isScaffolding) return trimmed;
+    if (!isScaffolding) {
+      genuineLines.push(trimmed);
+    }
   }
-  // All lines were scaffolding or empty: return the first non-empty line as-is
-  const firstNonEmpty = lines.find((l) => l.trim().length > 0);
-  return firstNonEmpty ? firstNonEmpty.trim() : "";
+
+  if (genuineLines.length > 0) {
+    return genuineLines.join("\n").trim();
+  }
+
+  // Fallback: if all lines were filtered or prompt was empty, return original trimmed string
+  return trimmedPrompt;
 }
 
 /**

@@ -268,6 +268,7 @@ export async function calculateProjectAnalytics(
 
     const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || "", ".omniroute");
     const callLogsDir = path.join(dataDir, "call_logs");
+    const sessionPromptsMap = new Map<string, string>();
 
     for (const row of logRows) {
       if (recentPrompts.length >= 100) break;
@@ -518,6 +519,19 @@ export async function calculateProjectAnalytics(
                     rawPromptText = text;
                   }
                 }
+              } else if (rec.lastUserMessage && typeof rec.lastUserMessage === "object") {
+                // If body was truncated, use the preserved lastUserMessage turn
+                const lum = rec.lastUserMessage as RequestMessage;
+                const text = extractTextFromParts(lum.content).trim();
+                if (text.length > 0) {
+                  promptText = text;
+                  rawPromptText = text;
+                  chatMessagesList.push({
+                    role: "user",
+                    content: text,
+                    timestamp: row.timestamp || undefined,
+                  });
+                }
               }
             }
 
@@ -609,7 +623,18 @@ export async function calculateProjectAnalytics(
         }
       }
 
-      // 2. If promptText is empty (e.g. large truncated body), attempt extracting from response reasoning or content
+      // 2. If promptText is empty (e.g. large truncated body), attempt extracting from response content, reasoning or analysis
+      if (!promptText && responseSummary) {
+        // If response begins with <analysis> or contains a recap of the user inquiry, extract human intent
+        const analysisMatch = responseSummary.match(
+          /(?:The user asked about|The user asked|The user wants|The user is asking|User prompt|User feedback was very clear:\s*["']?)([^.\n]+)/i
+        );
+        if (analysisMatch && analysisMatch[1]) {
+          promptText = analysisMatch[1].replace(/["']/g, "").trim();
+          rawPromptText = promptText;
+        }
+      }
+
       if (!promptText && responseReasoning) {
         const userPromptMatch = responseReasoning.match(
           /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt):\s*["']?([^"'\n]+)["']?/i
@@ -620,17 +645,29 @@ export async function calculateProjectAnalytics(
         }
       }
 
-      // 3. Fallback to row.request_summary if promptText could not be extracted from artifact
+      // 3. Fallback: if in a multi-call session, attempt inheriting the human prompt from the session
+      if (!promptText && row.session_tag) {
+        const sessionPrompt = sessionPromptsMap.get(row.session_tag);
+        if (sessionPrompt) {
+          promptText = sessionPrompt;
+        }
+      }
+
+      // 4. Fallback to row.request_summary if promptText could not be extracted from artifact
       if (!promptText && row.request_summary) {
         // If request_summary is an internal upstream JSON blob, prefer extracting reasoning intent or clean label
-        if (row.request_summary.trim().startsWith("{") && responseReasoning) {
-          const reasoningMatch = responseReasoning.match(
-            /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt):\s*["']?([^"'\n]+)["']?/i
-          );
-          if (reasoningMatch && reasoningMatch[1]) {
-            promptText = reasoningMatch[1].trim();
+        if (row.request_summary.trim().startsWith("{")) {
+          if (responseReasoning) {
+            const reasoningMatch = responseReasoning.match(
+              /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt):\s*["']?([^"'\n]+)["']?/i
+            );
+            if (reasoningMatch && reasoningMatch[1]) {
+              promptText = reasoningMatch[1].trim();
+            } else {
+              promptText = responseReasoning.split("\n")[0].trim();
+            }
           } else {
-            promptText = responseReasoning.split("\n")[0].trim();
+            promptText = `API Request (${row.model || row.requested_model || "completion"})`;
           }
           rawPromptText = promptText;
         } else {
@@ -638,21 +675,25 @@ export async function calculateProjectAnalytics(
         }
       }
 
-      // 4. Fallback to systemPromptText if request has only system instructions
+      // 5. Fallback to systemPromptText if request has only system instructions
       if (!promptText && systemPromptText) {
         promptText = systemPromptText;
       }
 
-      // 5. Final fallback if promptText is still empty or raw upstream JSON without intent
+      // 6. Final fallback if promptText is still empty or raw upstream JSON without intent
       if (!promptText && responseReasoning) {
         promptText = responseReasoning.split("\n")[0].trim();
+      }
+
+      if (!promptText) {
+        promptText = `API Request (${row.model || row.requested_model || "completion"})`;
       }
 
       if (promptText && promptText.trim().length > 0) {
         // Strip agent-framework scaffolding (e.g. "Memory context: ...") so the
         // stored prompt reflects genuine user intent, not injected context.
         let cleanPrompt = extractUserIntent(promptText.trim());
-        if (!cleanPrompt || cleanPrompt.startsWith("{")) {
+        if (!cleanPrompt || cleanPrompt.startsWith("{") || cleanPrompt.startsWith("[HTTP Call]")) {
           if (responseReasoning) {
             cleanPrompt = responseReasoning.split("\n")[0].trim();
           } else {
@@ -660,6 +701,15 @@ export async function calculateProjectAnalytics(
           }
         }
         if (!cleanPrompt) continue;
+
+        // Save genuine human prompt into session map for following turns in the same session
+        if (
+          row.session_tag &&
+          !cleanPrompt.startsWith("API Request") &&
+          !cleanPrompt.startsWith("[HTTP Call]")
+        ) {
+          sessionPromptsMap.set(row.session_tag, cleanPrompt);
+        }
 
         // Ensure chatMessagesList has both user and assistant turns for clean thread view
         if (
