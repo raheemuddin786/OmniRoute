@@ -1714,6 +1714,14 @@ export function classifyErrorText(errorText: unknown): RateLimitReasonValue {
   if (isCreditsExhausted(lower)) {
     return RateLimitReason.QUOTA_EXHAUSTED;
   }
+  // Demo message limits (e.g. Cloudflare Playground: "This demo is limited to 10 messages per conversation")
+  if (
+    lower.includes("demo is limited") ||
+    lower.includes("code interpreter abuse") ||
+    lower.includes("start a new chat to continue")
+  ) {
+    return RateLimitReason.MODEL_CAPACITY;
+  }
   // T06: account_deactivated signals
   if (isAccountDeactivated(lower)) {
     return RateLimitReason.AUTH_ERROR;

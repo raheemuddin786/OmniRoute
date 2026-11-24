@@ -456,8 +456,17 @@ export function PromptListItem({
                       ) ||
                       (intentContent.startsWith("{") && intentContent.endsWith("}"));
 
-                    // Never show synthetic proxy labels, tool dumps, or token-limit directives as user messages
-                    if (isSyntheticOrEmpty) {
+                    // When an individual turn's raw user content is empty/synthetic (e.g. truncated request payload),
+                    // fall back to the resolved clean prompt for this turn rather than hiding or rendering raw proxy labels!
+                    const displayUserContent = isSyntheticOrEmpty
+                      ? cleanPromptText &&
+                        !cleanPromptText.startsWith("API Request") &&
+                        !cleanPromptText.startsWith("[HTTP Call]")
+                        ? cleanPromptText
+                        : null
+                      : intentContent;
+
+                    if (!displayUserContent) {
                       return null;
                     }
                     return (
@@ -474,12 +483,12 @@ export function PromptListItem({
                                 </span>
                               )}
                               <span className="text-indigo-400/80 font-mono text-[11px]">
-                                {intentContent.length} chars
+                                {displayUserContent.length} chars
                               </span>
                             </div>
                           </div>
                           <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
-                            {intentContent}
+                            {displayUserContent}
                           </div>
                         </div>
                         <div

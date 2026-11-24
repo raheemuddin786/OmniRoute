@@ -856,6 +856,15 @@ export function openaiToClaudeResponse(chunk, state) {
             index: toolInfo.blockIndex,
             delta: { type: "input_json_delta", partial_json: patched },
           });
+        } else if (!toolInfo.argBuffer && choice.finish_reason !== "content_filter") {
+          // If the upstream model emitted a tool call with empty arguments (common with free-tier / small models),
+          // ensure a valid "{}" input_json_delta is emitted so Anthropic/Claude clients receive valid JSON input
+          // rather than empty or unparseable input.
+          results.push({
+            type: "content_block_delta",
+            index: toolInfo.blockIndex,
+            delta: { type: "input_json_delta", partial_json: "{}" },
+          });
         }
 
         results.push({
