@@ -1231,6 +1231,7 @@ async function handleChatImplementation(
         spbProfile: spbProfileName || "default",
         workspaceRoot: detectedWorkspaceRoot,
         dispatchModel: apexDispatchModel,
+        apiKeyId: apiKeyInfo?.id || null,
       });
       log.info(
         "SPB",

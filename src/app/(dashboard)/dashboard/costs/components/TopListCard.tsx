@@ -1,5 +1,22 @@
 import { Card } from "@/shared/components";
-import { createCurrencyFormatter } from "../CostOverviewTab";
+
+function createCurrencyFormatter(locale: string) {
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    });
+  } catch {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    });
+  }
+}
 
 export interface TopListCardProps {
   title: string;

@@ -500,26 +500,36 @@ export function detectAndRecoverFromStagnation(
     isStagnant = true;
 
     // Softened recovery guidance (Operator requirement 4)
-    recoveryDirective =
-      "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
-      "Exploration checkpoint reached. You have gathered sufficient repository context for this task. " +
-      "Proceed to implement the solution using editing tools (Write/Edit) or execute verification tests.";
-    const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
-    newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
-
-    // Escalate tier assignment:
-    const currentTier = existingCheckpoint?.modelTier || "tier_2_resilient";
-    if (currentTier === "tier_2_resilient" && consecutiveReads > 5) {
-      escalationTier = "tier_1_apex";
-      newTaskPhase = "ARCHITECTURAL_PLANNING";
+    if (taskPhase === "ARCHITECTURAL_PLANNING") {
       recoveryDirective =
-        "[Auto-Recovery Directive: APEX REASONING ESCALATION]\n" +
-        "Repeated non-mutating tool cycles detected on execution tier. Re-evaluating strategy with architectural guidance. " +
-        "Synthesize gathered context and formulate a direct file-modification action plan.";
-    } else if (currentTier === "tier_3_local") {
-      escalationTier = "tier_2_resilient";
+        "[Auto-Recovery Directive: SDLC PLANNING GUIDANCE]\n" +
+        "Context acquisition complete. Formulate a structured, end-to-end SDLC plan with an explicit, trackable checklist covering: " +
+        "requirements -> architecture -> implementation targets -> automated test suites -> verification criteria. " +
+        "Do not emit blind file modification commands without a validated implementation strategy.";
+      newTaskPhase = "ARCHITECTURAL_PLANNING";
+      escalationTier = "tier_1_apex";
     } else {
-      escalationTier = "tier_2_resilient";
+      recoveryDirective =
+        "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
+        "Exploration checkpoint reached. You have gathered sufficient repository context for this task. " +
+        "Proceed to implement the solution using editing tools (Write/Edit) or execute verification tests.";
+      const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
+      newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
+
+      // Escalate tier assignment:
+      const currentTier = existingCheckpoint?.modelTier || "tier_2_resilient";
+      if (currentTier === "tier_2_resilient" && consecutiveReads > 5) {
+        escalationTier = "tier_1_apex";
+        newTaskPhase = "ARCHITECTURAL_PLANNING";
+        recoveryDirective =
+          "[Auto-Recovery Directive: APEX REASONING ESCALATION]\n" +
+          "Repeated non-mutating tool cycles detected on execution tier. Re-evaluating strategy with architectural guidance. " +
+          "Synthesize gathered context and formulate a direct file-modification action plan.";
+      } else if (currentTier === "tier_3_local") {
+        escalationTier = "tier_2_resilient";
+      } else {
+        escalationTier = "tier_2_resilient";
+      }
     }
 
     if (existingCheckpoint) {

@@ -282,10 +282,10 @@ export function classifyIntent(
   const complexReasoningRegex =
     /\b(think deeply|deep thinking|deep reasoning|reasoning effort|think step by step|chain of thought|deliberate|evaluate trade-offs|comparative analysis|high-level strategy|synthesis|synthesize|holistic review)\b/i;
   const planModeRegex =
-    /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|distributed systems?|microservices architecture|rfc proposal|system rfc|formal proof|algorithmic proof|strategic planning|multi-tier architecture|threat model(?:ing)?|apex reasoning)\b/i;
+    /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|distributed systems?|microservices architecture|rfc proposal|system rfc|formal proof|algorithmic proof|strategic planning|multi-tier architecture|threat model(?:ing)?|apex reasoning|sdlc plan|execution plan|autonomous execution plan|plan only|generate a plan|create a plan|sdlc checklist|make a plan)\b/i;
 
   const purePlanningPhrasesRegex =
-    /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|threat model(?:ing)?|rfc proposal|system rfc)\b/i;
+    /\b(plan mode|planning mode|enter plan mode|implementation plan|architectural blueprint|system architecture|architectural design|architectural planning|software architecture|threat model(?:ing)?|rfc proposal|system rfc|sdlc plan|execution plan|autonomous execution plan|plan only|generate a plan|create a plan|sdlc checklist|make a plan)\b/i;
 
   const codeRegex =
     /\b(function(?:s)?|class(?:es)?|const|let|var|import|export|def|return|async|await|interface|type|code|implement(?:s|ed|ing)?|component(?:s)?|typescript|javascript|python|rust|golang|sql|query|endpoint(?:s)?|controller(?:s)?|service(?:s)?|bug(?:s)?|fix(?:es|ed|ing)?|debug(?:ging)?|patch(?:es|ed|ing)?|issue(?:s)?|script(?:s)?|module(?:s)?|file(?:s)?|method(?:s)?|build(?:ing)?|write|writing|written)\b/i;

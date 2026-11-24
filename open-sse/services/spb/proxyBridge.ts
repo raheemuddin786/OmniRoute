@@ -59,15 +59,10 @@ import {
   type PromptEnhancementResult,
   type NecessityCheckResult,
 } from "./inboundIntelligence.ts";
-import {
-  evaluateResponseIntent,
-  processSpbOutboundZeroLoss,
-  extractResponseContent,
-  verifyCodeDiffAgainstConclusion,
-  extractClaimedFilesFromText,
-  type ResponseEvaluationResult,
-  type ExtractedResponseContent,
-  type CodeDiffReviewResult,
+import type {
+  ResponseEvaluationResult,
+  ExtractedResponseContent,
+  CodeDiffReviewResult,
 } from "./outboundEvaluator.ts";
 
 export {
@@ -84,11 +79,6 @@ export {
   evaluateRequestNecessity,
   computePatternHash,
   normalizeInterleavedSystemMessages,
-  evaluateResponseIntent,
-  processSpbOutboundZeroLoss,
-  extractResponseContent,
-  verifyCodeDiffAgainstConclusion,
-  extractClaimedFilesFromText,
   type PromptEnhancementResult,
   type NecessityCheckResult,
   type ResponseEvaluationResult,
@@ -105,6 +95,7 @@ export interface SpbRoutingContext {
   spbProfile?: string;
   workspaceRoot?: string;
   dispatchModel?: ModelDispatchFn;
+  apiKeyId?: string | null;
 }
 
 export interface SpbRoutingDecision {
@@ -567,7 +558,9 @@ export async function processSmartProxyRouting(
       stagnationRecovered = true;
       const duplicateBlockDirective = intent.isToolExecutionError
         ? `[SPB Diagnostic Guidance: A tool operation on '${intent.duplicateFilePath}' failed. Verify the file path, request workspace access if needed, or diagnose the underlying error before proceeding. Do not assume file contents or hallucinate.]`
-        : `[SPB Guidance: The file '${intent.duplicateFilePath}' has already been inspected multiple times. Context from this file has been acquired. Proceed to applying edits (Write/Edit) or executing tests.]`;
+        : intent.taskPhase === "ARCHITECTURAL_PLANNING"
+          ? `[SPB Guidance: The file '${intent.duplicateFilePath}' has already been inspected multiple times. Repository context has been acquired. Formulate the comprehensive SDLC plan and task checklist now.]`
+          : `[SPB Guidance: The file '${intent.duplicateFilePath}' has already been inspected multiple times. Context from this file has been acquired. Proceed to applying edits (Write/Edit) or executing tests.]`;
       autoRecoveryDirective = autoRecoveryDirective
         ? `${autoRecoveryDirective}\n\n${duplicateBlockDirective}`
         : duplicateBlockDirective;
@@ -743,15 +736,23 @@ export async function processSmartProxyRouting(
         new Set([...priorTargetFiles, ...anchors.referencedFiles].filter(Boolean))
       );
 
+      const isPlanningPhase = intent.taskPhase === "ARCHITECTURAL_PLANNING";
       activeGuidanceContract = {
-        supervisorTier: "tier_2_resilient",
+        supervisorTier: isPlanningPhase ? "tier_1_apex" : "tier_2_resilient",
         taskSpecification: rootTaskSpecification,
-        constraints: [
-          "Exploration checkpoint reached: prioritize implementation or verification steps.",
-          "Proceed to code modification or test execution using available tools.",
-          "Zero unverified assumptions — all code changes must be tool-verified",
-          "Preserve existing architecture and contracts during modifications",
-        ],
+        constraints: isPlanningPhase
+          ? [
+              "Formulate comprehensive SDLC plan with structured milestones",
+              "Include explicit task checklist: requirements, architecture, files, tests, verification",
+              "Zero unverified assumptions — plan must be grounded in actual repo structure",
+              "Preserve existing architecture and contracts",
+            ]
+          : [
+              "Exploration checkpoint reached: prioritize implementation or verification steps.",
+              "Proceed to code modification or test execution using available tools.",
+              "Zero unverified assumptions — all code changes must be tool-verified",
+              "Preserve existing architecture and contracts during modifications",
+            ],
         instructions: mergedInstructions,
         targetFiles: combinedTargetFiles,
         verificationCriteria: [
@@ -767,11 +768,14 @@ export async function processSmartProxyRouting(
         combinedTargetFiles.length > 0
           ? `Target files: ${combinedTargetFiles.slice(0, 3).join(", ")}. `
           : "";
-      const stagnationRecoveryDirective =
-        "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
-        `Exploration checkpoint reached. ${targetSummary}` +
-        "Resume and complete ongoing implementation using editing tools (Write/Edit) or execute verification tests. " +
-        "Do not repeat exploratory read cycles or restart task formulation.";
+      const stagnationRecoveryDirective = isPlanningPhase
+        ? "[Auto-Recovery Directive: SDLC PLANNING GUIDANCE]\n" +
+          `Exploration checkpoint reached. ${targetSummary}` +
+          "Formulate a structured, end-to-end SDLC plan with an explicit checklist covering requirements, architecture, implementation files, automated tests, and verification steps."
+        : "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
+          `Exploration checkpoint reached. ${targetSummary}` +
+          "Resume and complete ongoing implementation using editing tools (Write/Edit) or execute verification tests. " +
+          "Do not repeat exploratory read cycles or restart task formulation.";
       autoRecoveryDirective = autoRecoveryDirective
         ? `${autoRecoveryDirective}\n\n${stagnationRecoveryDirective}`
         : stagnationRecoveryDirective;
@@ -983,10 +987,45 @@ export async function processSmartProxyRouting(
     // or when the message consists of tool execution outputs. Doing so alters tool schemas and halts autonomous agent runs.
     const isToolTurn = intent.isToolResultTurn || (isLastUserArrayContent && !lastUserText.trim());
 
+    // Durable Memory Recall: Retrieve contextual memories for the user's intent if available
+    let relevantMemoriesSnippet = "";
+    if (!isToolTurn && lastUserText.trim()) {
+      try {
+        const { getMemorySettings } = await import("../../../src/lib/memory/settings.ts");
+        const { retrieveMemories } = await import("../../../src/lib/memory/retrieval.ts");
+        const memSettings = await getMemorySettings().catch(() => null);
+        if (memSettings?.enabled) {
+          const ownerId = context.apiKeyId || "default";
+          const mems = await retrieveMemories(ownerId, {
+            query: lastUserText,
+            workspaceRoot: context.workspaceRoot,
+            maxTokens: Math.min(memSettings.maxTokens || 1000, 1500),
+          }).catch(() => []);
+          if (mems && mems.length > 0) {
+            const memText = mems
+              .slice(0, 5)
+              .map((m) => `- ${m.content || m.key}`)
+              .join("\n");
+            relevantMemoriesSnippet = `\n\n[Persistent Project Memory & Context:\n${memText}\n]`;
+          }
+        }
+      } catch {
+        // Non-blocking memory retrieval
+      }
+    }
+
     const enhancement =
       !isToolTurn && lastUserText.trim()
         ? enhanceInboundPrompt(lastUserText, tierAssignment.tier, intent.taskPhase, messages)
         : undefined;
+
+    if (
+      enhancement &&
+      relevantMemoriesSnippet &&
+      !enhancement.enhancedPrompt.includes("Persistent Project Memory")
+    ) {
+      enhancement.enhancedPrompt = `${enhancement.enhancedPrompt}${relevantMemoriesSnippet}`;
+    }
 
     // Avoid double-wrapping prompts that already have SPB directives or role assignments
     const isAlreadyExtensivePrompt =
