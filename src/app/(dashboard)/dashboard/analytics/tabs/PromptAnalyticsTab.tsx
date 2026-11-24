@@ -190,7 +190,11 @@ export function PromptAnalyticsTab({
           cleanP.startsWith("DETECTED PROJECT STACK") ||
           cleanP.startsWith("CRITICAL SECURITY DIRECTIVE") ||
           cleanP.startsWith("EXISTING INTENT LEDGER") ||
-          cleanP.startsWith("[HTTP Call]");
+          cleanP.startsWith("[HTTP Call]") ||
+          cleanP.startsWith("API Request") ||
+          cleanP.startsWith("Output token limit hit. Resume directly") ||
+          cleanP.startsWith("No existing intent ledger items to continue or amend") ||
+          (cleanP.startsWith("{") && cleanP.endsWith("}"));
 
         const isNewHumanTurn =
           !isScaffold &&
@@ -455,7 +459,11 @@ export function PromptAnalyticsTab({
     const sessionCount =
       typeof totalSessionsCount === "number" && totalSessionsCount > 0
         ? totalSessionsCount
-        : sessionGroups.length;
+        : sessionGroups.length > 0
+          ? sessionGroups.length
+          : promptList.length > 0
+            ? new Set(promptList.map((p) => p.sessionTag || p.id || "conv_single")).size
+            : 0;
 
     const totalCost =
       tokenEconomics && typeof tokenEconomics.costUsd === "number" && tokenEconomics.costUsd > 0

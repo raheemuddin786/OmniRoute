@@ -163,6 +163,20 @@ const SCAFFOLDING_PREFIXES = [
   "NEW USER MESSAGE:",
   "<pasted_content",
   "</pasted_content>",
+  "[SPB Guidance:",
+  "[SPB Diagnostic Guidance:",
+  "[SPB Intent Ledger:",
+  "[SPB Autonomous",
+  "[SPB-IR",
+  "[Auto-Recovery Directive:",
+  "[Role Directive:",
+  "[Context Scope:",
+  "[Completion Standard:",
+  "[Execution Standard:",
+  "[Deferred Tools Protocol:",
+  "This session is being continued from a previous conversation that ran out of context",
+  "No existing intent ledger items to continue or amend",
+  "Output token limit hit. Resume directly",
 ];
 
 /**
@@ -213,6 +227,14 @@ export function extractUserIntent(prompt: string): string {
     .replace(/<command-args>[\s\S]*?<\/command-args>/gi, "")
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, "")
     .replace(/<pasted_content>[\s\S]*?<\/pasted_content>/gi, "")
+    .replace(
+      /\[(?:SPB Guidance|SPB Diagnostic Guidance|SPB Intent Ledger|SPB Autonomous|SPB-IR|Auto-Recovery Directive|Role Directive|Context Scope|Completion Standard|Execution Standard|Deferred Tools Protocol)[\s\S]*?\]/gi,
+      ""
+    )
+    .replace(
+      /Exploration checkpoint reached[\s\S]*?(?:Resume and complete ongoing implementation[^\n]*\.?)/gi,
+      ""
+    )
     .replace(/EXISTING INTENT LEDGER:[\s\S]*?(?:NEW USER MESSAGE:|$)/gi, "")
     .replace(/NEW USER MESSAGE:\s*/gi, "")
     .replace(/USER PROMPT:\s*/gi, "")
@@ -237,7 +259,12 @@ export function extractUserIntent(prompt: string): string {
     return genuineLines.join("\n").trim();
   }
 
-  // Fallback: if all lines were filtered or prompt was empty, return original trimmed string
+  // If all lines were scaffolding/directives, return empty string so callers know no human intent was found
+  if (cleaned.length === 0 || genuineLines.length === 0) {
+    return "";
+  }
+
+  // Fallback: return original trimmed string
   return trimmedPrompt;
 }
 

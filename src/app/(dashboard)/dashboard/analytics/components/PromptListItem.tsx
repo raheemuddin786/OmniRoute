@@ -443,13 +443,21 @@ export function PromptListItem({
 
                   if (msg.role === "user") {
                     const intentContent = extractUserIntent(msg.content);
-                    // Filter out internal scaffolding tool output messages falsely marked as user
-                    if (
+                    const isSyntheticOrEmpty =
                       !intentContent ||
                       intentContent.startsWith("<system-reminder>") ||
                       intentContent.startsWith("Called the Read tool") ||
-                      intentContent.startsWith("Result of calling the Read tool")
-                    ) {
+                      intentContent.startsWith("Result of calling the Read tool") ||
+                      intentContent.startsWith("[HTTP Call]") ||
+                      intentContent.startsWith("API Request") ||
+                      intentContent.startsWith("Output token limit hit. Resume directly") ||
+                      intentContent.startsWith(
+                        "No existing intent ledger items to continue or amend"
+                      ) ||
+                      (intentContent.startsWith("{") && intentContent.endsWith("}"));
+
+                    // Never show synthetic proxy labels, tool dumps, or token-limit directives as user messages
+                    if (isSyntheticOrEmpty) {
                       return null;
                     }
                     return (
@@ -651,75 +659,83 @@ export function PromptListItem({
             ) : (
               /* Fallback Single-Turn Request / Response Bubble View */
               <>
-                {/* 1. USER MESSAGE BUBBLE */}
-                <div className="flex items-start gap-3 justify-end">
-                  <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
-                    <div className="flex items-center justify-between text-xs pb-1 border-b border-indigo-800/40">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
-                          <span>👤</span>
-                          User Prompt
-                        </span>
-                        {safeRawPrompt !== safePrompt && (
-                          <div className="inline-flex rounded-md border border-indigo-700/60 bg-indigo-900/60 p-0.5 text-[10px]">
-                            <button
-                              type="button"
-                              onClick={() => setPromptViewMode("clean")}
-                              className={`px-1.5 py-0.5 rounded transition-colors ${
-                                promptViewMode === "clean"
-                                  ? "bg-indigo-600 text-white font-medium"
-                                  : "text-indigo-300 hover:text-white"
-                              }`}
-                            >
-                              Intent
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setPromptViewMode("raw")}
-                              className={`px-1.5 py-0.5 rounded transition-colors ${
-                                promptViewMode === "raw"
-                                  ? "bg-indigo-600 text-white font-medium"
-                                  : "text-indigo-300 hover:text-white"
-                              }`}
-                            >
-                              Raw Request
-                            </button>
-                          </div>
-                        )}
+                {/* 1. USER MESSAGE BUBBLE - Only show if not synthetic proxy label or tool dump */}
+                {!(
+                  safePrompt.startsWith("[HTTP Call]") ||
+                  safePrompt.startsWith("API Request") ||
+                  safePrompt.startsWith("Output token limit hit. Resume directly") ||
+                  safePrompt.startsWith("No existing intent ledger items to continue or amend") ||
+                  (safePrompt.startsWith("{") && safePrompt.endsWith("}"))
+                ) && (
+                  <div className="flex items-start gap-3 justify-end">
+                    <div className="flex-1 max-w-2xl bg-indigo-950/40 border border-indigo-700/50 rounded-2xl rounded-tr-sm p-3.5 shadow-sm space-y-2">
+                      <div className="flex items-center justify-between text-xs pb-1 border-b border-indigo-800/40">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                            <span>👤</span>
+                            User Prompt
+                          </span>
+                          {safeRawPrompt !== safePrompt && (
+                            <div className="inline-flex rounded-md border border-indigo-700/60 bg-indigo-900/60 p-0.5 text-[10px]">
+                              <button
+                                type="button"
+                                onClick={() => setPromptViewMode("clean")}
+                                className={`px-1.5 py-0.5 rounded transition-colors ${
+                                  promptViewMode === "clean"
+                                    ? "bg-indigo-600 text-white font-medium"
+                                    : "text-indigo-300 hover:text-white"
+                                }`}
+                              >
+                                Intent
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPromptViewMode("raw")}
+                                className={`px-1.5 py-0.5 rounded transition-colors ${
+                                  promptViewMode === "raw"
+                                    ? "bg-indigo-600 text-white font-medium"
+                                    : "text-indigo-300 hover:text-white"
+                                }`}
+                              >
+                                Raw Request
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-indigo-400/80 font-mono text-xs">
+                            {(promptViewMode === "raw" ? safeRawPrompt : safePrompt).length} chars
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleCopyUserPrompt}
+                            className="text-xs text-indigo-300 hover:text-white transition-colors"
+                            title={
+                              promptViewMode === "raw" ? "Copy raw prompt" : "Copy extracted prompt"
+                            }
+                          >
+                            {promptViewMode === "raw"
+                              ? copiedRaw
+                                ? "✓ Copied Raw"
+                                : "Copy Raw"
+                              : copiedUser
+                                ? "✓ Copied"
+                                : "Copy"}
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-indigo-400/80 font-mono text-xs">
-                          {(promptViewMode === "raw" ? safeRawPrompt : safePrompt).length} chars
-                        </span>
-                        <button
-                          type="button"
-                          onClick={handleCopyUserPrompt}
-                          className="text-xs text-indigo-300 hover:text-white transition-colors"
-                          title={
-                            promptViewMode === "raw" ? "Copy raw prompt" : "Copy extracted prompt"
-                          }
-                        >
-                          {promptViewMode === "raw"
-                            ? copiedRaw
-                              ? "✓ Copied Raw"
-                              : "Copy Raw"
-                            : copiedUser
-                              ? "✓ Copied"
-                              : "Copy"}
-                        </button>
+                      <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
+                        {promptViewMode === "raw" ? safeRawPrompt : safePrompt}
                       </div>
                     </div>
-                    <div className="font-mono text-xs text-indigo-100 whitespace-pre-wrap select-text leading-relaxed max-h-72 overflow-y-auto">
-                      {promptViewMode === "raw" ? safeRawPrompt : safePrompt}
+                    <div
+                      className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-semibold shrink-0 mt-0.5 shadow-sm"
+                      title="User"
+                    >
+                      👤
                     </div>
                   </div>
-                  <div
-                    className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-semibold shrink-0 mt-0.5 shadow-sm"
-                    title="User"
-                  >
-                    👤
-                  </div>
-                </div>
+                )}
 
                 {/* 2. ASSISTANT / AGENT RESPONSE BUBBLE */}
                 <div className="flex items-start gap-3 justify-start">

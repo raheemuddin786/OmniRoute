@@ -261,7 +261,7 @@ export async function calculateProjectAnalytics(
       LEFT JOIN project_registry pr ON cl.project_id = pr.id
       ${detailedWhereSql}
       ORDER BY cl.timestamp DESC
-      LIMIT 250
+      LIMIT 1000
     `;
     const logRows = (db.prepare(detailedLogsSql).all(...params) ?? []) as DetailedCallLogRow[];
     const seenCallIds = new Set<string | number>();
@@ -270,8 +270,93 @@ export async function calculateProjectAnalytics(
     const callLogsDir = path.join(dataDir, "call_logs");
     const sessionPromptsMap = new Map<string, string>();
 
+    // Pre-pass: For multi-turn sessions, find earliest genuine human prompt across all calls in the session
+    const sessionTagsInLogs = Array.from(
+      new Set(
+        logRows
+          .map((r) => r.session_tag)
+          .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      )
+    );
+
+    if (sessionTagsInLogs.length > 0) {
+      try {
+        const placeholders = sessionTagsInLogs.map(() => "?").join(",");
+        const earliestLogsSql = `
+          SELECT id, session_tag, artifact_relpath, request_summary, model, requested_model
+          FROM call_logs
+          WHERE session_tag IN (${placeholders})
+          ORDER BY rowid ASC
+        `;
+        const earliestRows = db.prepare(earliestLogsSql).all(...sessionTagsInLogs) as Array<{
+          id: string;
+          session_tag: string;
+          artifact_relpath: string | null;
+          request_summary: string | null;
+          model: string | null;
+          requested_model: string | null;
+        }>;
+
+        for (const er of earliestRows) {
+          if (!er.session_tag || sessionPromptsMap.has(er.session_tag)) continue;
+          let candidate = "";
+          if (er.artifact_relpath) {
+            try {
+              const fullP = path.join(callLogsDir, er.artifact_relpath);
+              if (fs.existsSync(fullP)) {
+                const fc = JSON.parse(fs.readFileSync(fullP, "utf-8"));
+                if (fc.requestBody && typeof fc.requestBody === "object") {
+                  const msgs = fc.requestBody.messages || fc.requestBody.input;
+                  if (Array.isArray(msgs)) {
+                    for (const m of msgs) {
+                      if (m && m.role === "user") {
+                        const raw =
+                          typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+                        const clean = extractUserIntent(raw);
+                        if (
+                          clean &&
+                          !clean.startsWith("Output token limit hit. Resume directly") &&
+                          !clean.startsWith(
+                            "No existing intent ledger items to continue or amend"
+                          ) &&
+                          !clean.startsWith("[HTTP Call]") &&
+                          !clean.startsWith("API Request") &&
+                          !(clean.startsWith("{") && clean.endsWith("}"))
+                        ) {
+                          candidate = clean;
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+                if (!candidate && fc.responseBody?.choices?.[0]?.message?.reasoning_content) {
+                  const r = fc.responseBody.choices[0].message.reasoning_content;
+                  const line0 = r.split("\n")[0];
+                  const m = line0.match(
+                    /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt)\s*(?:is\s*)?[:\s]\s*["']?([^"\n\r]+)/i
+                  );
+                  if (m && m[1]) {
+                    const sentence = m[1]
+                      .split(/\.\s+[A-Z]/)[0]
+                      .replace(/^[to ]+/i, "")
+                      .replace(/[.,]+$/, "")
+                      .trim();
+                    if (sentence.length > 0) candidate = sentence;
+                  }
+                }
+              }
+            } catch {}
+          }
+          if (candidate) {
+            sessionPromptsMap.set(er.session_tag, candidate);
+          }
+        }
+      } catch {}
+    }
+
     for (const row of logRows) {
-      if (recentPrompts.length >= 100) break;
+      if (recentPrompts.length >= 250) break;
 
       let promptText = "";
       let rawPromptText: string | undefined = undefined;
@@ -496,7 +581,20 @@ export async function calculateProjectAnalytics(
                     }
                   }
 
-                  if (text.length > 0 || (msgToolCalls && msgToolCalls.length > 0)) {
+                  const isSyntheticUserScaffold =
+                    validRole === "user" &&
+                    (text.startsWith("<system-reminder>") ||
+                      text.startsWith("[SPB Guidance:") ||
+                      text.startsWith("[SPB Diagnostic Guidance:") ||
+                      text.startsWith("[SPB Intent Ledger:") ||
+                      text.startsWith("[Auto-Recovery Directive:") ||
+                      text.startsWith("Called the Read tool") ||
+                      text.startsWith("Result of calling the Read tool"));
+
+                  if (
+                    !isSyntheticUserScaffold &&
+                    (text.length > 0 || (msgToolCalls && msgToolCalls.length > 0))
+                  ) {
                     chatMessagesList.push({
                       role: validRole,
                       content: text,
@@ -513,22 +611,24 @@ export async function calculateProjectAnalytics(
                 // Extract user prompt (latest user turn in the request)
                 const userMsg = rawMsgs.filter((m) => m && m.role === "user").pop();
                 if (userMsg) {
-                  const text = extractTextFromParts(userMsg.content).trim();
-                  if (text.length > 0) {
-                    promptText = text;
-                    rawPromptText = text;
+                  const rawText = extractTextFromParts(userMsg.content).trim();
+                  const cleanText = extractUserIntent(rawText);
+                  if (cleanText.length > 0) {
+                    promptText = cleanText;
+                    rawPromptText = rawText;
                   }
                 }
               } else if (rec.lastUserMessage && typeof rec.lastUserMessage === "object") {
                 // If body was truncated, use the preserved lastUserMessage turn
                 const lum = rec.lastUserMessage as RequestMessage;
-                const text = extractTextFromParts(lum.content).trim();
-                if (text.length > 0) {
-                  promptText = text;
-                  rawPromptText = text;
+                const rawText = extractTextFromParts(lum.content).trim();
+                const cleanText = extractUserIntent(rawText);
+                if (cleanText.length > 0) {
+                  promptText = cleanText;
+                  rawPromptText = rawText;
                   chatMessagesList.push({
                     role: "user",
-                    content: text,
+                    content: cleanText,
                     timestamp: row.timestamp || undefined,
                   });
                 }
@@ -636,12 +736,20 @@ export async function calculateProjectAnalytics(
       }
 
       if (!promptText && responseReasoning) {
-        const userPromptMatch = responseReasoning.match(
-          /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt):\s*["']?([^"'\n]+)["']?/i
+        const line0 = responseReasoning.split("\n")[0];
+        const userPromptMatch = line0.match(
+          /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt)\s*(?:is\s*)?[:\s]\s*["']?([^"\n\r]+)/i
         );
         if (userPromptMatch && userPromptMatch[1]) {
-          promptText = userPromptMatch[1].trim();
-          rawPromptText = promptText;
+          const sentence = userPromptMatch[1]
+            .split(/\.\s+[A-Z]/)[0]
+            .replace(/^[to ]+/i, "")
+            .replace(/[.,]+$/, "")
+            .trim();
+          if (sentence.length > 0) {
+            promptText = sentence;
+            rawPromptText = sentence;
+          }
         }
       }
 
@@ -658,13 +766,23 @@ export async function calculateProjectAnalytics(
         // If request_summary is an internal upstream JSON blob, prefer extracting reasoning intent or clean label
         if (row.request_summary.trim().startsWith("{")) {
           if (responseReasoning) {
-            const reasoningMatch = responseReasoning.match(
-              /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt):\s*["']?([^"'\n]+)["']?/i
+            const line0 = responseReasoning.split("\n")[0];
+            const reasoningMatch = line0.match(
+              /(?:The user wants me to|The user wants|The user is asking me to|The user is asking|The user requested me to|The user requested|User message|The user says|The user wrote|User prompt)\s*(?:is\s*)?[:\s]\s*["']?([^"\n\r]+)/i
             );
             if (reasoningMatch && reasoningMatch[1]) {
-              promptText = reasoningMatch[1].trim();
+              const sentence = reasoningMatch[1]
+                .split(/\.\s+[A-Z]/)[0]
+                .replace(/^[to ]+/i, "")
+                .replace(/[.,]+$/, "")
+                .trim();
+              if (sentence.length > 0) {
+                promptText = sentence;
+              } else {
+                promptText = line0.trim();
+              }
             } else {
-              promptText = responseReasoning.split("\n")[0].trim();
+              promptText = line0.trim();
             }
           } else {
             promptText = `API Request (${row.model || row.requested_model || "completion"})`;
@@ -706,17 +824,23 @@ export async function calculateProjectAnalytics(
         if (
           row.session_tag &&
           !cleanPrompt.startsWith("API Request") &&
-          !cleanPrompt.startsWith("[HTTP Call]")
+          !cleanPrompt.startsWith("[HTTP Call]") &&
+          !cleanPrompt.startsWith("Output token limit hit. Resume directly") &&
+          !cleanPrompt.startsWith("No existing intent ledger items to continue or amend")
         ) {
           sessionPromptsMap.set(row.session_tag, cleanPrompt);
         }
 
         // Ensure chatMessagesList has both user and assistant turns for clean thread view
-        if (
-          !chatMessagesList.some((m) => m.role === "user") &&
-          cleanPrompt &&
-          !cleanPrompt.startsWith("{")
-        ) {
+        // Never put synthetic proxy markers or internal scaffolding as a user bubble!
+        const isSyntheticPrompt =
+          cleanPrompt.startsWith("API Request") ||
+          cleanPrompt.startsWith("[HTTP Call]") ||
+          cleanPrompt.startsWith("Output token limit hit. Resume directly") ||
+          cleanPrompt.startsWith("No existing intent ledger items to continue or amend") ||
+          (cleanPrompt.startsWith("{") && cleanPrompt.endsWith("}"));
+
+        if (!chatMessagesList.some((m) => m.role === "user") && cleanPrompt && !isSyntheticPrompt) {
           chatMessagesList.unshift({
             role: "user",
             content: cleanPrompt,
@@ -1039,7 +1163,7 @@ export async function calculateProjectAnalytics(
   const sessions: SessionSummary = {
     total: totalSessions,
     uniquePrompts,
-    recentPrompts: recentPrompts.slice(0, 50),
+    recentPrompts: recentPrompts.slice(0, 200),
     conversationTurns: conversationTurns.length > 0 ? conversationTurns : undefined,
   };
 
