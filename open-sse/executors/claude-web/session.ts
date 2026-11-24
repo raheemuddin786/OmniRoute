@@ -216,11 +216,37 @@ function escapeXml(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
+const MAX_RECOVERY_PROMPT_CHARS = 100_000;
+
 function buildRecoveryPrompt(messages: ReadonlyArray<NormalizedMessage>): string {
-  const blocks = messages.map(
+  // Enforce a rolling window / character cap (~100k chars max) so huge multi-turn histories
+  // don't get refused by Claude.ai frontend limits.
+  const rawBlocks = messages.map(
     ({ role, content }) => `<message role="${escapeXml(role)}">\n${escapeXml(content)}\n</message>`
   );
-  return `${RECOVERY_PROMPT_HEADER}\n\n${blocks.join("\n\n")}`;
+
+  const selectedBlocks: string[] = [];
+  let currentLength = RECOVERY_PROMPT_HEADER.length + 2;
+
+  // Work backwards from latest message to preserve recent conversation turns
+  for (let i = rawBlocks.length - 1; i >= 0; i--) {
+    const block = rawBlocks[i];
+    if (selectedBlocks.length > 0 && currentLength + block.length + 2 > MAX_RECOVERY_PROMPT_CHARS) {
+      break;
+    }
+    selectedBlocks.unshift(block);
+    currentLength += block.length + 2;
+  }
+
+  // If even the latest single message exceeds the cap, truncate it cleanly
+  if (selectedBlocks.length === 1 && selectedBlocks[0].length > MAX_RECOVERY_PROMPT_CHARS) {
+    const lastMsg = messages[messages.length - 1];
+    const maxContentChars = MAX_RECOVERY_PROMPT_CHARS - 500;
+    const truncatedContent = lastMsg.content.slice(-maxContentChars);
+    selectedBlocks[0] = `<message role="${escapeXml(lastMsg.role)}">\n[...earlier content omitted...]\n${escapeXml(truncatedContent)}\n</message>`;
+  }
+
+  return `${RECOVERY_PROMPT_HEADER}\n\n${selectedBlocks.join("\n\n")}`;
 }
 
 function readExtension(body: Record<string, unknown>): ClaudeWebExtension {

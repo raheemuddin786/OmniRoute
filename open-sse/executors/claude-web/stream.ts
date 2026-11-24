@@ -552,6 +552,7 @@ async function* parseClaudeWebEvents(
 function openAiFinishReason(stopReason: string): string {
   if (stopReason === "max_tokens") return "length";
   if (stopReason === "tool_use") return "tool_calls";
+  if (stopReason === "refusal") return "content_filter";
   return "stop";
 }
 
