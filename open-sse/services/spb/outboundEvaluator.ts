@@ -1817,8 +1817,19 @@ export async function processSpbOutboundZeroLoss(args: {
       newlyModifiedCount = diffReview.actualModifiedFiles.length;
     }
 
+    // Exclude read-only analysis, inspection synthesis, planning, or diagnostic conversational queries
+    // from being penalized as "zero-diff" turns. Only require concrete file edits when the turn was explicitly
+    // intended for code mutation.
+    const isReadOnlyOrInspectionPhase =
+      args.taskPhase === "INSPECTION_SYNTHESIS" ||
+      args.taskPhase === "ARCHITECTURAL_PLANNING" ||
+      /\b(analyz|review|investigat|audit|explain|find|check|diagnos|what all|status|summary)\b/i.test(
+        args.originalPrompt || ""
+      );
+
     if (
       mode !== "apex_shadow" &&
+      !isReadOnlyOrInspectionPhase &&
       !extracted.hasToolCalls &&
       newlyModifiedCount === 0 &&
       (extracted.observedToolCalls?.length ?? 0) === 0

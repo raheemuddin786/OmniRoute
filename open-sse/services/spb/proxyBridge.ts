@@ -772,10 +772,10 @@ export async function processSmartProxyRouting(
         ? "[Auto-Recovery Directive: SDLC PLANNING GUIDANCE]\n" +
           `Exploration checkpoint reached. ${targetSummary}` +
           "Formulate a structured, end-to-end SDLC plan with an explicit checklist covering requirements, architecture, implementation files, automated tests, and verification steps."
-        : "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
+        : "[Auto-Recovery Directive: PRE-PLAN & UNIFIED EXECUTION]\n" +
           `Exploration checkpoint reached. ${targetSummary}` +
-          "Resume and complete ongoing implementation using editing tools (Write/Edit) or execute verification tests. " +
-          "Do not repeat exploratory read cycles or restart task formulation.";
+          "Synthesize gathered context and formulate the complete multi-file implementation plan. Enumerate all impacted files, type contracts, and tests, then execute cleanly end-to-end. " +
+          "Do NOT perform blind trial-and-error micro-edits before planning.";
       autoRecoveryDirective = autoRecoveryDirective
         ? `${autoRecoveryDirective}\n\n${stagnationRecoveryDirective}`
         : stagnationRecoveryDirective;
@@ -1197,11 +1197,11 @@ export async function processSmartProxyRouting(
             lastMsg.content.some((p) => p && p.type === "tool_result")))
       ) {
         if (typeof lastMsg.content === "string") {
-          lastMsg.content = `${lastMsg.content}\n\n[EXECUTION MANDATE: ${autoRecoveryDirective}]`;
+          lastMsg.content = `${lastMsg.content}\n\n[SPB CONTEXT GUIDANCE: ${autoRecoveryDirective}]`;
         } else if (Array.isArray(lastMsg.content)) {
           lastMsg.content = [
             ...lastMsg.content,
-            { type: "text", text: `[EXECUTION MANDATE: ${autoRecoveryDirective}]` },
+            { type: "text", text: `[SPB CONTEXT GUIDANCE: ${autoRecoveryDirective}]` },
           ];
         }
       }
