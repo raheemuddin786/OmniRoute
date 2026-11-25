@@ -20,6 +20,7 @@ import {
   detectAndRecoverFromStagnation,
   detectAndRecoverFromToolDeadlock,
   escalateFromStagnation,
+  type ModelTier,
 } from "./tieredRegistry.ts";
 import { getTierConfig } from "../tierResolver.ts";
 import { observeChangeProtocol } from "./changeProtocol/observer.ts";
@@ -468,7 +469,7 @@ export async function processSmartProxyRouting(
       /\b(ok|yes|proceed|continue|carry on|go ahead|sure|fine|yep|done|next|compact)\b/i.test(
         lastUserText.trim()
       ) ||
-      ((parsedStatePayload.messagesCount ?? 0) > 100 && (priorConsecutiveReads ?? 0) === 0);
+      (Number(parsedStatePayload.messagesCount ?? 0) > 100 && (priorConsecutiveReads ?? 0) === 0);
 
     if (isContinuationResume) {
       // Session continuation / resume: reset read counter so a fresh inspection cycle begins
@@ -495,11 +496,19 @@ export async function processSmartProxyRouting(
       sessionId,
       intent.taskPhase,
       consecutiveReads,
-      {
-        ...existingCheckpoint,
-        lastMutationTime: updatedLastMutationTime,
-        lastPeriodicPromptTime,
-      },
+      existingCheckpoint
+        ? {
+            consecutiveReads: existingCheckpoint.consecutiveReads,
+            modelTier: existingCheckpoint.modelTier,
+            guidanceContract: existingCheckpoint.guidanceContract as GuidanceContract | undefined,
+            lastMutationTime: updatedLastMutationTime,
+            lastPeriodicPromptTime,
+            stagnationRecovered: Boolean(existingCheckpoint.stagnationRecovered),
+          }
+        : {
+            lastMutationTime: updatedLastMutationTime,
+            lastPeriodicPromptTime,
+          },
       {
         elapsedSinceLastMutationMs,
       }
@@ -589,16 +598,19 @@ export async function processSmartProxyRouting(
 
       const tierModels =
         tierConfig?.tierModels?.[targetTierKey] ||
-        (tierConfig?.tierModels as Record<string, string[]> | undefined)?.[
+        (tierConfig?.tierModels as unknown as Record<string, string[]> | undefined)?.[
           stagnationRecovery.escalationTier
         ];
       tierAssignment = {
         tier: stagnationRecovery.escalationTier,
         recommendedModels:
           tierModels && tierModels.length > 0 ? tierModels : tierAssignment.recommendedModels,
+        maxTokens: tierAssignment.maxTokens,
+        temperature: tierAssignment.temperature,
+        cacheEnabled: tierAssignment.cacheEnabled,
+        reasoningEffort: tierAssignment.reasoningEffort,
         guidanceContract: tierAssignment.guidanceContract || intent.guidanceContract,
-        requiresTools: intent.requiresTools,
-        complexityScore: intent.complexityScore,
+        requiresGuidance: tierAssignment.requiresGuidance,
       };
       console.log(
         `[SPB Bridge] Session ${sessionId} | Stagnation recovery tier applied: ${tierAssignment.tier} (models: ${tierAssignment.recommendedModels?.join(", ")})`
@@ -1083,7 +1095,7 @@ export async function processSmartProxyRouting(
         if (hasInterleavedSystem) {
           enhancedMessages = normalizeInterleavedSystemMessages(
             messages as Array<{ role: string; content?: unknown }>
-          );
+          ) as typeof enhancedMessages;
         }
       }
     }
