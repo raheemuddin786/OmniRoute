@@ -530,6 +530,22 @@ export async function tryPinnedModelDispatch(args: {
   // tolerated (pin kept) so an unstable provider does not churn the pin.
   // The same binding the honored dispatch will use — the health gate must judge
   // exactly the account pool the pin can be served from.
+  // If the request was dynamically resolved by Smart Proxy Bridge (SPB) with a specific tier target,
+  // do not let a stale context-cache pin from a different tier or previous session hijack the SPB routing.
+  const isSpbManaged =
+    typeof body.model === "string" &&
+    (/^(?:auto\/)?spb(?::|$)/i.test(body.model) || /^SPB:/i.test(combo.name || ""));
+  if (isSpbManaged && pinInCombo) {
+    const isTargetInCombo = comboTargets.length > 0 && comboTargets[0]?.modelStr !== pinnedModel;
+    if (isTargetInCombo) {
+      log.info(
+        "COMBO",
+        `SPB tier override: dropping pinned context model "${pinnedModel}" in favor of SPB dynamically dispatched target "${comboTargets[0]?.modelStr}"`
+      );
+      return null;
+    }
+  }
+
   const pinnedBinding = resolvePinnedConnectionBinding(comboTargets, pinnedModel);
   const pinDurablyDown = pinInCombo
     ? await isPinnedModelDurablyUnhealthy(pinnedModel, pinnedBinding.allowedConnectionIds)

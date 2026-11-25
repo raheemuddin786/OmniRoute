@@ -311,9 +311,22 @@ export async function handleRerank({
     });
 
   try {
-    const res = connectionId
-      ? await runWithProxyContext(proxyInfo?.proxy || null, doFetch)
-      : await doFetch();
+    let res: Response;
+    try {
+      res = connectionId
+        ? await runWithProxyContext(proxyInfo?.proxy || null, doFetch)
+        : await doFetch();
+    } catch (fetchErr) {
+      const isLocal = /127\.0\.0\.1|localhost/i.test(rerankUrl);
+      if (isLocal) {
+        await new Promise((r) => setTimeout(r, 80));
+        res = connectionId
+          ? await runWithProxyContext(proxyInfo?.proxy || null, doFetch)
+          : await doFetch();
+      } else {
+        throw fetchErr;
+      }
+    }
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));

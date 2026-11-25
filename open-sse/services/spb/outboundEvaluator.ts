@@ -142,7 +142,18 @@ export function evaluateResponseIntent(
   }
 
   // 1b. Multi-intention coverage verification: check that explicit sub-intentions are not skipped
-  if (Array.isArray(preservedIntentions) && preservedIntentions.length > 0) {
+  // Only enforce execution-specific omissions (like tests/remediation) when the response is expected to be a code mutation turn,
+  // not an intermediate conversational, diagnostic, image inspection, or architectural review response.
+  const isDiagnosticOrInspectionTurn =
+    /\b(what (?:all )?u see|diagnos|investigat|review|audit|explain|inspect)\b/i.test(
+      originalPrompt
+    ) && !/\b(implement|code|write|patch|apply)\b/i.test(originalPrompt);
+
+  if (
+    Array.isArray(preservedIntentions) &&
+    preservedIntentions.length > 0 &&
+    !isDiagnosticOrInspectionTurn
+  ) {
     const unaddressedIntentions: string[] = [];
 
     for (const intentItem of preservedIntentions) {

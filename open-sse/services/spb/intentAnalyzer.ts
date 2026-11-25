@@ -604,7 +604,17 @@ export function classifyIntent(
   }
 
   // Check explicit architecture/planning keyword signals first
-  if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
+  const hasUserVisualInspection =
+    !isToolResultTurn &&
+    (latestExtracted.hasVisualOrCrashData ||
+      /\[Image:\s*source:|data:image\/|\b(what (?:all )?(?:do )?u see in this (?:live )?images?|inspect this (?:image|screenshot|ui)|look at the attached (?:image|screenshot))\b/i.test(
+        targetText
+      ));
+
+  if (hasUserVisualInspection && !hasCodeKeywords && !hasPureArchitectureIntent) {
+    taskPhase = "INSPECTION_SYNTHESIS";
+    complexityScore = 0.45;
+  } else if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
     taskPhase = "ARCHITECTURAL_PLANNING";
     complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
   } else if (isDuplicateFileRead) {

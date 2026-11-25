@@ -826,12 +826,25 @@ async function dispatchEmbeddingRequest(
   if (prepared.bedrock) return fetchBedrockEmbeddingBatch(prepared, prepared.bedrock, reqLogger);
   if (singleTexts) return fetchClovaEmbeddingBatch(prepared, singleTexts, reqLogger);
   reqLogger.logTargetRequest(prepared.upstreamUrl, prepared.headers, prepared.upstreamBody);
-  return fetch(prepared.upstreamUrl, {
-    method: "POST",
-    headers: prepared.headers,
-    body: JSON.stringify(prepared.upstreamBody),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+  const doFetch = () =>
+    fetch(prepared.upstreamUrl, {
+      method: "POST",
+      headers: prepared.headers,
+      body: JSON.stringify(prepared.upstreamBody),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+
+  // Local loopback retry: if a local inference worker (e.g. 127.0.0.1:7997) drops the socket under load, retry once after a tiny backoff
+  try {
+    return await doFetch();
+  } catch (err) {
+    const isLocal = /127\.0\.0\.1|localhost/i.test(prepared.upstreamUrl);
+    if (isLocal) {
+      await new Promise((r) => setTimeout(r, 80));
+      return await doFetch();
+    }
+    throw err;
+  }
 }
 
 function pipelinePayloads(
