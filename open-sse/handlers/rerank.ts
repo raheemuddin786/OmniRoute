@@ -316,9 +316,12 @@ export async function handleRerank({
       res = connectionId
         ? await runWithProxyContext(proxyInfo?.proxy || null, doFetch)
         : await doFetch();
-    } catch (fetchErr) {
+    } catch (fetchErr: unknown) {
+      const isAbortOrTimeout =
+        fetchErr instanceof Error &&
+        (fetchErr.name === "AbortError" || fetchErr.name === "TimeoutError");
       const isLocal = /127\.0\.0\.1|localhost/i.test(rerankUrl);
-      if (isLocal) {
+      if (isLocal && !isAbortOrTimeout) {
         await new Promise((r) => setTimeout(r, 80));
         res = connectionId
           ? await runWithProxyContext(proxyInfo?.proxy || null, doFetch)

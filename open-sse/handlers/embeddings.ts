@@ -834,12 +834,15 @@ async function dispatchEmbeddingRequest(
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
 
-  // Local loopback retry: if a local inference worker (e.g. 127.0.0.1:7997) drops the socket under load, retry once after a tiny backoff
+  // Local loopback retry: if a local inference worker (e.g. 127.0.0.1:7997) drops the socket under load, retry once after a tiny backoff.
+  // Avoid retrying on AbortError or timeout to prevent doubling maximum latency on hung endpoints.
   try {
     return await doFetch();
-  } catch (err) {
+  } catch (err: unknown) {
+    const isAbortOrTimeout =
+      err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
     const isLocal = /127\.0\.0\.1|localhost/i.test(prepared.upstreamUrl);
-    if (isLocal) {
+    if (isLocal && !isAbortOrTimeout) {
       await new Promise((r) => setTimeout(r, 80));
       return await doFetch();
     }
