@@ -10,12 +10,10 @@ import {
   extractResponseContent,
   processSpbOutboundZeroLoss,
   pruneOldToolOutputsForReprompt,
-} from "../../open-sse/services/spb/outboundEvaluator.ts";
-import {
-  processSmartProxyRouting,
   verifyCodeDiffAgainstConclusion,
   extractClaimedFilesFromText,
-} from "../../open-sse/services/spb/proxyBridge.ts";
+} from "../../open-sse/services/spb/outboundEvaluator.ts";
+import { processSmartProxyRouting } from "../../open-sse/services/spb/proxyBridge.ts";
 import { expandIncomingCcrMarkers } from "../../open-sse/services/compression/engines/ccr/index.ts";
 import { persistCcrBlock } from "../../src/lib/db/ccrBlocks.ts";
 import {

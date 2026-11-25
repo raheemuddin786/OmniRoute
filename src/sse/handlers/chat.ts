@@ -1568,17 +1568,23 @@ async function handleChatImplementation(
     let activeTier = spbDecision?.tierAssignment?.tier ?? "tier_2_resilient";
     spbComboLabel = `SPB:${spbProfileName || "default"} [${activeTier}]`;
 
-    // Guard: Tier 3 models require a guidanceContract from Tier 1/Tier 2
-    // to ensure supervised execution of modifications. Without guidance,
-    // automatically escalate to Tier 2 resilient execution.
+    // Guard: Tier 3 models executing destructive mutations require a guidanceContract from Tier 1/Tier 2.
+    // Read-only inspection synthesis (INSPECTION_SYNTHESIS), deterministic routing, or fast refactors
+    // are safe for Tier 3 and should NOT be forcibly escalated to Tier 2.
     const tierAssignment = spbDecision?.tierAssignment;
+    const taskPhase = spbDecision?.intent?.taskPhase;
+    const isDestructiveMutationPhase =
+      taskPhase === "CODE_GENERATION" ||
+      (spbDecision?.intent?.isToolResultTurn && spbDecision?.intent?.isCodeMutationToolResult);
     const isUnguidedMutationTier3 =
-      activeTier === "tier_3_local" && !tierAssignment?.guidanceContract;
+      activeTier === "tier_3_local" &&
+      isDestructiveMutationPhase &&
+      !tierAssignment?.guidanceContract;
 
     if (isUnguidedMutationTier3) {
       log.warn(
         "SPB",
-        "Tier 3 execution without guidanceContract - escalating to Tier 2 resilient for supervision"
+        "Tier 3 code mutation without guidanceContract - escalating to Tier 2 resilient for supervision"
       );
       (spbDecision.tierAssignment as any).tier = "tier_2_resilient";
       (spbDecision.tierAssignment as any).recommendedModels = tierModels.resilient || [];
