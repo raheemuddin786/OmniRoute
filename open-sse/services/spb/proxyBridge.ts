@@ -752,6 +752,9 @@ export async function processSmartProxyRouting(
       activeGuidanceContract = {
         supervisorTier: isPlanningPhase ? "tier_1_apex" : "tier_2_resilient",
         taskSpecification: rootTaskSpecification,
+        intents:
+          (existingCheckpoint?.guidanceContract as GuidanceContract | undefined)?.intents ||
+          normalizedGuidanceContract?.intents,
         constraints: isPlanningPhase
           ? [
               "Formulate comprehensive SDLC plan with structured milestones",

@@ -737,6 +737,42 @@ export function resolveSessionLifecycle(
     };
   }
 
+  // If existing intents are incomplete, check if the new prompt introduces substantive new action directives
+  if (!allResolved && existingIntents.length > 0 && text.length >= 10) {
+    const isFollowupAction =
+      /\b(?:also|and|now|please|can\s+you|fix|add|update|apply|research|investigate|check|test|diagnos|refactor|build)\b/i.test(
+        text
+      ) &&
+      !/^(?:ok|yes|proceed|continue|carry\s+on|go\s+ahead|sure|fine|yep|done|next)\b/i.test(text);
+
+    if (isFollowupAction) {
+      const newCandidateItems = decomposeRequestIntoLedger(text, maxItems);
+      if (newCandidateItems.length > 0) {
+        for (const ni of newCandidateItems) {
+          const isDuplicate = existingContract.intents?.some(
+            (ex) => ex.text.toLowerCase().trim() === ni.text.toLowerCase().trim()
+          );
+          if (
+            !isDuplicate &&
+            existingContract.intents &&
+            existingContract.intents.length < maxItems
+          ) {
+            ni.id = `I${existingContract.intents.length + 1}`;
+            existingContract.intents.push(ni);
+          }
+        }
+        existingContract.consecutiveNoChangeReprompts = 0;
+        return {
+          action: "amendment",
+          contract: existingContract,
+          directive:
+            "[SPB Amendment Directive: Additional goals identified from user prompt. " +
+            "The Intent Ledger has been enriched with the new requirements.]",
+        };
+      }
+    }
+  }
+
   // 3. New Task: prior work completed, or user initiates brand new instructions
   if (allResolved || (existingIntents.length === 0 && text.length > 0)) {
     const archived = Array.isArray(existingContract.archivedContracts)

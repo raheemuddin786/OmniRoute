@@ -64,9 +64,15 @@ function resolveContextCachePin(ctx: ComboContext): {
       )
     : null;
   let pinnedModel: string | null = null;
+  const isSpbSession =
+    Boolean((ctx.body as Record<string, unknown>)?._spbActive) ||
+    (typeof ctx.body.model === "string" && /^(?:auto\/)?spb(?::|$)/i.test(ctx.body.model)) ||
+    /^SPB:/i.test(combo.name || "");
+
   if (
     combo.context_cache_protection &&
     effectiveSessionId &&
+    !isSpbSession &&
     !(ctx.body as Record<string, unknown>)?.[SKIP_UNIVERSAL_HANDOFF_FLAG]
   ) {
     const pinned = getLastSessionModel(effectiveSessionId, combo.name);
