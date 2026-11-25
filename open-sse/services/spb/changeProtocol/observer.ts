@@ -15,6 +15,7 @@ export interface ObserveInput {
   isToolResultTurn: boolean;
   taskPhase?: string;
   spbProfile?: string;
+  injectedDirective?: string;
 }
 
 interface ToolUse {
@@ -83,6 +84,11 @@ export async function observeChangeProtocol(input: ObserveInput): Promise<void> 
       events.push({ kind: "run_start" });
     }
     if (input.taskPhase === "ARCHITECTURAL_PLANNING") events.push({ kind: "plan_signal" });
+    const spbMandateInjected =
+      input.injectedDirective?.includes("formulate a complete multi-file plan") ||
+      input.injectedDirective?.includes("multi-file plan") ||
+      input.injectedDirective?.includes("pre-plan");
+    if (spbMandateInjected) events.push({ kind: "plan_signal" });
     if (input.isToolResultTurn) events.push(...toEvents(lastAssistantToolUses(input.messages)));
 
     let current: PhaseState = state;

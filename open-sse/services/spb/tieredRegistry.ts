@@ -569,9 +569,7 @@ export function escalateFromStagnation(
 ): { newTaskPhase: TaskPhase; escalationTier: "tier_2_resilient"; recoveryDirective: string } {
   // Determine target phase based on original user intent signals
   const recoveryDirective =
-    "PRE-PLAN & END-TO-END EXECUTION MANDATE: You have gathered sufficient context. Synthesize all findings into a complete, ordered multi-file change plan. " +
-    "Enumerate every file, every change, every type contract and import. Then execute the full solution end-to-end without stopping. " +
-    "Never make blind guesses or trial-and-error micro-edits.";
+    "Before making any edits, formulate a complete multi-file plan covering all files to be changed, the order of changes, and expected outcomes. Only begin editing after the plan is fully formed.";
 
   // escalate to CODE_GENERATION or TESTING_AND_VERIFICATION based on content
   const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;

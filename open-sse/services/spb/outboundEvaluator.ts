@@ -1817,19 +1817,27 @@ export async function processSpbOutboundZeroLoss(args: {
       newlyModifiedCount = diffReview.actualModifiedFiles.length;
     }
 
-    // Exclude read-only analysis, inspection synthesis, planning, or diagnostic conversational queries
-    // from being penalized as "zero-diff" turns. Only require concrete file edits when the turn was explicitly
-    // intended for code mutation.
-    const isReadOnlyOrInspectionPhase =
-      args.taskPhase === "INSPECTION_SYNTHESIS" ||
-      args.taskPhase === "ARCHITECTURAL_PLANNING" ||
-      /\b(analyz|review|investigat|audit|explain|find|check|diagnos|what all|status|summary)\b/i.test(
-        args.originalPrompt || ""
-      );
+    // Phase-based exemption: non-mutating phases are exempt from zero-diff penalty.
+    const nonMutatingPhases = new Set([
+      "INSPECTION_SYNTHESIS",
+      "ARCHITECTURAL_PLANNING",
+      "UNDERSTAND",
+      "REVIEW",
+      "ANALYSIS",
+    ]);
 
-    if (
+    const currentPhase = args.taskPhase ?? null;
+
+    const isExemptFromZeroDiffPenalty =
+      (currentPhase !== null && nonMutatingPhases.has(currentPhase)) ||
+      (currentPhase === null &&
+        /\b(analyz|review|investigat|inspect|diagnos)\b/i.test(args.originalPrompt || ""));
+
+    if (isExemptFromZeroDiffPenalty) {
+      evalResult.isSatisfied = true;
+      evalResult.suggestedReprompt = undefined;
+    } else if (
       mode !== "apex_shadow" &&
-      !isReadOnlyOrInspectionPhase &&
       !extracted.hasToolCalls &&
       newlyModifiedCount === 0 &&
       (extracted.observedToolCalls?.length ?? 0) === 0
@@ -1837,7 +1845,7 @@ export async function processSpbOutboundZeroLoss(args: {
       consecutiveZeroDiffTurns++;
       if (consecutiveZeroDiffTurns === 1) {
         evalResult.suggestedReprompt =
-          "EXECUTION DIRECTIVE: You have not used any tools or modified any files. Proceed immediately to concrete execution using editing tools (Edit/Write/Bash) instead of conversational output.";
+          "Before making any edits, formulate a complete multi-file plan covering all files to be changed, the order of changes, and expected outcomes. Only begin editing after the plan is fully formed.";
         evalResult.isSatisfied = false;
       } else if (consecutiveZeroDiffTurns >= 2) {
         const promotedTier = getNextFailoverTier(currentTier);

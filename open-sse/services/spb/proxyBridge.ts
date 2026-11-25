@@ -284,15 +284,6 @@ export async function processSmartProxyRouting(
     // 2. Classify intent with error boundary (using classification messages)
     const intent = classifyIntent(classificationMessages, tools);
 
-    // Observe change protocol (non-blocking, log-only in observe mode)
-    void observeChangeProtocol({
-      sessionId,
-      messages,
-      isToolResultTurn: intent.isToolResultTurn,
-      taskPhase: intent.taskPhase,
-      spbProfile: context.spbProfile,
-    });
-
     // Extract latest user content & detect structured payload format
     let lastUserIndex = -1;
     let lastUserText = "";
@@ -473,7 +464,16 @@ export async function processSmartProxyRouting(
       intent.taskPhase === "DETERMINISTIC_ROUTING" ||
       (intent.taskPhase === "TESTING_AND_VERIFICATION" && !isDiagnosticOrVisualTurn);
 
-    if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
+    const isContinuationResume =
+      /\b(ok|yes|proceed|continue|carry on|go ahead|sure|fine|yep|done|next|compact)\b/i.test(
+        lastUserText.trim()
+      ) ||
+      ((parsedStatePayload.messagesCount ?? 0) > 100 && (priorConsecutiveReads ?? 0) === 0);
+
+    if (isContinuationResume) {
+      // Session continuation / resume: reset read counter so a fresh inspection cycle begins
+      consecutiveReads = 0;
+    } else if (intent.isToolResultTurn && intent.isCodeMutationToolResult) {
       // Confirmed code mutation: reset counter and update lastMutationTime
       consecutiveReads = 0;
       updatedLastMutationTime = now;
@@ -1178,6 +1178,16 @@ export async function processSmartProxyRouting(
         ? `${autoRecoveryDirective}\n\n${checklistDirective}`
         : checklistDirective;
     }
+
+    // Observe change protocol (non-blocking, log-only in observe mode)
+    void observeChangeProtocol({
+      sessionId,
+      messages,
+      isToolResultTurn: intent.isToolResultTurn,
+      taskPhase: intent.taskPhase,
+      spbProfile: context.spbProfile,
+      injectedDirective: autoRecoveryDirective,
+    });
 
     // Inject auto-recovery directive into messages if stagnation was detected
     if (autoRecoveryDirective) {
