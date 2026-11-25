@@ -500,6 +500,14 @@ export function decomposeRequestIntoLedger(
     );
   if (isAdvisoryInquiry) return [];
 
+  // Skip ledger creation for trivial continuation phrases ("yes", "proceed", "go ahead", "ok", "continue")
+  // These are user confirmations to continue work and must not be decomposed into artificial tasks.
+  const isContinuationOnly =
+    /^(?:yes|proceed|continue|go ahead|apply|ok|okay|looks good|sounds good|do it|next)(?:\s+(?:please|next|now|with that|further|ahead|with changes))?[\s!.]*$/i.test(
+      text
+    );
+  if (isContinuationOnly) return [];
+
   const items: IntentLedgerItem[] = [];
 
   // 1. Extract explicit candidate segments:

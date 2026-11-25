@@ -534,14 +534,16 @@ export function classifyIntent(
     (hasCodeKeywords || hasRefactorKeywords);
 
   // Duplicate file read loop guard:
-  // Track files being inspected across rolling assistant/user tool turns.
-  // If an agent calls Read/inspect on the SAME file >= duplicateReadThreshold times without an intervening
-  // code mutation, force CODE_GENERATION to break the infinite read loop.
+  // Track files being inspected across a rolling sliding window of recent assistant/user turns (last 12 messages).
+  // If an agent calls Read/inspect on the SAME file >= duplicateReadThreshold times within this window
+  // without an intervening code mutation, force CODE_GENERATION to break the infinite read loop.
   let isDuplicateFileRead = false;
   let duplicateFilePath: string | undefined;
 
   const fileReadCounts = new Map<string, number>();
-  for (const msg of messages) {
+  // Use a sliding window of recent messages to avoid flagging reads from dozens of turns ago
+  const recentMessagesWindow = messages.slice(-12);
+  for (const msg of recentMessagesWindow) {
     if (msg.role === "assistant") {
       const rawTools: Array<{ name: string; args?: Record<string, unknown> }> = [];
       if (Array.isArray(msg.content)) {

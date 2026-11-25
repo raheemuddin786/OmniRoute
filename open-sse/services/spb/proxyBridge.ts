@@ -560,11 +560,9 @@ export async function processSmartProxyRouting(
     }
 
     // Hard Duplicate File Read Blocker:
-    // If the agent read the exact same file >= 3 times, inject an explicit halt directive
+    // If the agent read the exact same file >= duplicateReadThreshold times within the recent window,
+    // inject diagnostic guidance without latching permanent false stagnation
     if (intent.isDuplicateFileRead && intent.duplicateFilePath) {
-      isStagnant = true;
-      stagnationDetected = true;
-      stagnationRecovered = true;
       const duplicateBlockDirective = intent.isToolExecutionError
         ? `[SPB Diagnostic Guidance: A tool operation on '${intent.duplicateFilePath}' failed. Verify the file path, request workspace access if needed, or diagnose the underlying error before proceeding. Do not assume file contents or hallucinate.]`
         : intent.taskPhase === "ARCHITECTURAL_PLANNING"

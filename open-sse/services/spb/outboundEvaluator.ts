@@ -1673,10 +1673,7 @@ export async function processSpbOutboundZeroLoss(args: {
     const mode = tierCfg?.spbConfig?.intentLedgerMode ?? "off";
     let ledgerEval: LedgerEvaluationResult | undefined;
     if (!extracted.hasToolCalls && activeContract?.intents?.length) {
-      if (
-        mode === "apex_shadow" ||
-        ((mode === "apex_guided" || mode === "heuristic") && isStrict)
-      ) {
+      if (mode === "apex_shadow" || (mode === "apex_guided" && isStrict)) {
         const cwd = resolveDiffCwd();
         const currentSnapshot = snapshotWorkingTreeDirtyFiles(cwd);
         const baselineHashes = activeContract.baselineFileHashes || {};
