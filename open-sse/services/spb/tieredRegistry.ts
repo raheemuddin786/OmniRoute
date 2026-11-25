@@ -424,7 +424,7 @@ export function detectAndRecoverFromStagnation(
   };
 } {
   const currentConfig = getTierConfig();
-  const stagnationThreshold = currentConfig?.spbConfig?.stagnationThreshold ?? 2;
+  const stagnationThreshold = currentConfig?.spbConfig?.stagnationThreshold ?? 5;
   const stagnationIntervalMs =
     Number(process.env.OMNIROUTE_SPB_STAGNATION_INTERVAL_MS) > 0
       ? Number(process.env.OMNIROUTE_SPB_STAGNATION_INTERVAL_MS)
@@ -461,7 +461,7 @@ export function detectAndRecoverFromStagnation(
       `1. Hallucination check: Are you looking for files, symbols, endpoints, or error signatures that do NOT exist in this repo?\n` +
       `2. Divergence check: Have you drifted away from the primary user objective?\n` +
       `3. Token waste check: Are you running redundant reads/searches or repeating failing commands without new insights?\n` +
-      `If you have gathered context, STOP reading and proceed directly to code implementation (Edit/Write) or test verification now.`;
+      `If you have gathered sufficient context, construct a COMPLETE pre-plan: enumerate every file requiring changes, all type contracts, imports, and test surfaces. Then execute the full solution cleanly end-to-end without trial-and-error. Do NOT make blind micro-edits before planning.`;
 
     const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
@@ -510,9 +510,9 @@ export function detectAndRecoverFromStagnation(
       escalationTier = "tier_1_apex";
     } else {
       recoveryDirective =
-        "[Auto-Recovery Directive: EXECUTION MANDATE]\n" +
-        "Exploration checkpoint reached. You have gathered sufficient repository context for this task. " +
-        "Proceed to implement the solution using editing tools (Write/Edit) or execute verification tests.";
+        "[Auto-Recovery Directive: PRE-PLAN & UNIFIED EXECUTION]\n" +
+        "Context checkpoint reached. Before writing any code: formulate the complete multi-file implementation plan listing all impacted files, type contracts, imports, and verification steps. " +
+        "Then apply all changes cleanly end-to-end in a single planned execution. Never make trial-and-error micro-edits.";
       const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
       newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
@@ -569,8 +569,9 @@ export function escalateFromStagnation(
 ): { newTaskPhase: TaskPhase; escalationTier: "tier_2_resilient"; recoveryDirective: string } {
   // Determine target phase based on original user intent signals
   const recoveryDirective =
-    "EXECUTION MANDATE: You have completed sufficient inspection. Stop further read/grep/glob file inspections. " +
-    "Proceed immediately to concrete execution using editing tools (Write/Edit) or tests.";
+    "PRE-PLAN & END-TO-END EXECUTION MANDATE: You have gathered sufficient context. Synthesize all findings into a complete, ordered multi-file change plan. " +
+    "Enumerate every file, every change, every type contract and import. Then execute the full solution end-to-end without stopping. " +
+    "Never make blind guesses or trial-and-error micro-edits.";
 
   // escalate to CODE_GENERATION or TESTING_AND_VERIFICATION based on content
   const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;

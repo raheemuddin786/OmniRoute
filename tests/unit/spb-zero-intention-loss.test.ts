@@ -1007,7 +1007,7 @@ test("Stagnation Recovery: persistent stagnation (>= 5 reads) forces tier_2_resi
     "Persistent stagnation must force tier_2_resilient execution instead of tier_1_apex planning"
   );
   assert.equal(recovery.newTaskPhase, "CODE_GENERATION");
-  assert.ok(recovery.recoveryDirective?.includes("EXECUTION MANDATE"));
+  assert.ok(recovery.recoveryDirective?.includes("PRE-PLAN"));
 });
 
 test("Stagnation Recovery: code mutation tool result turn resets consecutive reads counter", async () => {

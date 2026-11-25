@@ -491,8 +491,8 @@ export function assignRoleDirective(
       roleScope =
         "Execute strictly within designated target files. Make minimal, surgical modifications without extraneous modifications or hallucinations. " +
         "Strictly preserve all existing code and architecture. Never output manual terminal commands to the user when task requires autonomous execution. " +
-        "EXECUTION MANDATE: You MUST perform concrete file modifications (Write/Edit) within your target scope. " +
-        "DO NOT spend turns merely reading or inspecting files without applying changes. " +
+        "PRE-PLAN MANDATE: Before any file modification, fully understand all impacted files, type contracts, and boundaries within your scope. " +
+        "Formulate the complete, exact change set covering every file, import, and type contract. Then apply all changes end-to-end without trial-and-error. " +
         "If the user requests an E2E test run or screenshot capture, invoke the verification pipeline via tools rather than echoing commands back.";
 
       return { assignedRole, roleScope };
