@@ -336,7 +336,10 @@ export async function processSmartProxyRouting(
         if (isToolTurn) {
           // Tool-result turns strictly retain the existing guidance contract without running follow-up classification
           intent.guidanceContract = existing;
-        } else if ((mode === "apex_guided" || mode === "apex_shadow") && context.dispatchModel) {
+        } else if (
+          (mode === "apex_guided" || mode === "apex_shadow") &&
+          typeof context.dispatchModel === "function"
+        ) {
           const followUp = await classifyFollowUp(existing, lastUserText, context.dispatchModel, {
             maxItems: tierConfig?.spbConfig?.maxLedgerItems ?? 8,
           });
@@ -898,7 +901,10 @@ export async function processSmartProxyRouting(
 
         if (!isToolTurn) {
           const mode = tierConfig?.spbConfig?.intentLedgerMode || "off";
-          if ((mode === "apex_guided" || mode === "apex_shadow") && context.dispatchModel) {
+          if (
+            (mode === "apex_guided" || mode === "apex_shadow") &&
+            typeof context.dispatchModel === "function"
+          ) {
             const apexCtx = gatherApexContext({
               workspaceRoot: context.workspaceRoot,
               prompt: lastUserText || rootTaskSpecification,

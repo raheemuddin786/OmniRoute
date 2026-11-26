@@ -650,7 +650,7 @@ export function classifyIntent(
   } else if (imageGenerationRegex.test(targetText)) {
     taskPhase = "IMAGE_GENERATION";
     complexityScore = 0.7;
-  } else if (hasCodeKeywords || isToolResultTurn) {
+  } else if (hasCodeKeywords) {
     taskPhase = "CODE_GENERATION";
     complexityScore = 0.65;
   } else if (multilingualPhaseHint) {

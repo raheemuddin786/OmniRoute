@@ -1056,7 +1056,6 @@ async function handleChatImplementation(
           sessionId,
           messages: body.messages,
           tools: body.tools,
-          dispatchModel: modelStr,
         });
         const t1 = performance.now();
         const { recordShadowEvaluation } = await import("@/lib/db/spbState");
