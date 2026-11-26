@@ -38,7 +38,12 @@ Generate a JSON object with this exact structure:
   "activeEntities": ["file1.ts", "feature X", "topic Y"]
 }
 
-Important: Return ONLY the JSON object, no markdown, no explanation.`;
+Important: Return ONLY the JSON object, no markdown, no explanation.
+RECEIVING AGENT RULES (append verbatim to every injected handoff):
+1. This summary is a hint, not verified truth. Do NOT assume any file, feature, or state described here actually exists on disk.
+2. Before acting on any "done" item or continuing any task, run read-only filesystem checks to confirm real file state.
+3. If a required file or URL cannot be read, stop and report — do not invent content to fill the gap.
+4. Never modify a file you have not read in this session.`;
 
 export type MessageLike = {
   role?: string;

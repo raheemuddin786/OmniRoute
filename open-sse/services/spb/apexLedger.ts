@@ -1281,6 +1281,10 @@ export async function classifyFollowUp(
     `- If the user cancels, removes, or skips an item (e.g. "skip signup"), set that item's status to "skipped".\n` +
     `- PARENT-CHILD PRESERVATION: When an explicit item is skipped, DO NOT auto-skip its required-implied children if any other open or done item still depends on them (e.g. shared auth utilities, database migration, or tokens). Instead, RE-PARENT those children to an active open or done explicit item with an updated reason.\n` +
     `- SCHEMA COMPLIANCE: Every explicit item MUST include a non-empty "promptRef" quoting or paraphrasing the user prompt justifying it. Every required-implied item MUST include a non-empty "parentId" referencing an active explicit item and a non-empty "reason".\n` +
+    `\n` +
+    `TRUST RULE FOR EXISTING LEDGER:\n` +
+    `- An item with status "done" is only trusted as genuinely complete if its "evidence" field is non-empty and describes a specific observable outcome (e.g. a file path, test result, HTTP status). An item with status "done" but empty or missing "evidence" MUST be treated as "open" and re-evaluated against the new message.\n` +
+    `- Never carry forward a "done" status based solely on the ledger — always require evidence.\n` +
     `- Append newly requested items with new IDs (e.g. I_new, I6, I7).\n` +
     `- Cap at ${maxItems} total items.\n\n` +
     `IMPORTANT: Output MUST be a single raw JSON object strictly adhering to the schema below without any preceding or trailing text or explanations.\n\n` +
