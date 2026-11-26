@@ -9,6 +9,7 @@ import { type TierModelsConfig } from "../tierTypes.ts";
 import { checkCooldownStatus } from "../globalRateLimiter.ts";
 import { isFreeModelTarget } from "../spbFreeTierAutoConfig.ts";
 import { getTierConfig, resolveVirtualTierModels } from "../tierResolver.ts";
+import { getModelPricing } from "../providerCostData.ts";
 
 export type ModelTier = "tier_1_apex" | "tier_2_resilient" | "tier_3_local";
 
@@ -23,8 +24,21 @@ export interface TierAssignment {
   requiresGuidance?: boolean;
 }
 
+function getModelCost(model: string): number {
+  const provider = model.includes("/") ? model.split("/")[0] : "";
+  const modelId = model.includes("/") ? model.split("/").slice(1).join("/") : model;
+  try {
+    const pricing = getModelPricing(provider, modelId);
+    if (pricing.isFree) return 0;
+    return (pricing.inputCostPer1M ?? 0) + (pricing.outputCostPer1M ?? 0);
+  } catch {
+    return 1.0;
+  }
+}
+
 /**
- * Reorders candidates to place healthy, non-cooldown models first
+ * Reorders candidates to place healthy, non-cooldown models first,
+ * sorting healthy models by cost (lowest cost first).
  */
 function prioritizeHealthyTierModels(models: string[]): string[] {
   if (!models || models.length <= 1) return models || [];
@@ -45,6 +59,9 @@ function prioritizeHealthyTierModels(models: string[]): string[] {
       healthy.push(model);
     }
   }
+
+  // Sort healthy models by combined cost per 1M tokens (lowest first)
+  healthy.sort((a, b) => getModelCost(a) - getModelCost(b));
 
   return healthy.length > 0 ? [...healthy, ...inCooldown] : inCooldown;
 }

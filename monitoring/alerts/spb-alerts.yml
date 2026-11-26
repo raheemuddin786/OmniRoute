@@ -1,0 +1,32 @@
+groups:
+  - name: omniroute_spb_alerts
+    rules:
+      - alert: SpbDaemonStalled
+        expr: omniroute_spb_daemon_sweep_age_seconds > 120
+        for: 2m
+        labels:
+          severity: critical
+          tier: routing
+        annotations:
+          summary: "SPB Recovery Daemon has stalled"
+          description: "SPB Recovery Daemon last completed a sweep {{ $value }}s ago (>120s threshold). Cooldowns and circuit breakers may not be recovering."
+
+      - alert: SpbCircuitBreakerStorm
+        expr: sum(rate(omniroute_spb_circuit_open_total[5m])) > 10
+        for: 3m
+        labels:
+          severity: warning
+          tier: routing
+        annotations:
+          summary: "SPB Circuit Breaker Storm detected"
+          description: "More than 10 SPB circuit breakers opened in the last 5 minutes. High provider failure rate detected."
+
+      - alert: SpbHighFallbackRate
+        expr: sum(rate(omniroute_spb_fallback_total[5m])) / sum(rate(omniroute_spb_requests_total[5m])) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          tier: routing
+        annotations:
+          summary: "SPB Fallback Rate > 30%"
+          description: "Over 30% of SPB requests are falling back from primary tier candidates to backup models."

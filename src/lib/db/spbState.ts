@@ -59,6 +59,18 @@ export interface SpbTelemetrySummary {
   phaseDistribution: Record<string, number>;
   tierDistribution: Record<string, number>;
   lastRoutedAt: string | null;
+  // Shadow evaluation metrics
+  shadowAgreementRate?: number;
+  shadowTotalEvaluated?: number;
+}
+
+export interface ShadowEvaluationRecord {
+  sessionId: string;
+  legacyTier: string;
+  spbTier: string;
+  legacyModel: string;
+  spbModel: string;
+  latencyDeltaMs: number;
 }
 
 export interface SpbActivityFilterOptions {
@@ -422,9 +434,53 @@ export function initSpbStateTable(): void {
       // Index already exists
     }
 
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS spb_shadow_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT,
+          legacy_tier TEXT,
+          spb_tier TEXT,
+          legacy_model TEXT,
+          spb_model TEXT,
+          latency_delta_ms REAL,
+          timestamp INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_spb_shadow_time ON spb_shadow_audit(timestamp);
+      `);
+    } catch {
+      // Table/index already exists
+    }
+
     _tablesInitialized = true;
   } catch (err) {
     console.error("[SPB State] Failed to initialize tables:", err);
+  }
+}
+
+export function recordShadowEvaluation(record: ShadowEvaluationRecord): boolean {
+  try {
+    initSpbStateTable();
+    const db = getDbInstance();
+    db.prepare(
+      `
+      INSERT INTO spb_shadow_audit
+      (session_id, legacy_tier, spb_tier, legacy_model, spb_model, latency_delta_ms, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `
+    ).run(
+      record.sessionId,
+      record.legacyTier,
+      record.spbTier,
+      record.legacyModel,
+      record.spbModel,
+      record.latencyDeltaMs,
+      Date.now()
+    );
+    return true;
+  } catch (err) {
+    console.error("[SPB State] Failed to record shadow evaluation:", err);
+    return false;
   }
 }
 

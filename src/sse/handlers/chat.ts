@@ -1042,6 +1042,41 @@ async function handleChatImplementation(
       isFeatureFlagEnabled("SPB_ENABLED") ||
       process.env.SPB_ENABLED === "true");
 
+  const isShadowMode =
+    process.env.SPB_SHADOW_MODE === "true" || isFeatureFlagEnabled("SPB_SHADOW_MODE");
+
+  // Asynchronous SPB shadow mode evaluation when legacy routing is chosen
+  if (isShadowMode && !isSpbActive && Array.isArray(body?.messages)) {
+    const t0 = performance.now();
+    Promise.resolve().then(async () => {
+      try {
+        const { processSmartProxyRouting } =
+          await import("@omniroute/open-sse/services/spb/proxyBridge");
+        const decision = await processSmartProxyRouting({
+          sessionId,
+          messages: body.messages,
+          tools: body.tools,
+          dispatchModel: modelStr,
+        });
+        const t1 = performance.now();
+        const { recordShadowEvaluation } = await import("@/lib/db/spbState");
+        recordShadowEvaluation({
+          sessionId,
+          legacyTier: "legacy_combo",
+          spbTier: decision.tierAssignment?.tier ?? "unknown",
+          legacyModel: modelStr,
+          spbModel: decision.tierAssignment?.recommendedModels?.[0] ?? "unknown",
+          latencyDeltaMs: t1 - t0,
+        });
+      } catch (err) {
+        log.warn(
+          "SPB",
+          `Shadow evaluation failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    });
+  }
+
   // Branch forking headers
   const forkFromHeader = request.headers.get("x-omniroute-fork-from")?.trim() || null;
   const forkPointHeader = request.headers.get("x-omniroute-fork-point")?.trim() || null;
