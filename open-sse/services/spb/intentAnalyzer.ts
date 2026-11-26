@@ -493,15 +493,16 @@ export function classifyIntent(
     !isToolResultTurn && targetText.trim().length > 0 && !isContinuationPhrase;
 
   const isExplicitPureCodeExecution =
-    /\b(implement(?:ing|ed|s)?|code|write|create the (?:code|file|component)|patch|fix|debug)\b/i.test(
+    /\b(implement(?:ing|ed|s)?|code|write|create the (?:code|file|component)|patch|fix|debug|apply|apply the changes|proceed with executing|execute(?: the)?)\b/i.test(
       targetText
     ) &&
-    !/\b(plan|planning|architect|architecture|blueprint|roadmap|research|investigate|audit|system architecture)\b/i.test(
+    !/\b(architect|architecture|blueprint|roadmap|research|investigate|audit|system architecture)\b/i.test(
       targetText
     );
 
   const isAutonomousSdlcPrompt =
     isDirectHumanPrompt &&
+    !isExplicitPureCodeExecution &&
     /\b(sdlc|end-to-end autonomous|full autonomous|single prompt.*full|single execution.*single prompt|autonomous-executor|requirements.*architecture.*implementation.*testing)\b/i.test(
       targetText
     );
@@ -513,7 +514,7 @@ export function classifyIntent(
       !hasDeterministicKeywords &&
       !hasTestKeywords &&
       !hasRefactorKeywords &&
-      (/\b(adapt|screen|screens|app|mobile|redesign|system architecture|architectural|design flow|end-to-end|workflow|multi-page|multi-step|roadmap|blueprint|research|investigate|audit|plan|planning|strategy|deep analysis)\b/i.test(
+      (/\b(adapt|screen|screens|app|mobile|redesign|system architecture|architectural|design flow|workflow|multi-page|multi-step|roadmap|blueprint|research|investigate|audit|plan|planning|strategy|deep analysis)\b/i.test(
         targetText
       ) ||
         (userMessages.length === 1 && !hasCodeKeywords)));

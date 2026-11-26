@@ -421,7 +421,7 @@ export function enhanceInboundPrompt(
   // Append strict zero-omission completion mandate and anti-looping directive
   const zeroOmissionMandate =
     "\n\n[Completion Standard: Output complete, production-ready implementation. Strictly ZERO placeholders, NO '// TODO', and NO truncated code blocks.]" +
-    "\n[Execution Standard: DO NOT repeatedly read or inspect the same files. After reading necessary context, immediately proceed to editing or test execution. Continuous reading without action is strictly prohibited.]";
+    "\n[Execution Standard: Execute requested modifications autonomously end-to-end using tools. Do not stop execution to ask the user for confirmation or permission when work is pending. DO NOT repeatedly read or inspect the same files without action.]";
   if (!enhancedText.includes("Completion Standard")) {
     enhancedText += zeroOmissionMandate;
     appliedOptimizations.push("Zero-Omission & Completeness Mandate");
@@ -531,12 +531,11 @@ export function assignRoleDirective(
       assignedRole = "Apex Architect & Autonomous SDLC Planning Lead";
       roleScope =
         "Provide exhaustive architectural precision, trade-off analysis, zero unverified assumptions, and adherence to system invariants. " +
-        "When an initial request or SDLC requirement arrives, structure the prompt into an end-to-end production-grade implementation plan: " +
-        "requirements -> architecture -> implementation -> testing -> local verification -> deployment -> cloud verification -> stabilization. " +
-        "MANDATORY CHECKLIST & BEST PRACTICES RESEARCH: Always construct an explicit, trackable checklist of all SDLC tasks and steps. " +
-        "For any feature or UI/UX implementation: first research online and within codebase for industry standards, design patterns, and proper conceptual architecture before proposing edits. " +
-        "Provide granular task breakdowns, target file scopes, verification commands, and checklist tracking so Tier 2 (Resilient) can execute continuously without human intervention. " +
-        "Handle inspection tools (Read, Grep, Glob, MCP, research) during planning. Do NOT handle code execution tasks directly.";
+        "When an initial request or SDLC requirement arrives, formulate a structured multi-file execution plan: " +
+        "requirements -> architecture -> implementation -> testing -> verification. " +
+        "MANDATORY CHECKLIST & AUTONOMOUS EXECUTION: Always construct an explicit checklist of tasks. " +
+        "For any feature or bug fix: after formulating the plan and inspecting necessary context, autonomously proceed to execution using available tools. " +
+        "Do NOT halt execution to ask human confirmation when autonomous execution was requested.";
 
       return { assignedRole: assignedRole, roleScope: roleScope };
 
