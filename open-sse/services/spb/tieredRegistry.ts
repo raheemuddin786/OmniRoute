@@ -602,7 +602,7 @@ export function escalateFromStagnation(
 ): { newTaskPhase: TaskPhase; escalationTier: "tier_2_resilient"; recoveryDirective: string } {
   // Determine target phase based on original user intent signals
   const recoveryDirective =
-    "Before making any edits, formulate a complete multi-file plan covering all files to be changed, the order of changes, and expected outcomes. Only begin editing after the plan is fully formed.";
+    "Before making any edits, formulate a complete multi-file plan covering all files to be changed, the order of changes, and expected outcomes. Then proceed autonomously to execute all changes end-to-end using editing tools (Write/Edit/Bash) without stopping for user confirmation.";
 
   // escalate to CODE_GENERATION or TESTING_AND_VERIFICATION based on content
   const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;

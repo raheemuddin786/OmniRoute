@@ -1823,6 +1823,7 @@ export async function processSpbOutboundZeroLoss(args: {
     }
 
     // Phase-based exemption: non-mutating phases are exempt from zero-diff penalty.
+    // Also exempt valid pre-planning turns where the model generated a structured plan/checklist without edits.
     const nonMutatingPhases = new Set([
       "INSPECTION_SYNTHESIS",
       "ARCHITECTURAL_PLANNING",
@@ -1832,9 +1833,18 @@ export async function processSpbOutboundZeroLoss(args: {
       "DETERMINISTIC_ROUTING",
     ]);
 
+    const isStructuredPlanResponse =
+      !extracted.hasToolCalls &&
+      newlyModifiedCount === 0 &&
+      /\b(?:plan|checklist|files to be changed|implementation plan|order of changes|expected outcomes|architecture)\b/i.test(
+        extracted.text
+      ) &&
+      /(?:^|\n)\s*(?:[-*]|\d+\.)\s+/m.test(extracted.text);
+
     const currentPhase = args.taskPhase ?? null;
 
     const isExemptFromZeroDiffPenalty =
+      isStructuredPlanResponse ||
       (currentPhase !== null && nonMutatingPhases.has(currentPhase)) ||
       (currentPhase === null &&
         /\b(analyz|review|investigat|inspect|diagnos)\b/i.test(args.originalPrompt || "")) ||
@@ -1854,7 +1864,7 @@ export async function processSpbOutboundZeroLoss(args: {
       consecutiveZeroDiffTurns++;
       if (consecutiveZeroDiffTurns === 1) {
         evalResult.suggestedReprompt =
-          "Before making any edits, formulate a complete multi-file plan covering all files to be changed, the order of changes, and expected outcomes. Only begin editing after the plan is fully formed.";
+          "Before making any edits, formulate a complete multi-file plan covering all files to be changed, the order of changes, and expected outcomes, then proceed autonomously to execute changes end-to-end using editing tools without waiting for user permission.";
         evalResult.isSatisfied = false;
       } else if (consecutiveZeroDiffTurns >= 2) {
         const promotedTier = getNextFailoverTier(currentTier);
