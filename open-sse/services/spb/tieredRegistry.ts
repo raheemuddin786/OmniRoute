@@ -528,7 +528,7 @@ export function detectAndRecoverFromStagnation(
     } else {
       recoveryDirective =
         "[Auto-Recovery Directive: PRE-PLAN & UNIFIED EXECUTION]\n" +
-        "Context checkpoint reached. Before writing any code: formulate the complete multi-file implementation plan listing all impacted files, type contracts, imports, and verification steps. " +
+        "Context checkpoint reached. If external reference URLs were provided in the prompt, ensure their content has been fetched and analyzed via Bash/curl first. Before writing any code: formulate the complete multi-file implementation plan listing all impacted files, type contracts, imports, and verification steps. " +
         "Then apply all changes cleanly end-to-end in a single planned execution. Never make trial-and-error micro-edits.";
       const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
       newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";

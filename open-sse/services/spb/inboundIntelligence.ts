@@ -30,6 +30,7 @@ export interface ContextualAnchors {
   recentToolActions: string[];
   inferredGoal: string;
   hasDeferredToolsNotice?: boolean;
+  externalUrls?: string[];
 }
 
 export interface PromptEnhancementResult {
@@ -116,6 +117,8 @@ export function extractContextAnchors(
     /(?:[a-zA-Z0-9_\-./]+\/)?(?:src|open-sse|tests|scripts|electron|lib|app|apps|packages|components|config)\/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g;
   const errorRegex =
     /(?:(?:Error|Exception|TypeError|ReferenceError|SyntaxError|AssertionError):\s*[^\n\r]+)/g;
+  const urlRegex = /(?:https?:\/\/[^\s"'<>`)]+)/g;
+  const externalUrlsSet = new Set<string>();
 
   for (const msg of messages) {
     const content =
@@ -127,6 +130,16 @@ export function extractContextAnchors(
       for (const f of fileMatches) {
         if (!f.includes("node_modules") && referencedFilesSet.size < 15) {
           referencedFilesSet.add(f);
+        }
+      }
+    }
+
+    // Extract external URLs from conversation text
+    const urlMatches = content.match(urlRegex);
+    if (urlMatches) {
+      for (const u of urlMatches) {
+        if (externalUrlsSet.size < 5) {
+          externalUrlsSet.add(u);
         }
       }
     }
@@ -206,6 +219,7 @@ export function extractContextAnchors(
     recentToolActions,
     inferredGoal,
     hasDeferredToolsNotice,
+    externalUrls: Array.from(externalUrlsSet),
   };
 }
 
@@ -321,6 +335,11 @@ export function enhanceInboundPrompt(
   const preservedIntentions: string[] = [];
   const appliedOptimizations: string[] = [];
 
+  // Extract external URLs directly from current prompt and anchors
+  const promptUrlRegex = /(?:https?:\/\/[^\s"'<>`)]+)/g;
+  const promptUrls = prompt.match(promptUrlRegex) || [];
+  const allExternalUrls = Array.from(new Set([...(anchors.externalUrls || []), ...promptUrls]));
+
   // Extract core intention anchors from user prompt
   const goals: string[] = [];
   if (/\b(fix|bug|error|issue|repair)\b/i.test(prompt)) {
@@ -380,7 +399,9 @@ export function enhanceInboundPrompt(
 
   let tierPreamble = "";
   const repositoryTruthDirective =
-    "ARCHITECTURAL GROUNDING: Always treat the existing repository file system, types, and architecture as the authoritative source of truth. Ground all decisions and code in existing patterns before taking action.";
+    allExternalUrls.length > 0
+      ? "ARCHITECTURAL GROUNDING: Treat external reference URLs as authoritative for external specifications/content, and the existing repository file system, types, and architecture as the authoritative code target. Never substitute uninspected local files for external references."
+      : "ARCHITECTURAL GROUNDING: Always treat the existing repository file system, types, and architecture as the authoritative source of truth. Ground all decisions and code in existing patterns before taking action.";
 
   if (configuredTierPrompt) {
     tierPreamble = `[SPB-IR Directive: ${configuredTierPrompt}\n${repositoryTruthDirective}]`;
@@ -435,6 +456,19 @@ export function enhanceInboundPrompt(
       "Never invoke an uninitialized deferred tool directly without calling ToolSearch first; direct calls without loaded schemas will fail with InputValidationError.]";
     enhancedText += deferredToolsDirective;
     appliedOptimizations.push("Deferred Tools Protocol Pre-Flight Directive");
+  }
+
+  // Enforce external reference protocol if external URLs are referenced
+  if (allExternalUrls.length > 0 && !enhancedText.includes("External Reference Protocol")) {
+    const externalUrlsList = allExternalUrls.slice(0, 5).join(", ");
+    const externalRefDirective =
+      `\n\n[External Reference Protocol: The user request references external URL(s): ${externalUrlsList}. ` +
+      `You have full environment and network access via Bash / command-line tools (e.g., \`curl -sL <url>\`, \`fetch\`, or scripts). ` +
+      `Never claim, assume, or rationalize that you cannot access external websites or browse the live web. ` +
+      `You MUST physically retrieve and inspect the external reference content before designing plans or modifying code. ` +
+      `Treat the external website content as the behavioral and content reference, and the local repository as the code implementation target.]`;
+    enhancedText += externalRefDirective;
+    appliedOptimizations.push("External Reference & Live URL Capability Mandate");
   }
 
   // If a learned enhancement pattern exists with high satisfaction, incorporate it
