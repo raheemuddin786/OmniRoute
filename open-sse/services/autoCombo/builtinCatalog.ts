@@ -97,10 +97,12 @@ export function resolveAutoVariant(modelStr: string, suffix: string): ResolvedAu
     return { recognized: true, variant: AUTO_TEMPLATE_VARIANTS[modelStr] };
   }
   // Dynamic named SPB instances: auto/spb1, auto/spb2, auto/spb:<name>, auto/<name>, etc.
+  // Note: bare "spb" is not an auto/* model and must not resolve as a recognized auto variant.
   if (
-    /^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
-    /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
-    isSpbProfileTarget(modelStr)
+    modelStr !== "spb" &&
+    (/^auto\/spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+      /^spb(?:\d+|:[a-zA-Z0-9_-]+)$/i.test(modelStr) ||
+      isSpbProfileTarget(modelStr))
   ) {
     return { recognized: true, variant: undefined };
   }

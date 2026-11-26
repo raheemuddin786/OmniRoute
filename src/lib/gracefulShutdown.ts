@@ -184,6 +184,18 @@ async function cleanup(): Promise<void> {
       /* feature unused */
     }
 
+    // Stop SPB Recovery Daemon
+    try {
+      const { getSpbRecoveryDaemon } = await import("@/lib/spbRecoveryDaemon");
+      const daemon = getSpbRecoveryDaemon();
+      if (daemon && typeof daemon.stop === "function") {
+        daemon.stop();
+        console.log("[Shutdown] SPB Recovery Daemon stopped");
+      }
+    } catch (e) {
+      console.warn("[Shutdown] SPB daemon stop skipped:", e);
+    }
+
     await closeSharedLoggerResource();
     closeLogRotation();
     console.log("[Shutdown] Logger transport and log rotation stopped.");

@@ -1038,7 +1038,9 @@ async function handleChatImplementation(
   const spbProfileName = extractSpbProfileName(modelStr);
   const isSpbActive =
     Boolean(isSpbTarget) &&
-    (getTierConfig(spbProfileName).spbEnabled !== false || isFeatureFlagEnabled("SPB_ENABLED"));
+    (getTierConfig(spbProfileName).spbEnabled !== false ||
+      isFeatureFlagEnabled("SPB_ENABLED") ||
+      process.env.SPB_ENABLED === "true");
 
   // Branch forking headers
   const forkFromHeader = request.headers.get("x-omniroute-fork-from")?.trim() || null;
