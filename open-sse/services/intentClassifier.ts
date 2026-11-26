@@ -24,6 +24,10 @@ export interface ClassificationResult {
   type: IntentType;
   confidence: number;
   signals: string[];
+  // Raw keyword match counts per intent type for debugging/eval
+  keywordCounts?: Record<IntentType, number>;
+  // Detected language hints (e.g. "zh", "ja", "ko", "ru", "ar")
+  languageHints?: string[];
 }
 
 export const CODE_KEYWORDS: readonly string[] = [
@@ -852,6 +856,46 @@ export const SIMPLE_KEYWORDS: readonly string[] = [
   "ملخص",
 ];
 
+type KeywordMatcher = { pattern: RegExp } | { substring: string };
+
+function compileKeywordMatcher(keyword: string): KeywordMatcher {
+  const normalized = keyword.toLowerCase();
+  if (normalized === "```" || !/\p{Script=Latin}/u.test(normalized)) {
+    return { substring: normalized };
+  }
+
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = escape(normalized);
+  const alternatives = [`${escaped}(?:s|es|ed|ing)?`];
+  if (normalized.endsWith("e")) alternatives.push(`${escape(normalized.slice(0, -1))}ing`);
+  const last = normalized.at(-1) ?? "";
+  if (/^[b-df-hj-np-tv-z]$/.test(last)) {
+    alternatives.push(`${escaped}${last}(?:ed|ing)`);
+  }
+  return {
+    pattern: new RegExp(
+      `(?<![\\p{L}\\p{N}_])(?:${alternatives.join("|")})(?![\\p{L}\\p{N}_])`,
+      "iu"
+    ),
+  };
+}
+
+function hasKeyword(text: string, matchers: readonly KeywordMatcher[]): boolean {
+  return matchers.some((matcher) =>
+    "pattern" in matcher ? matcher.pattern.test(text) : text.includes(matcher.substring)
+  );
+}
+
+const CODE_MATCHERS = CODE_KEYWORDS.map(compileKeywordMatcher);
+const MATH_MATCHERS = MATH_KEYWORDS.map(compileKeywordMatcher);
+const REASONING_MATCHERS = REASONING_KEYWORDS.map(compileKeywordMatcher);
+const CREATIVE_MATCHERS = CREATIVE_KEYWORDS.map(compileKeywordMatcher);
+const SIMPLE_MATCHERS = SIMPLE_KEYWORDS.map(compileKeywordMatcher);
+const PLANNING_MATCHERS = PLANNING_KEYWORDS.map(compileKeywordMatcher);
+const DEBUGGING_MATCHERS = DEBUGGING_KEYWORDS.map(compileKeywordMatcher);
+const DOCUMENTATION_MATCHERS = DOCUMENTATION_KEYWORDS.map(compileKeywordMatcher);
+const REVIEW_MATCHERS = REVIEW_KEYWORDS.map(compileKeywordMatcher);
+
 /**
  * Classify a prompt's intent using multilingual keyword matching.
  * Priority: code > planning > debugging > documentation > review > math > reasoning > creative > simple > medium (default)
@@ -860,35 +904,15 @@ export function classifyPromptIntent(prompt: string, systemPrompt?: string): Int
   const fullText = `${systemPrompt ?? ""} ${prompt}`.toLowerCase();
   const wordCount = prompt.trim().split(/\s+/).length;
 
-  for (const kw of PLANNING_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "planning";
-  }
-  for (const kw of DEBUGGING_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "debugging";
-  }
-  for (const kw of DOCUMENTATION_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "documentation";
-  }
-  for (const kw of REVIEW_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "review";
-  }
-  for (const kw of CODE_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "code";
-  }
-  for (const kw of MATH_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "math";
-  }
-  for (const kw of REASONING_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "reasoning";
-  }
-  for (const kw of CREATIVE_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "creative";
-  }
-  if (wordCount < 60) {
-    for (const kw of SIMPLE_KEYWORDS) {
-      if (fullText.includes(kw.toLowerCase())) return "simple";
-    }
-  }
+  if (hasKeyword(fullText, CODE_MATCHERS)) return "code";
+  if (hasKeyword(fullText, PLANNING_MATCHERS)) return "planning";
+  if (hasKeyword(fullText, DEBUGGING_MATCHERS)) return "debugging";
+  if (hasKeyword(fullText, DOCUMENTATION_MATCHERS)) return "documentation";
+  if (hasKeyword(fullText, REVIEW_MATCHERS)) return "review";
+  if (hasKeyword(fullText, MATH_MATCHERS)) return "math";
+  if (hasKeyword(fullText, REASONING_MATCHERS)) return "reasoning";
+  if (hasKeyword(fullText, CREATIVE_MATCHERS)) return "creative";
+  if (wordCount < 60 && hasKeyword(fullText, SIMPLE_MATCHERS)) return "simple";
   return "medium";
 }
 
@@ -907,36 +931,156 @@ export const DEFAULT_INTENT_CONFIG: IntentClassifierConfig = {
   simpleMaxWords: 60,
 };
 
+export type CustomKeywordWeights = Partial<Record<IntentType, readonly string[]>>;
+
+export function classifyWithConfig(
+  text: string,
+  config?: CustomKeywordWeights
+): ClassificationResult;
 export function classifyWithConfig(
   prompt: string,
   config: IntentClassifierConfig,
   systemPrompt?: string
-): IntentType {
-  if (!config.enabled) return "medium";
-  const fullText = `${systemPrompt ?? ""} ${prompt}`.toLowerCase();
-  const wordCount = prompt.trim().split(/\s+/).length;
-  const maxSimpleWords = config.simpleMaxWords ?? 60;
-  const codeKws = [...CODE_KEYWORDS, ...(config.extraCodeKeywords ?? [])];
-  const mathKws = [...MATH_KEYWORDS, ...(config.extraMathKeywords ?? [])];
-  const reasoningKws = [...REASONING_KEYWORDS, ...(config.extraReasoningKeywords ?? [])];
-  const creativeKws = [...CREATIVE_KEYWORDS, ...(config.extraCreativeKeywords ?? [])];
-  const simpleKws = [...SIMPLE_KEYWORDS, ...(config.extraSimpleKeywords ?? [])];
-  for (const kw of codeKws) {
-    if (fullText.includes(kw.toLowerCase())) return "code";
+): IntentType;
+export function classifyWithConfig(
+  promptOrText: string,
+  config?: IntentClassifierConfig | CustomKeywordWeights,
+  systemPrompt?: string
+): IntentType | ClassificationResult {
+  // Legacy signature: (prompt: string, config: IntentClassifierConfig, systemPrompt?: string) => IntentType
+  if (
+    config &&
+    ("enabled" in config || "simpleMaxWords" in config || "extraCodeKeywords" in config)
+  ) {
+    const legacyCfg = config as IntentClassifierConfig;
+    if (!legacyCfg.enabled) return "medium";
+    const fullText = `${systemPrompt ?? ""} ${promptOrText}`.toLowerCase();
+    const wordCount = promptOrText.trim().split(/\s+/).length;
+    const maxSimpleWords = legacyCfg.simpleMaxWords ?? 60;
+    const codeKws = legacyCfg.extraCodeKeywords?.length
+      ? [...CODE_MATCHERS, ...legacyCfg.extraCodeKeywords.map(compileKeywordMatcher)]
+      : CODE_MATCHERS;
+    const mathKws = legacyCfg.extraMathKeywords?.length
+      ? [...MATH_MATCHERS, ...legacyCfg.extraMathKeywords.map(compileKeywordMatcher)]
+      : MATH_MATCHERS;
+    const reasoningKws = legacyCfg.extraReasoningKeywords?.length
+      ? [...REASONING_MATCHERS, ...legacyCfg.extraReasoningKeywords.map(compileKeywordMatcher)]
+      : REASONING_MATCHERS;
+    const creativeKws = legacyCfg.extraCreativeKeywords?.length
+      ? [...CREATIVE_MATCHERS, ...legacyCfg.extraCreativeKeywords.map(compileKeywordMatcher)]
+      : CREATIVE_MATCHERS;
+    const simpleKws = legacyCfg.extraSimpleKeywords?.length
+      ? [...SIMPLE_MATCHERS, ...legacyCfg.extraSimpleKeywords.map(compileKeywordMatcher)]
+      : SIMPLE_MATCHERS;
+
+    if (hasKeyword(fullText, codeKws)) return "code";
+    if (hasKeyword(fullText, mathKws)) return "math";
+    if (hasKeyword(fullText, reasoningKws)) return "reasoning";
+    if (hasKeyword(fullText, creativeKws)) return "creative";
+    if (wordCount < maxSimpleWords && hasKeyword(fullText, simpleKws)) return "simple";
+    return "medium";
   }
-  for (const kw of mathKws) {
-    if (fullText.includes(kw.toLowerCase())) return "math";
+
+  // Enhanced signature: (text: string, config?: CustomKeywordWeights) => ClassificationResult
+  const customWeights = (config as CustomKeywordWeights) || {};
+  const lower = promptOrText.toLowerCase();
+  const words = lower.split(/\s+/).filter(Boolean);
+  const wordCount = words.length;
+
+  const kw: Record<string, readonly string[]> = {
+    code: customWeights.code ?? CODE_KEYWORDS,
+    math: customWeights.math ?? MATH_KEYWORDS,
+    reasoning: customWeights.reasoning ?? REASONING_KEYWORDS,
+    creative: customWeights.creative ?? CREATIVE_KEYWORDS,
+    simple: customWeights.simple ?? SIMPLE_KEYWORDS,
+    planning: customWeights.planning ?? PLANNING_KEYWORDS,
+    debugging: customWeights.debugging ?? DEBUGGING_KEYWORDS,
+    documentation: customWeights.documentation ?? DOCUMENTATION_KEYWORDS,
+    review: customWeights.review ?? REVIEW_KEYWORDS,
+  };
+
+  const counts: Record<IntentType, number> = {
+    code: 0,
+    math: 0,
+    reasoning: 0,
+    creative: 0,
+    simple: 0,
+    medium: 0,
+    planning: 0,
+    debugging: 0,
+    documentation: 0,
+    review: 0,
+  };
+
+  for (const [t, arr] of Object.entries(kw)) {
+    counts[t as IntentType] = arr.filter((k) => lower.includes(k.toLowerCase())).length;
   }
-  for (const kw of reasoningKws) {
-    if (fullText.includes(kw.toLowerCase())) return "reasoning";
-  }
-  for (const kw of creativeKws) {
-    if (fullText.includes(kw.toLowerCase())) return "creative";
-  }
-  if (wordCount < maxSimpleWords) {
-    for (const kw of simpleKws) {
-      if (fullText.includes(kw.toLowerCase())) return "simple";
+
+  // Detect language hints
+  const languageHints: string[] = [];
+  if (/[\u4e00-\u9fa5]/.test(promptOrText)) languageHints.push("zh");
+  if (/[\u3040-\u30ff]/.test(promptOrText)) languageHints.push("ja");
+  if (/[\uac00-\ud7af]/.test(promptOrText)) languageHints.push("ko");
+  if (/[\u0400-\u04ff]/.test(promptOrText)) languageHints.push("ru");
+  if (/[\u0600-\u06ff]/.test(promptOrText)) languageHints.push("ar");
+
+  // Determine highest matching type among priority candidates
+  const prioritizedTypes: IntentType[] = [
+    "planning",
+    "debugging",
+    "documentation",
+    "review",
+    "code",
+    "math",
+    "reasoning",
+    "creative",
+    "simple",
+  ];
+
+  let bestType: IntentType = "medium";
+  for (const pt of prioritizedTypes) {
+    if (counts[pt] > 0) {
+      bestType = pt;
+      break;
     }
   }
-  return "medium";
+
+  // Short prompt guard (<10 words): default to "medium" not "simple" unless explicit custom weights or strong non-simple keywords
+  if (wordCount < 10) {
+    const nonSimpleMatches = Object.entries(counts)
+      .filter(([k]) => k !== "simple" && k !== "medium")
+      .reduce((sum, [, c]) => sum + c, 0);
+
+    if (nonSimpleMatches === 0) {
+      return {
+        type: "medium",
+        confidence: 0.3,
+        signals: [],
+        keywordCounts: counts,
+        languageHints,
+      };
+    }
+  }
+
+  // Keyword density and confidence calculation
+  const totalMatches = Object.values(counts).reduce((a, b) => a + b, 0);
+  const density = totalMatches / Math.max(1, wordCount);
+  const confidence = Math.min(
+    0.95,
+    Math.max(0.1, 0.1 + density * 0.4 + Math.min(0.3, wordCount * 0.03))
+  );
+
+  const matchedSignals = Object.entries(counts)
+    .filter(([, c]) => c > 0)
+    .map(([k]) => k);
+
+  const resolvedType = bestType !== "medium" ? bestType : classifyPromptIntent(promptOrText);
+
+  return {
+    type: resolvedType,
+    confidence: Number(confidence.toFixed(2)),
+    signals: matchedSignals,
+    keywordCounts: counts,
+    languageHints,
+  };
 }

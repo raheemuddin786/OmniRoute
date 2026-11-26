@@ -132,6 +132,17 @@ export function SmartProxyBridgeTab() {
   );
   const [showAdvancedParams, setShowAdvancedParams] = useState(false);
 
+  // Validation & dry-run preview state
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [dryRunPreview, setDryRunPreview] = useState<{
+    code?: string;
+    reasoning?: string;
+    creative?: string;
+    simple?: string;
+    tierModels?: TierModels;
+  } | null>(null);
+  const [validating, setValidating] = useState(false);
+
   const [tierModalConfig, setTierModalConfig] = useState<{
     isOpen: boolean;
     tier: keyof TierModels;
@@ -682,9 +693,46 @@ export function SmartProxyBridgeTab() {
     }
   };
 
+  const handleDryRunValidation = async () => {
+    setValidating(true);
+    setValidationErrors([]);
+    setDryRunPreview(null);
+    try {
+      const res = await fetch("/api/settings/tier-config/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile: selectedProfile,
+          spbEnabled,
+          tierModels,
+          spbConfig,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.valid) {
+        const errors = Array.isArray(data.errors)
+          ? data.errors
+          : data.error
+            ? [data.error]
+            : ["Validation failed"];
+        setValidationErrors(errors);
+        setStatusMessage("Configuration validation failed. Check errors below.");
+      } else {
+        setDryRunPreview(data.preview);
+        setStatusMessage("Configuration validated successfully! Preview available.");
+      }
+    } catch (err) {
+      setValidationErrors([`Validation request error: ${String(err)}`]);
+    } finally {
+      setValidating(false);
+    }
+  };
+
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     setStatusMessage(null);
+    setValidationErrors([]);
     try {
       const parsedRetryCodes = retryCodesInput
         .split(",")
@@ -2379,26 +2427,110 @@ export function SmartProxyBridgeTab() {
                   </div>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={handleSaveConfig}
-                disabled={savingConfig}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-md hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
-              >
-                {savingConfig ? (
-                  <>
-                    <span className="material-symbols-outlined text-[16px] animate-spin">
-                      progress_activity
+
+              {/* Validation errors banner */}
+              {validationErrors.length > 0 && (
+                <div className="w-full rounded-lg border border-red-200 bg-red-50/80 p-4 text-xs text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+                  <div className="flex items-center gap-2 font-semibold mb-1.5">
+                    <span className="material-symbols-outlined text-[16px] text-red-600">
+                      error
                     </span>
-                    <span>Saving Configuration...</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="material-symbols-outlined text-[16px]">check_circle</span>
-                    <span>Apply Bridge Parameters</span>
-                  </>
-                )}
-              </button>
+                    <span>Validation Errors</span>
+                  </div>
+                  <ul className="list-disc pl-5 space-y-1">
+                    {validationErrors.map((err, idx) => (
+                      <li key={idx}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Dry-run preview panel */}
+              {dryRunPreview && (
+                <div className="w-full rounded-lg border border-blue-200 bg-blue-50/80 p-4 text-xs text-blue-900 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-300">
+                  <div className="flex items-center gap-2 font-semibold mb-2">
+                    <span className="material-symbols-outlined text-[16px] text-blue-600">
+                      visibility
+                    </span>
+                    <span>Effective Tier Preview (Sample Intents)</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 font-mono">
+                    <div className="bg-background/80 rounded p-2 border">
+                      <div className="text-xs text-muted-foreground uppercase font-sans">Code</div>
+                      <div className="truncate font-semibold text-foreground">
+                        {dryRunPreview.code || "auto"}
+                      </div>
+                    </div>
+                    <div className="bg-background/80 rounded p-2 border">
+                      <div className="text-xs text-muted-foreground uppercase font-sans">
+                        Reasoning
+                      </div>
+                      <div className="truncate font-semibold text-foreground">
+                        {dryRunPreview.reasoning || "auto"}
+                      </div>
+                    </div>
+                    <div className="bg-background/80 rounded p-2 border">
+                      <div className="text-xs text-muted-foreground uppercase font-sans">
+                        Creative
+                      </div>
+                      <div className="truncate font-semibold text-foreground">
+                        {dryRunPreview.creative || "auto"}
+                      </div>
+                    </div>
+                    <div className="bg-background/80 rounded p-2 border">
+                      <div className="text-xs text-muted-foreground uppercase font-sans">
+                        Simple
+                      </div>
+                      <div className="truncate font-semibold text-foreground">
+                        {dryRunPreview.simple || "auto"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDryRunValidation}
+                  disabled={validating || savingConfig}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-input bg-background px-4 py-2 text-xs font-semibold text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {validating ? (
+                    <>
+                      <span className="material-symbols-outlined text-[16px] animate-spin">
+                        progress_activity
+                      </span>
+                      <span>Validating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[16px]">visibility</span>
+                      <span>Preview Changes</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveConfig}
+                  disabled={savingConfig || validating}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-md hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {savingConfig ? (
+                    <>
+                      <span className="material-symbols-outlined text-[16px] animate-spin">
+                        progress_activity
+                      </span>
+                      <span>Saving Configuration...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                      <span>Apply Bridge Parameters</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

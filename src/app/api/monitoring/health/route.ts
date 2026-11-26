@@ -108,6 +108,8 @@ function withDeepHealth(payload: unknown, wantDeep: boolean, spbProfile?: string
       fallbacksTriggered: summary.fallbacksTriggered,
       phaseDistribution: summary.phaseDistribution,
       tierDistribution: summary.tierDistribution,
+      intentTypeCounts: summary.intentTypeCounts ?? {},
+      fallbackReasonCounts: summary.fallbackReasonCounts ?? summary.fallbackReasons ?? {},
       lastRoutedAt: summary.lastRoutedAt,
     };
   }

@@ -150,3 +150,37 @@ test("existing keyword arrays are still present", () => {
   assert.ok(REASONING_KEYWORDS.length > 0);
   assert.ok(SIMPLE_KEYWORDS.length > 0);
 });
+
+test("classifyWithConfig returns confidence and keywordCounts", () => {
+  const r = classifyWithConfig("write a function to calculate integral");
+  assert.equal(r.type, "code");
+  assert.ok(r.confidence > 0.5);
+  assert.ok(r.keywordCounts);
+  assert.ok(r.keywordCounts.code > 0);
+});
+
+test("short prompt without keywords defaults to medium with low confidence", () => {
+  const r = classifyWithConfig("hello");
+  assert.equal(r.type, "medium");
+  assert.ok(r.confidence < 0.4);
+});
+
+test("multilingual mixed script detected", () => {
+  const r = classifyWithConfig("写一个 function 计算 integral");
+  assert.ok(r.languageHints?.includes("zh"));
+  assert.ok(r.keywordCounts && r.keywordCounts.code > 0);
+  assert.ok(r.keywordCounts && r.keywordCounts.math > 0);
+});
+
+test("custom keyword weights work", () => {
+  const r = classifyWithConfig("foo bar baz", { code: ["foo", "bar"], math: ["baz"] });
+  assert.equal(r.type, "code");
+  assert.equal(r.keywordCounts?.code, 2);
+  assert.equal(r.keywordCounts?.math, 1);
+});
+
+test("confidence increases with keyword density", () => {
+  const low = classifyWithConfig("function");
+  const high = classifyWithConfig("function class import async await const let return");
+  assert.ok(high.confidence > low.confidence);
+});

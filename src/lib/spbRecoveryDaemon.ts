@@ -26,6 +26,18 @@ const STALE_CHECKPOINT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DEFAULT_CB_COOLDOWN_MS = 30_000; // fallback when options.cooldownMs is absent
 const MAX_CONSECUTIVE_ERRORS = 5; // abort sweep loop after this many unrecovered failures
 
+// In-memory Prometheus-compatible metrics counters
+const daemonMetrics = {
+  sweepsTotal: 0,
+  recoveredTotal: 0,
+  errorsTotal: 0,
+  circuitBreakersOpen: 0,
+  circuitBreakersHalfOpen: 0,
+  circuitBreakersClosed: 0,
+  cooldownsClearedTotal: 0,
+  checkpointsPrunedTotal: 0,
+};
+
 export interface SpbDaemonStatus {
   running: boolean;
   intervalMs: number;
@@ -34,6 +46,9 @@ export interface SpbDaemonStatus {
   recoveredCount: number;
   lastError: string | null;
   consecutiveErrors: number;
+  circuitBreakers: { open: number; halfOpen: number; closed: number };
+  cooldownsCleared: number;
+  checkpointsPruned: number;
 }
 
 class SpbRecoveryDaemon {
@@ -96,12 +111,20 @@ class SpbRecoveryDaemon {
       //    All operations route strictly through the spbState domain module — no raw SQL.
       const prunedCount = pruneStaleCheckpoints(STALE_CHECKPOINT_MAX_AGE_MS);
       if (prunedCount > 0) {
+        daemonMetrics.checkpointsPrunedTotal += prunedCount;
         console.log(`[SPB Recovery Daemon] Pruned ${prunedCount} stale SPB state checkpoints.`);
       }
 
       // 2. Evaluate Circuit Breakers for auto-recovery (OPEN → HALF_OPEN probe readiness).
       //    All reads/writes go through the domainState domain module — no raw SQL.
-      const openBreakers = loadAllCircuitBreakerStates().filter((cb) => cb.state === "OPEN");
+      const allBreakers = loadAllCircuitBreakerStates();
+      const openBreakers = allBreakers.filter((cb) => cb.state === "OPEN");
+      const halfOpenBreakers = allBreakers.filter((cb) => cb.state === "HALF_OPEN");
+      const closedBreakers = allBreakers.filter((cb) => cb.state === "CLOSED");
+
+      daemonMetrics.circuitBreakersOpen = openBreakers.length;
+      daemonMetrics.circuitBreakersHalfOpen = halfOpenBreakers.length;
+      daemonMetrics.circuitBreakersClosed = closedBreakers.length;
 
       for (const cb of openBreakers) {
         // Fetch the individual record to obtain the options blob (cooldownMs / circuitBreakerReset).
@@ -126,6 +149,9 @@ class SpbRecoveryDaemon {
             state: "HALF_OPEN",
           });
           this.recoveredCount += 1;
+          daemonMetrics.recoveredTotal += 1;
+          daemonMetrics.circuitBreakersOpen = Math.max(0, daemonMetrics.circuitBreakersOpen - 1);
+          daemonMetrics.circuitBreakersHalfOpen += 1;
           console.log(
             `[SPB Recovery Daemon] Transitioned circuit breaker '${cb.name}' from OPEN to HALF_OPEN (cooldown: ${cooldownMs}ms).`
           );
@@ -137,6 +163,8 @@ class SpbRecoveryDaemon {
       const { cleared } = clearStaleCrashCooldowns();
       if (cleared > 0) {
         this.recoveredCount += cleared;
+        daemonMetrics.recoveredTotal += cleared;
+        daemonMetrics.cooldownsClearedTotal += cleared;
         console.log(
           `[SPB Recovery Daemon] Cleared expired cooldown for ${cleared} provider connection(s).`
         );
@@ -150,16 +178,31 @@ class SpbRecoveryDaemon {
         );
       }
 
+      daemonMetrics.sweepsTotal += 1;
       this.lastError = null;
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors += 1;
+      daemonMetrics.errorsTotal += 1;
       this.lastError = err instanceof Error ? err.message : String(err);
       console.error(
         `[SPB Recovery Daemon] Sweep execution error (consecutive: ${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}):`,
         this.lastError
       );
     }
+  }
+
+  getMetrics(): Record<string, number> {
+    return {
+      spb_daemon_sweeps_total: daemonMetrics.sweepsTotal,
+      spb_daemon_recovered_total: daemonMetrics.recoveredTotal,
+      spb_daemon_errors_total: daemonMetrics.errorsTotal,
+      spb_circuit_breakers_open: daemonMetrics.circuitBreakersOpen,
+      spb_circuit_breakers_half_open: daemonMetrics.circuitBreakersHalfOpen,
+      spb_circuit_breakers_closed: daemonMetrics.circuitBreakersClosed,
+      spb_cooldowns_cleared_total: daemonMetrics.cooldownsClearedTotal,
+      spb_checkpoints_pruned_total: daemonMetrics.checkpointsPrunedTotal,
+    };
   }
 
   getStatus(): SpbDaemonStatus {
@@ -171,6 +214,13 @@ class SpbRecoveryDaemon {
       recoveredCount: this.recoveredCount,
       lastError: this.lastError,
       consecutiveErrors: this.consecutiveErrors,
+      circuitBreakers: {
+        open: daemonMetrics.circuitBreakersOpen,
+        halfOpen: daemonMetrics.circuitBreakersHalfOpen,
+        closed: daemonMetrics.circuitBreakersClosed,
+      },
+      cooldownsCleared: daemonMetrics.cooldownsClearedTotal,
+      checkpointsPruned: daemonMetrics.checkpointsPrunedTotal,
     };
   }
 }

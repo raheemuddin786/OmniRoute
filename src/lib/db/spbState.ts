@@ -18,6 +18,9 @@ export interface SpbStateCheckpoint {
   createdAt: number;
 }
 
+export type FallbackReasonType =
+  "timeout" | "rate_limit" | "circuit_open" | "quality_gate" | "budget_exceeded" | "unknown";
+
 export interface SpbTelemetryRecord {
   sessionId: string;
   taskPhase: string;
@@ -32,6 +35,9 @@ export interface SpbTelemetryRecord {
   spbProfile?: string;
   retryCount?: number;
   fallbackReason?: string;
+  fallbackReasonType?: FallbackReasonType;
+  intentType?: string;
+  intentLedgerJson?: string;
   openItemsCount?: number;
   openItemsSummary?: string;
   intentLedger?: string;
@@ -48,6 +54,8 @@ export interface SpbTelemetrySummary {
   failOpensPerProfile?: Record<string, number>;
   totalRetries?: number;
   fallbackReasons?: Record<string, number>;
+  fallbackReasonCounts?: Record<string, number>;
+  intentTypeCounts?: Record<string, number>;
   phaseDistribution: Record<string, number>;
   tierDistribution: Record<string, number>;
   lastRoutedAt: string | null;
@@ -392,6 +400,21 @@ export function initSpbStateTable(): void {
       // Column already exists
     }
     try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN intent_type TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN fallback_reason_type TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
+      db.exec("ALTER TABLE spb_telemetry_audit ADD COLUMN intent_ledger_json TEXT;");
+    } catch {
+      // Column already exists
+    }
+    try {
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_spb_telemetry_profile ON spb_telemetry_audit(spb_profile);"
       );
@@ -692,6 +715,7 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
     }
 
     const cappedLedger = sanitizeAndCapTelemetryJson(record.intentLedger);
+    const cappedLedgerJson = sanitizeAndCapTelemetryJson(record.intentLedgerJson);
     const cappedDecision = sanitizeAndCapTelemetryJson(record.judgeDecision);
 
     db.prepare(
@@ -699,8 +723,9 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       INSERT INTO spb_telemetry_audit
       (session_id, task_phase, model_tier, checkpoint_restored, fallback_triggered, status_code, latency_ms, timestamp,
        stagnation_detected, stagnation_recovered, spb_profile, retry_count, fallback_reason,
-       intent_ledger, judge_decision, reprompt_text, operation, open_items_count, open_items_summary)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       intent_ledger, judge_decision, reprompt_text, operation, open_items_count, open_items_summary,
+       intent_type, fallback_reason_type, intent_ledger_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       record.sessionId,
@@ -721,7 +746,10 @@ export function recordSpbTelemetry(record: SpbTelemetryRecord): void {
       record.repromptText || null,
       record.operation || "routing",
       record.openItemsCount ?? 0,
-      record.openItemsSummary || null
+      record.openItemsSummary || null,
+      record.intentType || null,
+      record.fallbackReasonType || null,
+      cappedLedgerJson || null
     );
   } catch (err) {
     console.error("[SPB State] Failed to record telemetry:", err);
@@ -815,6 +843,26 @@ export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySumm
       fallbackReasons[r.fallback_reason] = r.count;
     }
 
+    const fallbackTypeRows = db
+      .prepare(
+        `SELECT fallback_reason_type, COUNT(*) AS count FROM spb_telemetry_audit WHERE fallback_reason_type IS NOT NULL GROUP BY fallback_reason_type`
+      )
+      .all() as Array<{ fallback_reason_type: string; count: number }>;
+    const fallbackReasonCounts: Record<string, number> = {};
+    for (const r of fallbackTypeRows) {
+      fallbackReasonCounts[r.fallback_reason_type] = r.count;
+    }
+
+    const intentRows = db
+      .prepare(
+        `SELECT intent_type, COUNT(*) AS count FROM spb_telemetry_audit WHERE intent_type IS NOT NULL GROUP BY intent_type`
+      )
+      .all() as Array<{ intent_type: string; count: number }>;
+    const intentTypeCounts: Record<string, number> = {};
+    for (const r of intentRows) {
+      intentTypeCounts[r.intent_type] = r.count;
+    }
+
     return {
       totalRoutes: summaryRow.total_routes,
       checkpointsRestored: summaryRow.checkpoints_restored || 0,
@@ -823,6 +871,8 @@ export function getSpbTelemetrySummary(profileFilter?: string): SpbTelemetrySumm
       failOpensPerProfile,
       totalRetries: summaryRow.total_retries || 0,
       fallbackReasons,
+      fallbackReasonCounts,
+      intentTypeCounts,
       phaseDistribution,
       tierDistribution,
       lastRoutedAt: summaryRow.max_time ? new Date(summaryRow.max_time).toISOString() : null,
