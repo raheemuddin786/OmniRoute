@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSpbRecoveryDaemon } from "@omniroute/open-sse/services/spbRecoveryDaemon";
+import { getSpbRecoveryDaemon } from "@/lib/spbRecoveryDaemon";
 import { getDbInstance } from "@/lib/db/core";
 import { getTierConfig } from "@omniroute/open-sse/services/tierResolver";
 
