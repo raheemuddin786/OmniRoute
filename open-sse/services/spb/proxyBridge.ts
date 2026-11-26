@@ -463,7 +463,7 @@ export async function processSmartProxyRouting(
       intent.isToolExecutionError
     );
 
-    const isInspectionPhase =
+    const _isInspectionPhase =
       intent.taskPhase === "INSPECTION_SYNTHESIS" ||
       intent.taskPhase === "DETERMINISTIC_ROUTING" ||
       (intent.taskPhase === "TESTING_AND_VERIFICATION" && !isDiagnosticOrVisualTurn);
@@ -484,8 +484,8 @@ export async function processSmartProxyRouting(
     } else if (isDiagnosticOrVisualTurn) {
       // Diagnostic turn inspecting failure or visual crash output: preserve counter without incrementing
       consecutiveReads = priorConsecutiveReads || 0;
-    } else if (isNonMutatingToolResult || isInspectionPhase) {
-      // Any passive non-mutating tool execution or inspection phase accumulates stagnation
+    } else if (isNonMutatingToolResult) {
+      // Only passive non-mutating tool execution accumulates stagnation, not user prompt turns
       consecutiveReads = (priorConsecutiveReads || 0) + 1;
     } else {
       // Direct human instruction turns preserve the prior counter
@@ -789,10 +789,10 @@ export async function processSmartProxyRouting(
         ? "[Auto-Recovery Directive: SDLC PLANNING GUIDANCE]\n" +
           `Exploration checkpoint reached. ${targetSummary}` +
           "Formulate a structured, end-to-end SDLC plan with an explicit checklist covering requirements, architecture, implementation files, automated tests, and verification steps."
-        : "[Auto-Recovery Directive: PRE-PLAN & UNIFIED EXECUTION]\n" +
+        : "[Auto-Recovery Directive: AUTONOMOUS IMPLEMENTATION & VERIFICATION]\n" +
           `Exploration checkpoint reached. ${targetSummary}` +
-          "Synthesize gathered context and formulate the complete multi-file implementation plan. Enumerate all impacted files, type contracts, and tests, then execute cleanly end-to-end. " +
-          "Do NOT perform blind trial-and-error micro-edits before planning.";
+          "Proceed directly with autonomous tool execution to implement, test, and verify the required modifications. " +
+          "Do not halt execution to output conversational plans, summaries, or confirmation requests. Apply all modifications directly using available tools.";
       autoRecoveryDirective = autoRecoveryDirective
         ? `${autoRecoveryDirective}\n\n${stagnationRecoveryDirective}`
         : stagnationRecoveryDirective;

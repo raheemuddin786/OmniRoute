@@ -543,9 +543,9 @@ export function detectAndRecoverFromStagnation(
       escalationTier = "tier_1_apex";
     } else {
       recoveryDirective =
-        "[Auto-Recovery Directive: PRE-PLAN & UNIFIED EXECUTION]\n" +
-        "Context checkpoint reached. If external reference URLs were provided in the prompt, ensure their content has been fetched and analyzed via Bash/curl first. Before writing any code: formulate the complete multi-file implementation plan listing all impacted files, type contracts, imports, and verification steps. " +
-        "Then apply all changes cleanly end-to-end in a single planned execution. Never make trial-and-error micro-edits.";
+        "[Auto-Recovery Directive: AUTONOMOUS EXECUTION MANDATE]\n" +
+        "Context checkpoint reached. If external reference URLs were provided in the prompt, ensure their content has been fetched and analyzed via Bash/curl first. " +
+        "Proceed immediately to apply all required file modifications end-to-end using editing tools (Write/Edit/Bash). Do not stall to re-plan or converse.";
       const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
       newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
@@ -553,11 +553,12 @@ export function detectAndRecoverFromStagnation(
       const currentTier = existingCheckpoint?.modelTier || "tier_2_resilient";
       if (currentTier === "tier_2_resilient" && consecutiveReads > 5) {
         escalationTier = "tier_1_apex";
-        newTaskPhase = "ARCHITECTURAL_PLANNING";
+        newTaskPhase =
+          taskPhase === "ARCHITECTURAL_PLANNING" ? "ARCHITECTURAL_PLANNING" : "CODE_GENERATION";
         recoveryDirective =
           "[Auto-Recovery Directive: APEX REASONING ESCALATION]\n" +
           "Repeated non-mutating tool cycles detected on execution tier. Re-evaluating strategy with architectural guidance. " +
-          "Synthesize gathered context and formulate a direct file-modification action plan.";
+          "Synthesize gathered context and proceed immediately with direct tool execution.";
       } else if (currentTier === "tier_3_local") {
         escalationTier = "tier_2_resilient";
       } else {
