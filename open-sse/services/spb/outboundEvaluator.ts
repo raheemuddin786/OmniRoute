@@ -315,15 +315,23 @@ export function evaluateResponseIntent(
     !hasToolCalls &&
     /\b(run|execute|capture|screenshot|verify|test)\b/i.test(originalPrompt)
   ) {
-    claimsExecutionWithoutTools =
-      /\b(I have (?:run|executed|captured|verified|tested)|successfully (?:run|executed|captured|verified|tested)|screenshot (?:has been |is )?saved|all tests? passed)\b/i.test(
-        responseText
+    // Only penalize if the user prompt actually demanded tool execution and this is not purely conversational
+    const isConversationalIntent =
+      /^(?:what|why|how|explain|describe|tell me|review|check|can you explain)\b/i.test(
+        originalPrompt.trim()
       );
-    if (claimsExecutionWithoutTools) {
-      oddities.push(
-        "Response claimed test execution, screenshot capture, or verification without invoking any execution tools."
-      );
-      score -= 0.45;
+
+    if (!isConversationalIntent) {
+      claimsExecutionWithoutTools =
+        /\b(I have (?:run|executed|captured|verified|tested)|successfully (?:run|executed|captured|verified|tested)|screenshot (?:has been |is )?saved|all tests? passed)\b/i.test(
+          responseText
+        );
+      if (claimsExecutionWithoutTools) {
+        oddities.push(
+          "Response claimed test execution, screenshot capture, or verification without invoking any execution tools."
+        );
+        score -= 0.45;
+      }
     }
   }
 

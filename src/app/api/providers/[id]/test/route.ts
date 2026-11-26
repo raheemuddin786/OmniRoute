@@ -1166,10 +1166,16 @@ export async function testSingleConnection(
   try {
     const hideLogs = await shouldHideLogs();
     if (!hideLogs) {
+      // Gracefully map local CLI uninstalled to 503 instead of 401
+      const isCliUninstalled =
+        !result.valid &&
+        typeof result.error === "string" &&
+        result.error.includes("Local CLI runtime is not installed");
+
       saveCallLog({
         method: "POST",
         path: "/api/providers/test",
-        status: result.valid ? 200 : result.statusCode || 401,
+        status: result.valid ? 200 : isCliUninstalled ? 503 : result.statusCode || 401,
         model: "connection-test",
         provider,
         connectionId,

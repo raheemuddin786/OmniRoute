@@ -540,12 +540,24 @@ export function parseAndValidateJson<T>(
       cleaned = fenceMatch[1].trim();
     } else if (cleaned.startsWith("```")) {
       cleaned = cleaned
-        .replace(/^```(?:json)?\s*\n?/, "")
+        .replace(/^```(?:json)?\s*\n?/i, "")
         .replace(/\n?```\s*$/, "")
         .trim();
     }
 
-    const candidate = extractBalancedJsonObject(cleaned) ?? cleaned;
+    // Strip any lingering markdown fence tokens
+    cleaned = cleaned
+      .replace(/```(?:json)?\s*/gi, "")
+      .replace(/```\s*/g, "")
+      .trim();
+
+    // Extract balanced JSON object, or fallback to first { to last }
+    let candidate = extractBalancedJsonObject(cleaned) ?? cleaned;
+    const firstBrace = candidate.indexOf("{");
+    const lastBrace = candidate.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      candidate = candidate.substring(firstBrace, lastBrace + 1);
+    }
 
     let parsed: unknown;
     try {

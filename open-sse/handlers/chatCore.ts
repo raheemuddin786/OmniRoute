@@ -1047,6 +1047,12 @@ async function handleChatCoreInner({
     delete b.disable_stream;
     delete b.disable_streaming;
     delete b.streaming;
+
+    // Guard: If messages exceed 120 turns, cap older historical turns to prevent extreme token bloat
+    if (Array.isArray(b.messages) && b.messages.length > 120) {
+      const msgs = b.messages as Array<Record<string, unknown>>;
+      b.messages = [msgs[0], ...msgs.slice(msgs.length - 100)];
+    }
   }
 
   // Codex /responses/compact is JSON-only: Codex CLI does not send stream=false,

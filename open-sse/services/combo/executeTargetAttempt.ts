@@ -880,6 +880,22 @@ export async function executeTargetAttempt(
     const isTokenLimitBreach = result.status === 429 && isLocalKeyPolicyBreachErrorBody(errorBody);
     const isLocalQueueCapacity = isLocalQueueCapacityErrorBody(errorBody);
 
+    // Fast-fail: OpenRouter free tier daily quota exhaustion ("free-models-per-day")
+    if (
+      result.status === 429 &&
+      typeof errorText === "string" &&
+      (errorText.includes("free-models-per-day") || errorText.includes("free_daily_limit"))
+    ) {
+      try {
+        const { triggerGlobalRateLimitCooldown } = await import("../globalRateLimiter.ts");
+        triggerGlobalRateLimitCooldown("openrouter/*:free", 15 * 60 * 1000);
+        deps.log.warn(
+          "COMBO",
+          "OpenRouter free tier daily limit hit. Fast-failing sibling free models."
+        );
+      } catch {}
+    }
+
     // Fix #1681: Status 499 means client disconnected — stop combo loop immediately.
     // There is no point trying fallback models when nobody is listening.
     if (result.status === 499) {

@@ -269,8 +269,9 @@ export function inspectErrorResponse(params: {
     }
 
     // Check json body hints if headers didn't yield a delay
-    if (cooldownMs <= 0 && errorBody && typeof errorBody === "object") {
-      const detailedHint = parseDetailedRetryHintFromJsonBody(errorBody as Record<string, unknown>);
+    if (cooldownMs <= 0 && errorBody) {
+      const bodyStr = typeof errorBody === "string" ? errorBody : JSON.stringify(errorBody);
+      const detailedHint = parseDetailedRetryHintFromJsonBody(bodyStr, Number.MAX_SAFE_INTEGER);
       if (detailedHint && detailedHint.retryAfterMs > 0) {
         cooldownMs = detailedHint.retryAfterMs;
         retryAfterSeconds = Math.ceil(cooldownMs / 1000);
@@ -280,8 +281,8 @@ export function inspectErrorResponse(params: {
     // Check prose delay in error text
     if (cooldownMs <= 0) {
       const agyDelay = parseAntigravityRetryTime(errorText);
-      if (agyDelay && agyDelay.retryAfterMs > 0) {
-        cooldownMs = agyDelay.retryAfterMs;
+      if (typeof agyDelay === "number" && agyDelay > 0) {
+        cooldownMs = agyDelay;
       } else {
         const proseDelay = parseProseRetryDelayMs(errorText);
         if (proseDelay && proseDelay > 0) {
@@ -292,6 +293,12 @@ export function inspectErrorResponse(params: {
 
     const isQuotaExhausted = looksLikeQuotaExhausted(errorText);
     const isConcurrency = looksLikeConcurrencyLimit(errorText);
+
+    // Fast-fail: OpenRouter free-tier daily cap (free-models-per-day) applies to all free models under the provider
+    if (lowerText.includes("free-models-per-day")) {
+      cooldownMs = Math.max(cooldownMs, 15 * 60 * 1000); // 15m minimum cooldown across free pool
+      retryAfterSeconds = Math.ceil(cooldownMs / 1000);
+    }
 
     // Default fallback cooldown if no hint detected
     if (cooldownMs <= 0) {
@@ -310,7 +317,8 @@ export function inspectErrorResponse(params: {
         lowerText.includes("per-model") ||
         lowerText.includes("model limit"));
 
-    if (isQuotaExhausted && cooldownMs < 3_600_000) {
+    // If headers or hints did not give an explicit retry-after and quota is exhausted, enforce 1 hour minimum
+    if (isQuotaExhausted && !retryAfterSeconds && cooldownMs < 3_600_000) {
       cooldownMs = 3_600_000; // 1 hour minimum for quota exhaustion (e.g. daily limit hit)
       retryAfterSeconds = 3600;
     }
@@ -641,4 +649,36 @@ export function clearAllGlobalCooldowns(): void {
 
 export function getActiveGlobalCooldownCount(): number {
   return globalCooldownMap.size;
+}
+
+/**
+ * Manually trigger a rate limit cooldown block for a target key or provider/model pattern.
+ */
+export function triggerGlobalRateLimitCooldown(
+  target: string,
+  durationMs: number = 15 * 60 * 1000
+): void {
+  const now = Date.now();
+  const unblockTimestamp = now + durationMs;
+  const block: CooldownBlock = {
+    key: target,
+    scope: "provider",
+    provider: target.startsWith("rl:") ? target.split(":")[2] || target : target,
+    reason: "forced_cooldown_quota_exhausted",
+    blockedAt: now,
+    unblockTimestamp,
+    gracePeriodMs: 0,
+    isPermanent: false,
+  };
+  globalCooldownMap.set(target, block);
+  // Also register canonical provider key if pattern is provider/*
+  if (target.includes("/*")) {
+    const prov = target.split("/")[0];
+    const canonicalKey = buildRateLimitKey(prov, null, null, "provider");
+    globalCooldownMap.set(canonicalKey, {
+      ...block,
+      key: canonicalKey,
+      provider: prov,
+    });
+  }
 }
