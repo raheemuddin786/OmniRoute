@@ -87,18 +87,22 @@ export const MODE_PACKS: Record<string, ScoringWeights> = {
     reliability: 0.03,
   },
   // #4235 `:reliable` — prioritize healthy, low-variance providers (high availability).
-  // health (circuit-breaker) + stability (latency std-dev) dominate; weights sum to ~1.0
-  // (re-normalized after #8940 added sessionAvailability without rebalancing — #9985).
+  // health (circuit-breaker) + stability (latency std-dev) dominate; weights sum to ~1.0.
+  // Tier affinity/specificity raised from 0 → 0.12/0.06 so that complexity-aware routing
+  // (buildComplexityRoutingHint, #13386) can override flash-lite selection when
+  // minTier=premium and tools=true — health+stability still dominate but no longer
+  // completely suppress tier-based expert model preference. Redistributed from health
+  // (0.3524→0.2324) and stability (0.1905→0.1305). Weights sum preserved at 0.9999.
   "reliability-first": {
     quota: 0.1133,
-    health: 0.3524,
+    health: 0.2324,
     costInv: 0.0181,
     latencyInv: 0.0476,
     taskFit: 0.0952,
-    stability: 0.1905,
+    stability: 0.1305,
     tierPriority: 0.0276,
-    tierAffinity: 0,
-    specificityMatch: 0,
+    tierAffinity: 0.12,
+    specificityMatch: 0.06,
     contextAffinity: 0,
     sessionAvailability: 0.0476,
     resetWindowAffinity: 0,

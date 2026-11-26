@@ -1048,10 +1048,48 @@ async function handleChatCoreInner({
     delete b.disable_streaming;
     delete b.streaming;
 
-    // Guard: If messages exceed 120 turns, cap older historical turns to prevent extreme token bloat
+    // Guard: If messages exceed 120 turns, compact to last 100 turns at a
+    // tool-pair-safe boundary so tool_use/tool_result alternation is never
+    // severed (Anthropic 400 / OpenAI tool-call contract violation).
     if (Array.isArray(b.messages) && b.messages.length > 120) {
       const msgs = b.messages as Array<Record<string, unknown>>;
-      b.messages = [msgs[0], ...msgs.slice(msgs.length - 100)];
+      // Walk forward up to 20 positions from (length - 100) to find a clean
+      // user-turn boundary where the preceding assistant turn has no pending
+      // tool_use blocks left unmatched in the user turn that follows.
+      const TARGET_TAIL = 100;
+      let cutIdx = msgs.length - TARGET_TAIL;
+      for (let i = cutIdx; i < Math.min(cutIdx + 20, msgs.length - 1); i++) {
+        const msg = msgs[i];
+        const prev = msgs[i - 1];
+        if (
+          msg.role === "user" &&
+          prev?.role === "assistant" &&
+          (() => {
+            const assistantContent = Array.isArray(prev.content)
+              ? (prev.content as Array<Record<string, unknown>>)
+              : [];
+            const userContent = Array.isArray(msg.content)
+              ? (msg.content as Array<Record<string, unknown>>)
+              : [];
+            const pendingToolUseIds = assistantContent
+              .filter((b) => b.type === "tool_use" && typeof b.id === "string")
+              .map((b) => b.id as string);
+            const resolvedToolResultIds = userContent
+              .filter(
+                (b) =>
+                  b.type === "tool_result" && typeof b.tool_use_id === "string"
+              )
+              .map((b) => b.tool_use_id as string);
+            return pendingToolUseIds.every((id) =>
+              resolvedToolResultIds.includes(id)
+            );
+          })()
+        ) {
+          cutIdx = i;
+          break;
+        }
+      }
+      b.messages = [msgs[0], ...msgs.slice(cutIdx)];
     }
   }
 
