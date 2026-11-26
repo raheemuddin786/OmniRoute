@@ -498,7 +498,7 @@ export async function processSmartProxyRouting(
       consecutiveReads,
       existingCheckpoint
         ? {
-            consecutiveReads: existingCheckpoint.consecutiveReads,
+            consecutiveReads,
             modelTier: existingCheckpoint.modelTier,
             guidanceContract: existingCheckpoint.guidanceContract as GuidanceContract | undefined,
             lastMutationTime: updatedLastMutationTime,
@@ -506,6 +506,7 @@ export async function processSmartProxyRouting(
             stagnationRecovered: Boolean(existingCheckpoint.stagnationRecovered),
           }
         : {
+            consecutiveReads,
             lastMutationTime: updatedLastMutationTime,
             lastPeriodicPromptTime,
           },
