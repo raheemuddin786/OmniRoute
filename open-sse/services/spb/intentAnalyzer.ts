@@ -441,7 +441,10 @@ export function classifyIntent(
           !/\b(fix (?:the |a )?bug|debug|patch failing)\b/i.test(targetText)));
 
   const hasTestKeywords =
-    testRegex.test(targetText) ||
+    (testRegex.test(targetText) &&
+      !/^(?:how\s+(?:to|can\s+i|do\s+i)\s+run|how\s+to\s+test|explain\s+how\s+to\s+test)\b/i.test(
+        targetText.trim()
+      )) ||
     (isToolResultTurn && testRegex.test(latestExtracted.toolResultText));
   const hasRefactorKeywords = !isToolResultTurn && refactorRegex.test(targetText);
   const hasDeterministicKeywords = !isToolResultTurn && deterministicRegex.test(targetText);

@@ -500,6 +500,9 @@ export function decomposeRequestIntoLedger(
     );
   if (isAdvisoryInquiry) return [];
 
+  // Skip ledger creation for agent runtime system modes like Claude Code's suggestion mode
+  if (/\[SUGGESTION MODE:|\bNEVER SUGGEST:\b/i.test(text)) return [];
+
   // Skip ledger creation for trivial continuation phrases ("yes", "proceed", "go ahead", "ok", "continue")
   // These are user confirmations to continue work and must not be decomposed into artificial tasks.
   const isContinuationOnly =

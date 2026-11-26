@@ -1821,6 +1821,7 @@ export async function processSpbOutboundZeroLoss(args: {
       "UNDERSTAND",
       "REVIEW",
       "ANALYSIS",
+      "DETERMINISTIC_ROUTING",
     ]);
 
     const currentPhase = args.taskPhase ?? null;
@@ -1828,7 +1829,10 @@ export async function processSpbOutboundZeroLoss(args: {
     const isExemptFromZeroDiffPenalty =
       (currentPhase !== null && nonMutatingPhases.has(currentPhase)) ||
       (currentPhase === null &&
-        /\b(analyz|review|investigat|inspect|diagnos)\b/i.test(args.originalPrompt || ""));
+        /\b(analyz|review|investigat|inspect|diagnos)\b/i.test(args.originalPrompt || "")) ||
+      /^(?:how\s+(?:to|can|do|should)|why\s+|what\s+|explain\s+|tell\s+me)\b/i.test(
+        (args.originalPrompt || "").trim()
+      );
 
     if (isExemptFromZeroDiffPenalty) {
       evalResult.isSatisfied = true;
