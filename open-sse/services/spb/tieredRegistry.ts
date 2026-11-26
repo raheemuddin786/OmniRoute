@@ -37,10 +37,11 @@ function getModelCost(model: string): number {
 }
 
 /**
- * Reorders candidates to place healthy, non-cooldown models first,
- * sorting healthy models by cost (lowest cost first).
+ * Reorders candidates to place healthy, non-cooldown models first.
+ * For auto/dynamic rosters, healthy models are sorted by cost (lowest cost first).
+ * For user-configured or custom priority lists, relative order is preserved among healthy models.
  */
-function prioritizeHealthyTierModels(models: string[]): string[] {
+function prioritizeHealthyTierModels(models: string[], preserveOrder = false): string[] {
   if (!models || models.length <= 1) return models || [];
   const healthy: string[] = [];
   const inCooldown: string[] = [];
@@ -60,8 +61,10 @@ function prioritizeHealthyTierModels(models: string[]): string[] {
     }
   }
 
-  // Sort healthy models by combined cost per 1M tokens (lowest first)
-  healthy.sort((a, b) => getModelCost(a) - getModelCost(b));
+  // Only sort by cost if order preservation is not requested (i.e. auto/dynamic pools)
+  if (!preserveOrder) {
+    healthy.sort((a, b) => getModelCost(a) - getModelCost(b));
+  }
 
   return healthy.length > 0 ? [...healthy, ...inCooldown] : inCooldown;
 }
@@ -114,10 +117,23 @@ export function selectModelTier(
   const rawResilient = getEffectiveTierModels("resilient", customModels?.resilient);
   const rawLocal = getEffectiveTierModels("local", customModels?.local);
 
+  const isCustomApex = Boolean(customModels?.apex && customModels.apex.length > 0);
+  const isCustomResilient = Boolean(customModels?.resilient && customModels.resilient.length > 0);
+  const isCustomLocal = Boolean(customModels?.local && customModels.local.length > 0);
+
   const models = {
-    apex: prioritizeHealthyTierModels(rawApex),
-    resilient: prioritizeHealthyTierModels(rawResilient),
-    local: prioritizeHealthyTierModels(rawLocal),
+    apex: prioritizeHealthyTierModels(
+      rawApex,
+      isCustomApex || currentConfig?.tierModes?.apex === "user"
+    ),
+    resilient: prioritizeHealthyTierModels(
+      rawResilient,
+      isCustomResilient || currentConfig?.tierModes?.resilient === "user"
+    ),
+    local: prioritizeHealthyTierModels(
+      rawLocal,
+      isCustomLocal || currentConfig?.tierModes?.local === "user"
+    ),
   };
 
   // Dynamically calibrate token bounds based on task complexity (0.0 to 1.0) and runtime config
