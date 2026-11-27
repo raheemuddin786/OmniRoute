@@ -152,7 +152,7 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
   ): void => {
     if (
       isExplicitError ||
-      /(?:<tool_use_error>|InputValidationError|Target must exactly match|String to replace not found|Found \d+ matches of the string|No changes to make|File has been modified since read|No such tool available|PreToolUse.*?error|\[tool_error:\s*true\]|tool_error|outside this session|ENOENT|EACCES|command not found|exit code [1-9]|fatal:)/i.test(
+      /(?:<tool_use_error>|InputValidationError|Target must exactly match|String to replace not found|Found \d+ matches of the string|No changes to make|File has been modified since read|Call Read before editing|No such tool available|PreToolUse.*?error|\[tool_error:\s*true\]|tool_error|outside this session|ENOENT|EACCES|command not found|exit code [1-9]|fatal:)/i.test(
         res
       )
     ) {
@@ -160,14 +160,16 @@ function extractMessageContent(msg: { role: string; content?: unknown }): Extrac
 
       let errorReason: ToolFailureDiagnostic["errorReason"] = "generic_failure";
       if (
-        /String to replace not found|Target must exactly match|could not find target/i.test(res)
+        /String to replace not found|Target must exactly match|could not find target|Entity replaced:\s*False/i.test(
+          res
+        )
       ) {
         errorReason = "string_not_found";
       } else if (/Found \d+ matches|replace_all is false/i.test(res)) {
         errorReason = "multiple_matches";
       } else if (/No changes to make|exactly the same/i.test(res)) {
         errorReason = "no_changes";
-      } else if (/File has been modified since read/i.test(res)) {
+      } else if (/File has been modified since read|Call Read before editing/i.test(res)) {
         errorReason = "file_modified_since_read";
       } else if (/No such tool available/i.test(res)) {
         errorReason = "tool_not_available";
@@ -403,6 +405,20 @@ export function classifyIntent(
             }
             if (mutationToolNameRegex.test(item.name)) {
               isMutationToolName = true;
+            } else if (
+              /^(?:bash|sh|shell|terminal|exec|execute_command|run_command|command)$/i.test(
+                item.name
+              )
+            ) {
+              // Recognize file mutating script/bash commands (sed -i, python file write, echo >, tee, cp, mv)
+              const cmd = (input?.command || input?.cmd || input?.CommandLine || "") as string;
+              if (
+                /(?:sed\s+-i|python[0-9]*\s+-c.*(?:open|write)|\b(?:echo|printf)\b.*>|\btee\b|\bcp\b|\bmv\b|\brm\b|git\s+apply)/i.test(
+                  cmd
+                )
+              ) {
+                isMutationToolName = true;
+              }
             }
           }
         }
@@ -423,6 +439,7 @@ export function classifyIntent(
   const isCodeMutationToolResult =
     isToolResultTurn &&
     (isMutationToolName ||
+      /\[This command modified \d+ file/i.test(latestExtracted.toolResultText) ||
       /\b(edit|edits|edited|editing|write|writes|written|writing|file_write|write_file|patch|patches|patched|diff|diffs|applied|saved|commit|committed|updated|created|replaced)\b/i.test(
         latestExtracted.toolResultText
       ));

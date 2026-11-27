@@ -352,3 +352,87 @@ test("Checklist Jumping Prevention: compound use-case + e2e prompt enforces mand
     "Expected MANDATORY STEP ORDER directive for compound use-case + E2E prompt"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Autonomous Tool Mutation & Stagnation Loop Breaker
+// ---------------------------------------------------------------------------
+test("Autonomous Tool Mutation: recognizes bash file mutating commands as code mutations", async () => {
+  const { classifyIntent } = await import("../../open-sse/services/spb/intentAnalyzer.ts");
+
+  const messages = [
+    { role: "user", content: "replace footer copyright in public/index.html" },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_sed_1",
+          name: "bash",
+          input: {
+            command: "sed -i 's|Prakash Physiotherapy|HOSPITAL NAME|g' public/index.html",
+          },
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_sed_1",
+          content:
+            "[This command modified 1 file you've previously read: public/index.html. Call Read before editing.]",
+        },
+      ],
+    },
+  ];
+
+  const intent = classifyIntent(messages);
+  assert.equal(
+    intent.isCodeMutationToolResult,
+    true,
+    "Expected sed -i command in bash tool to be recognized as code mutation"
+  );
+});
+
+test("Tool Failure Diagnostic: recognizes 'Call Read before editing' as file_modified_since_read error", async () => {
+  const { classifyIntent } = await import("../../open-sse/services/spb/intentAnalyzer.ts");
+
+  const messages = [
+    { role: "user", content: "edit public/index.html" },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_read_err_1",
+          name: "bash",
+          input: { command: "sed -i 's|old|new|g' public/index.html" },
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_read_err_1",
+          content:
+            "[This command modified 1 file you've previously read: public/index.html. Call Read before editing.]",
+        },
+      ],
+    },
+  ];
+
+  const intent = classifyIntent(messages);
+  assert.equal(
+    intent.isToolExecutionError,
+    true,
+    "Expected 'Call Read before editing' to be detected as tool execution error"
+  );
+  assert.equal(
+    intent.toolFailureDiagnostic?.errorReason,
+    "file_modified_since_read",
+    "Expected errorReason to be file_modified_since_read"
+  );
+});
