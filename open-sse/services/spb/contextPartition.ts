@@ -570,13 +570,13 @@ export function decomposeRequestIntoLedger(
   const getAcceptance = (layer: IntentLayer, _desc?: string): string => {
     switch (layer) {
       case "test":
-        return "Automated test suite validates target feature behavior and assertions";
+        return "Automated test suite validates target feature behavior and assertions with execution exitCode 0";
       case "data":
-        return "Database migration/schema is idempotent, syntactically valid, and preserved";
+        return "Database migration/schema is idempotent, syntactically valid, and preserves existing data";
       case "ui":
-        return "UI component renders required controls and displays state without runtime exceptions";
+        return "UI leaf elements render cleanly with responsive styling, navigation flow, and accessible interactive controls";
       case "api":
-        return "Endpoint/service handles payload and validates response correctly";
+        return "Endpoint/service handles payload, enforces auth/validation, and returns structured responses";
       case "config":
         return "Configuration file is valid and loads successfully";
       case "docs":
