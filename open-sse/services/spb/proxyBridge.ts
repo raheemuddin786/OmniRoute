@@ -1269,10 +1269,11 @@ export async function processSmartProxyRouting(
         } else {
           // Later turns get a compact status reinforcing the immediate next objective and prohibiting jumping ahead
           const nextItem = openItems[0];
+          const activeLabel = nextItem ? ` | Active: ${nextItem.id}` : "";
           const nextFocus = nextItem
             ? ` | Current Target: [${nextItem.id}] (${nextItem.layer.toUpperCase()}) ${nextItem.text.slice(0, 45)}`
             : "";
-          checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete${estTimelineNotice}${nextFocus} | Do NOT jump ahead to later items until prerequisite items are resolved]${violationsNotice}`;
+          checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete${activeLabel}${estTimelineNotice}${nextFocus} | Do NOT jump ahead to later items until prerequisite items are resolved]${violationsNotice}`;
         }
       }
     }
@@ -1422,9 +1423,18 @@ export async function processSmartProxyRouting(
     }
 
     // Safe CCR token savings calculation for large message bodies (>= 1200 chars)
+    // Preserve initial turn directives (Turn 1 checklist/guidelines and active guidance) from CCR compression
+    const isInitialTurn = !isToolTurn && !existingCheckpoint;
     for (let i = 0; i < finalMessages.length; i++) {
       const msg = finalMessages[i];
       if (typeof msg.content === "string" && msg.content.length >= 1200) {
+        if (
+          isInitialTurn &&
+          (msg.content.includes("Mandatory Guidelines:") ||
+            msg.content.includes("[SPB Intent Ledger:"))
+        ) {
+          continue;
+        }
         const { text, replaced } = maybeCcrReplace(
           msg.content,
           1200,

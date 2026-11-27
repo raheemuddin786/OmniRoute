@@ -550,7 +550,7 @@ export function detectAndRecoverFromStagnation(
       recoveryDirective =
         "[Auto-Recovery Directive: AUTONOMOUS EXECUTION MANDATE]\n" +
         "Context checkpoint reached. If external reference URLs were provided in the prompt, ensure their content has been fetched and analyzed via Bash/curl first. " +
-        "Proceed immediately to apply all required file modifications end-to-end using editing tools (Write/Edit/Bash). Do not stall to re-plan or converse.";
+        "Proceed immediately to apply all required file modifications end-to-end using editing tools (Write/Edit/Bash). Advance directly without pause, re-planning, or conversational filler.";
       const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
       newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";
 
