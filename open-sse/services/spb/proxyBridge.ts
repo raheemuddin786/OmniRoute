@@ -1292,7 +1292,7 @@ export async function processSmartProxyRouting(
       injectedDirective: autoRecoveryDirective,
     });
 
-    // Inject auto-recovery directive into messages if stagnation was detected
+    // Inject auto-recovery directive into messages if stagnation or ledger guidance was produced
     if (autoRecoveryDirective) {
       if (!enhancedMessages) {
         enhancedMessages = messages.map((m) => ({
@@ -1301,14 +1301,18 @@ export async function processSmartProxyRouting(
         }));
       }
 
-      // On tool turns, append directive to the latest tool message so the agent receives the mandate
-      const lastMsg = enhancedMessages[enhancedMessages.length - 1];
-      if (
+      // Check whether the latest message is an active tool execution turn
+      const lastMsgIdx = enhancedMessages.length - 1;
+      const lastMsg = enhancedMessages[lastMsgIdx];
+      const isLatestToolTurn =
         lastMsg &&
         (lastMsg.role === "tool" ||
           (Array.isArray(lastMsg.content) &&
-            lastMsg.content.some((p) => p && p.type === "tool_result")))
-      ) {
+            lastMsg.content.some((p) => p && p.type === "tool_result")));
+
+      if (isLatestToolTurn) {
+        // On active tool turns, inject guidance directly into the latest tool message so the agent receives
+        // the active execution mandate without corrupting previous user prompts or causing duplicate injections.
         if (typeof lastMsg.content === "string") {
           lastMsg.content = `${lastMsg.content}\n\n[SPB CONTEXT GUIDANCE: ${autoRecoveryDirective}]`;
         } else if (Array.isArray(lastMsg.content)) {
@@ -1317,49 +1321,46 @@ export async function processSmartProxyRouting(
             { type: "text", text: `[SPB CONTEXT GUIDANCE: ${autoRecoveryDirective}]` },
           ];
         }
-      }
+      } else {
+        // On human instruction turns, inject directive into the prompt or user message
+        if (enhancement && enhancement.enhancedPrompt) {
+          enhancement.enhancedPrompt = `${autoRecoveryDirective}\n\n${enhancement.enhancedPrompt}`;
+        }
 
-      // 1. If enhancement produced an enhanced prompt, prepend the directive
-      if (enhancement && enhancement.enhancedPrompt) {
-        enhancement.enhancedPrompt = `${autoRecoveryDirective}\n\n${enhancement.enhancedPrompt}`;
-      }
-
-      // 2. Ensure enhancedMessages receives the directive exactly once
-      if (lastUserIndex >= 0 && enhancedMessages[lastUserIndex]) {
-        const targetMsg = enhancedMessages[lastUserIndex];
-        if (typeof targetMsg.content === "string") {
-          targetMsg.content = `${autoRecoveryDirective}\n\n${targetMsg.content}`;
-        } else if (Array.isArray(targetMsg.content)) {
-          const hasTextBlock = targetMsg.content.some(
-            (part) =>
-              part &&
-              typeof part === "object" &&
-              (part as Record<string, unknown>).type === "text" &&
-              typeof (part as Record<string, unknown>).text === "string"
-          );
-
-          if (hasTextBlock) {
-            let replacedText = false;
-            targetMsg.content = targetMsg.content.map((part) => {
-              if (
-                !replacedText &&
+        if (lastUserIndex >= 0 && enhancedMessages[lastUserIndex]) {
+          const targetMsg = enhancedMessages[lastUserIndex];
+          if (typeof targetMsg.content === "string") {
+            targetMsg.content = `${autoRecoveryDirective}\n\n${targetMsg.content}`;
+          } else if (Array.isArray(targetMsg.content)) {
+            const hasTextBlock = targetMsg.content.some(
+              (part) =>
                 part &&
                 typeof part === "object" &&
                 (part as Record<string, unknown>).type === "text" &&
                 typeof (part as Record<string, unknown>).text === "string"
-              ) {
-                replacedText = true;
-                return { ...part, text: `${autoRecoveryDirective}\n\n${part.text}` };
-              }
-              return part;
-            });
-          } else {
-            // Pure tool_result turn: prepend synthetic text block so the recovery
-            // mandate is delivered to the model instead of being dropped
-            targetMsg.content = [
-              { type: "text", text: autoRecoveryDirective },
-              ...targetMsg.content,
-            ];
+            );
+
+            if (hasTextBlock) {
+              let replacedText = false;
+              targetMsg.content = targetMsg.content.map((part) => {
+                if (
+                  !replacedText &&
+                  part &&
+                  typeof part === "object" &&
+                  (part as Record<string, unknown>).type === "text" &&
+                  typeof (part as Record<string, unknown>).text === "string"
+                ) {
+                  replacedText = true;
+                  return { ...part, text: `${autoRecoveryDirective}\n\n${part.text}` };
+                }
+                return part;
+              });
+            } else {
+              targetMsg.content = [
+                { type: "text", text: autoRecoveryDirective },
+                ...targetMsg.content,
+              ];
+            }
           }
         }
       }
