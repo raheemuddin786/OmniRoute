@@ -1843,14 +1843,18 @@ export async function processSpbOutboundZeroLoss(args: {
 
     const currentPhase = args.taskPhase ?? null;
 
+    // Never exempt from zero-diff penalty if the model explicitly claims completed code edits,
+    // resolved bugs, or passing tests without actual code modifications in git diff.
     const isExemptFromZeroDiffPenalty =
-      isStructuredPlanResponse ||
-      (currentPhase !== null && nonMutatingPhases.has(currentPhase)) ||
-      (currentPhase === null &&
-        /\b(analyz|review|investigat|inspect|diagnos)\b/i.test(args.originalPrompt || "")) ||
-      /^(?:how\s+(?:to|can|do|should)|why\s+|what\s+|explain\s+|tell\s+me)\b/i.test(
-        (args.originalPrompt || "").trim()
-      );
+      !claimsEditsInText &&
+      !reviewerDiscrepancyDetected &&
+      (isStructuredPlanResponse ||
+        (currentPhase !== null && nonMutatingPhases.has(currentPhase)) ||
+        (currentPhase === null &&
+          /\b(analyz|review|investigat|inspect|diagnos)\b/i.test(args.originalPrompt || "")) ||
+        /^(?:how\s+(?:to|can|do|should)|why\s+|what\s+|explain\s+|tell\s+me)\b/i.test(
+          (args.originalPrompt || "").trim()
+        ));
 
     if (isExemptFromZeroDiffPenalty) {
       evalResult.isSatisfied = true;
