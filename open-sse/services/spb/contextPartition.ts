@@ -525,9 +525,9 @@ export function decomposeRequestIntoLedger(
   } else {
     // Split by comma, "and", "then", or semicolon if clauses contain action verbs
     const actionVerbRegex =
-      /\b(fix|add|create|implement|update|refactor|test|write|modify|migrate|build|setup|delete|remove)\b/i;
+      /\b(fix|add|create|implement|update|upgrade|enhance|refactor|test|run|execute|write|modify|migrate|build|setup|delete|remove|understand)\b/i;
     const rawClauses = text
-      .split(/(?:\r?\n|;|\band\s+then\b|\bthen\b|,\s*and\b|\band\b)/i)
+      .split(/(?:\r?\n|;|\band\s+then\b|\bthen\b|,\s*and\b|\band\b|(?:\s*->\s*))/i)
       .map((c) => c.trim())
       .filter((c) => c.length > 3 && actionVerbRegex.test(c));
 

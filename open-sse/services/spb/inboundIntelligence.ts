@@ -538,13 +538,23 @@ export function enhanceInboundPrompt(
   // Deep Prompt Understanding & Anti-Blind Testing Directive
   const testGatingPolicy = tierConfig?.spbConfig?.testGatingPolicy ?? "never_unless_requested";
   const userExplicitlyRequestedTests =
-    /\b(run test|run the test|execute test|npm test|npm run test|vitest|playwright|verify with tests)\b/i.test(
+    /\b(run (?:the )?(?:e2e|unit|live|integration|regression)?\s*tests?|execute (?:the )?(?:e2e|unit|test)|run (?:the )?e2e in live|run respective (?:test )?e2e|run respective e2e|e2e test cases|npm test|npm run test|vitest|playwright|verify with tests)\b/i.test(
       prompt
     );
 
+  // Check for compound intention: understanding/updating use-cases and running live e2e tests
+  const isUseCaseAndLiveE2ECompound =
+    /\b(use\s*cases?|checklist)\b/i.test(prompt) &&
+    /\b(create|update|upgrade|enhance)\b/i.test(prompt) &&
+    /\b(run|execute)\b/i.test(prompt) &&
+    /\b(e2e|tests?)\b/i.test(prompt);
+
   if (tierConfig?.spbConfig?.enableDeepPromptAnalysis !== false) {
     let testingPolicyDirective = "";
-    if (testGatingPolicy === "never_unless_requested" && !userExplicitlyRequestedTests) {
+    if (isUseCaseAndLiveE2ECompound) {
+      testingPolicyDirective =
+        "\n\n[Intent Execution Mandate: Understand requirements end-to-end -> Create/update/upgrade use cases in checklist -> Update E2E test suite to match use cases -> Execute live E2E tests and report real results. Do NOT stall or pause after reading conventions. Proceed through all phases autonomously.]";
+    } else if (testGatingPolicy === "never_unless_requested" && !userExplicitlyRequestedTests) {
       testingPolicyDirective =
         "\n\n[Test Execution Policy: Do NOT run test cases blindly. The user has NOT explicitly requested test execution in this prompt. " +
         "Focus first on thoroughly understanding the user prompt, codebase architecture, and explicit requirements before taking any action. " +
@@ -553,7 +563,11 @@ export function enhanceInboundPrompt(
       testingPolicyDirective =
         "\n\n[Test Execution Policy: User explicitly requested test execution. Run the targeted tests and capture full execution proofs.]";
     }
-    if (testingPolicyDirective && !enhancedText.includes("Test Execution Policy")) {
+    if (
+      testingPolicyDirective &&
+      !enhancedText.includes("Test Execution Policy") &&
+      !enhancedText.includes("Intent Execution Mandate")
+    ) {
       enhancedText += testingPolicyDirective;
       appliedOptimizations.push("Deep Prompt Intent & Test-Gating Enforcement");
     }
