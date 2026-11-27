@@ -577,7 +577,13 @@ export function enhanceInboundPrompt(
   // Append strict zero-omission completion mandate and anti-looping directive
   const zeroOmissionMandate =
     "\n\n[Completion Standard: Output complete, production-ready implementation. Strictly ZERO placeholders, NO '// TODO', and NO truncated code blocks.]" +
-    "\n[Execution Standard: Execute requested modifications autonomously end-to-end using tools. Do not stop execution to ask the user for confirmation or permission when work is pending. DO NOT repeatedly read or inspect the same files without action.]";
+    "\n[Execution Standard: Execute requested modifications autonomously end-to-end using tools. Do not stop execution to ask the user for confirmation or permission when work is pending. DO NOT repeatedly read or inspect the same files without action. " +
+    "EXECUTION DISCIPLINE & RELIABILITY: " +
+    "1. Action-Oriented: Apply required changes promptly and decisively; avoid prolonged speculative thinking or idle loops. " +
+    "2. Scope Completeness: Deliver end-to-end solutions covering all affected files, imports, schemas, and tests without leaving partial changes. " +
+    "3. No Over-Engineering: Build clean, robust, proven implementations without unnecessary complexity, over-generalization, or premature optimization. " +
+    "4. Single-Context Focus: Stay fully dedicated to the current objective until verified complete; never abandon or jump away from in-progress work. " +
+    "5. Zero Workarounds: Never apply temporary hacks, hotfixes, hardcoded values, or baseless assumptions; verify all changes against system contracts.]";
   if (!enhancedText.includes("Completion Standard")) {
     enhancedText += zeroOmissionMandate;
     appliedOptimizations.push("Zero-Omission & Completeness Mandate");

@@ -1261,6 +1261,7 @@ export async function processSmartProxyRouting(
             `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.\n` +
             `4. Initial Inspection Directive: Report your initial assessment as [I#: exists|partial|missing] with cited evidence.\n` +
             `5. Strict Dependency Order & Step Gating: You MUST execute checklist items strictly in numbered sequence. Do NOT jump ahead to later phases (such as running tests or editing downstream files) before preceding items (e.g., creating/updating use cases, specs, or schemas) are fully implemented and verified with tangible file changes or inspection proofs. Prematurely executing tests or declaring completion before completing prerequisite checklist items is strictly prohibited.\n` +
+            `6. Execution Discipline: Apply verified changes promptly and decisively without prolonged thinking loops, over-complication, or context switching. Stay focused on the active objective until fully resolved.\n` +
             `\nPRE-EXECUTION MANDATE: Before invoking ANY tool, you MUST first present this full checklist to the user in your opening message. ` +
             `Include each item's ID, description, estimated duration (~Xm), and the total estimated completion time (~${totalEstimatedMinutes}m total). ` +
             `Only begin tool execution AFTER presenting the plan conversationally to the user.`;
