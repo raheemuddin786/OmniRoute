@@ -90,6 +90,8 @@ export interface IntentProfile {
   toolFailureDiagnostic?: ToolFailureDiagnostic;
   isDuplicateFileRead?: boolean;
   duplicateFilePath?: string;
+  isDuplicateSearch?: boolean;
+  duplicateSearchQuery?: string;
   isPollingLoopDetected?: boolean;
   guidanceContract?: GuidanceContract;
   originalPrompt?: string; // preserved context for recovery and debugging
@@ -556,9 +558,12 @@ export function classifyIntent(
   // without an intervening code mutation, force CODE_GENERATION to break the infinite read loop.
   let isDuplicateFileRead = false;
   let duplicateFilePath: string | undefined;
+  let isDuplicateSearch = false;
+  let duplicateSearchQuery: string | undefined;
   let isPollingLoopDetected = false;
 
   const fileReadCounts = new Map<string, number>();
+  const searchQueryCounts = new Map<string, number>();
   let consecutiveBashPollingCount = 0;
   // Use a sliding window of recent messages to avoid flagging reads from dozens of turns ago
   const recentMessagesWindow = messages.slice(-12);
@@ -620,9 +625,56 @@ export function classifyIntent(
           toolName.includes("write") ||
           toolName.includes("edit");
 
+        const isGrepSearchTool =
+          /^(grep|search|rg|glob|find)$/i.test(toolName) ||
+          toolName.includes("grep") ||
+          toolName.includes("search");
+        const searchQuery = String(
+          args.query || args.pattern || args.search_term || args.term || ""
+        ).trim();
+
+        // Extract search pattern or file target from grep/find/cat bash commands
+        let extractedBashSearch = "";
+        let extractedBashTargetFile = "";
+        if (/^(bash|execute|terminal|sh)$/i.test(toolName) && commandStr) {
+          const grepMatch = commandStr.match(
+            /\b(?:grep|rg)\s+(?:-[a-zA-Z0-9]+\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))\s+([^\s|;]+)/
+          );
+          if (grepMatch) {
+            extractedBashSearch = grepMatch[1] || grepMatch[2] || grepMatch[3] || "";
+            extractedBashTargetFile = (grepMatch[4] || "").trim();
+          } else {
+            const sedOrCatMatch = commandStr.match(
+              /\b(?:sed|cat|head|tail)\s+(?:-[a-zA-Z0-9]+\s+)*([^\s|;]+)/
+            );
+            if (sedOrCatMatch) {
+              extractedBashTargetFile = (sedOrCatMatch[1] || "").trim();
+            }
+          }
+        }
+
+        const effectiveFilePath = filePath || extractedBashTargetFile;
+
+        if (isGrepSearchTool && searchQuery) {
+          const qCount = (searchQueryCounts.get(searchQuery) || 0) + 1;
+          searchQueryCounts.set(searchQuery, qCount);
+          if (qCount >= duplicateReadThreshold) {
+            isDuplicateSearch = true;
+            duplicateSearchQuery = searchQuery;
+          }
+        } else if (extractedBashSearch) {
+          const qCount = (searchQueryCounts.get(extractedBashSearch) || 0) + 1;
+          searchQueryCounts.set(extractedBashSearch, qCount);
+          if (qCount >= duplicateReadThreshold) {
+            isDuplicateSearch = true;
+            duplicateSearchQuery = extractedBashSearch;
+          }
+        }
+
         const isProcessOrPollingBash =
           /^(bash|execute|terminal|sh)$/i.test(toolName) &&
-          /\b(ps\s|pgrep|grep -E|wc -l|jobs|sleep|wait|tail.*-f|kill -0)\b/i.test(commandStr);
+          /\b(ps\s|pgrep|grep -E|wc -l|jobs|sleep|wait|tail.*-f|kill -0)\b/i.test(commandStr) &&
+          !extractedBashSearch;
 
         if (isProcessOrPollingBash) {
           consecutiveBashPollingCount++;
@@ -631,17 +683,18 @@ export function classifyIntent(
           }
         } else if (isMutationTool) {
           consecutiveBashPollingCount = 0;
+          searchQueryCounts.clear();
         }
 
-        if (isReadTool && filePath) {
-          const count = (fileReadCounts.get(filePath) || 0) + 1;
-          fileReadCounts.set(filePath, count);
+        if ((isReadTool || extractedBashTargetFile) && effectiveFilePath) {
+          const count = (fileReadCounts.get(effectiveFilePath) || 0) + 1;
+          fileReadCounts.set(effectiveFilePath, count);
           if (count >= duplicateReadThreshold) {
             isDuplicateFileRead = true;
-            duplicateFilePath = filePath;
+            duplicateFilePath = effectiveFilePath;
           }
-        } else if (isMutationTool && filePath) {
-          fileReadCounts.delete(filePath);
+        } else if (isMutationTool && effectiveFilePath) {
+          fileReadCounts.delete(effectiveFilePath);
         }
       }
     }
@@ -661,8 +714,8 @@ export function classifyIntent(
   } else if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
     taskPhase = "ARCHITECTURAL_PLANNING";
     complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
-  } else if (isDuplicateFileRead || isPollingLoopDetected) {
-    // Hard break: repeated reading of the same file or process polling loop forces immediate code generation
+  } else if (isDuplicateFileRead || isDuplicateSearch || isPollingLoopDetected) {
+    // Hard break: repeated reading of the same file, repeated search queries, or process polling forces immediate code generation
     taskPhase = "CODE_GENERATION";
     complexityScore = 0.75;
   } else if (isToolResultTurn) {
@@ -708,6 +761,8 @@ export function classifyIntent(
     toolFailureDiagnostic: latestExtracted.toolFailureDiagnostic,
     isDuplicateFileRead,
     duplicateFilePath,
+    isDuplicateSearch,
+    duplicateSearchQuery,
     isPollingLoopDetected,
     originalPrompt: originalPromptText || "",
     hasVisualOrCrashData: latestExtracted.hasVisualOrCrashData,

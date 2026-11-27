@@ -577,6 +577,19 @@ export async function processSmartProxyRouting(
         : duplicateBlockDirective;
     }
 
+    // Hard Duplicate Search / Grep Loop Blocker:
+    // If the agent searched/grepped for the same query/pattern >= duplicateReadThreshold times,
+    // inject explicit guidance to stop repeated searches and draw actionable conclusions.
+    if (intent.isDuplicateSearch && intent.duplicateSearchQuery) {
+      const duplicateSearchDirective =
+        `[SPB Search Loop Breaker: The search/grep query '${intent.duplicateSearchQuery}' has already been executed repeatedly. ` +
+        `Search context is acquired. If results were empty, conclude the string is NOT present in the codebase. ` +
+        `Do not run repeated variations of grep/find/cat. Proceed immediately to direct implementation or plan formulation.]`;
+      autoRecoveryDirective = autoRecoveryDirective
+        ? `${autoRecoveryDirective}\n\n${duplicateSearchDirective}`
+        : duplicateSearchDirective;
+    }
+
     // Hard Polling Loop Breaker:
     // If the agent has been repeatedly polling background test processes, checking ps/pgrep/grep/wc,
     // or repeating polling stagnation remarks, inject an explicit termination directive and command execution.
