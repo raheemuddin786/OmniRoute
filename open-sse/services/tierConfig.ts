@@ -82,6 +82,15 @@ export const spbRuntimeConfigSchema = z
     requireTestPassBeforeDone: z
       .boolean()
       .default(DEFAULT_SPB_RUNTIME_CONFIG.requireTestPassBeforeDone),
+    testGatingPolicy: z
+      .enum(["never_unless_requested", "always_enforce", "only_for_tests"])
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.testGatingPolicy),
+    enableDeepPromptAnalysis: z
+      .boolean()
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.enableDeepPromptAnalysis),
+    enableTopicShiftDetection: z
+      .boolean()
+      .default(DEFAULT_SPB_RUNTIME_CONFIG.enableTopicShiftDetection),
     tokenBounds: z
       .object({
         apex: z

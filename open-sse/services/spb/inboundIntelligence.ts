@@ -24,6 +24,14 @@ export interface NecessityCheckResult {
   confirmationRequired: boolean;
 }
 
+export interface TopicShiftResult {
+  hasShifted: boolean;
+  priorTopic?: string;
+  newTopic?: string;
+  reason?: string;
+  topicNotice?: string;
+}
+
 export interface ContextualAnchors {
   referencedFiles: string[];
   diagnosedErrors: string[];
@@ -31,6 +39,7 @@ export interface ContextualAnchors {
   inferredGoal: string;
   hasDeferredToolsNotice?: boolean;
   externalUrls?: string[];
+  topicShift?: TopicShiftResult;
 }
 
 export interface PromptEnhancementResult {
@@ -213,6 +222,82 @@ export function extractContextAnchors(
       msg.content.includes("schemas are NOT loaded")
   );
 
+  // Detect topic shifts across user conversation history
+  let topicShift: TopicShiftResult | undefined;
+  const userMessages = messages.filter((m) => m.role === "user");
+  if (userMessages.length >= 2) {
+    const latestUserMsg = userMessages[userMessages.length - 1];
+    const priorUserMsg = userMessages[userMessages.length - 2];
+    const latestText =
+      typeof latestUserMsg.content === "string"
+        ? latestUserMsg.content
+        : JSON.stringify(latestUserMsg.content || "");
+    const priorText =
+      typeof priorUserMsg.content === "string"
+        ? priorUserMsg.content
+        : JSON.stringify(priorUserMsg.content || "");
+
+    const isExplicitNewTopic =
+      /\b(new topic|switch topic|change topic|different topic|moving to|another project|different task|unrelated|new task)\b/i.test(
+        latestText
+      ) ||
+      (/\b(role:|task:|context:)/i.test(latestText) &&
+        !/\b(role:|task:|context:)/i.test(priorText) &&
+        latestText.length > 100);
+
+    // Topic keyword extraction for divergence check
+    const extractKeywords = (t: string): string[] => {
+      return (
+        t
+          .toLowerCase()
+          .match(/\b[a-z]{4,}\b/g)
+          ?.filter(
+            (w) =>
+              ![
+                "this",
+                "that",
+                "with",
+                "from",
+                "have",
+                "will",
+                "then",
+                "when",
+                "what",
+                "where",
+                "there",
+                "about",
+                "please",
+              ].includes(w)
+          ) || []
+      );
+    };
+
+    const latestKeywords = new Set(extractKeywords(latestText));
+    const priorKeywords = new Set(extractKeywords(priorText));
+    let shared = 0;
+    for (const k of latestKeywords) {
+      if (priorKeywords.has(k)) shared++;
+    }
+    const overlapRatio = latestKeywords.size > 0 ? shared / latestKeywords.size : 1;
+
+    if (
+      isExplicitNewTopic ||
+      (latestText.length > 50 && priorText.length > 50 && overlapRatio < 0.08 && shared <= 2)
+    ) {
+      const priorSummary = priorText.slice(0, 80).replace(/\s+/g, " ").trim();
+      const newSummary = latestText.slice(0, 80).replace(/\s+/g, " ").trim();
+      topicShift = {
+        hasShifted: true,
+        priorTopic: priorSummary,
+        newTopic: newSummary,
+        reason: isExplicitNewTopic
+          ? "Explicit topic/task shift signaled in user prompt"
+          : "Context divergence detected with negligible keyword overlap",
+        topicNotice: `[Topic Switch Acknowledged: The conversation context has shifted from prior topic ("${priorSummary}...") to new topic ("${newSummary}..."). Prioritizing new topic intentions.]`,
+      };
+    }
+  }
+
   return {
     referencedFiles: Array.from(referencedFilesSet),
     diagnosedErrors,
@@ -220,6 +305,7 @@ export function extractContextAnchors(
     inferredGoal,
     hasDeferredToolsNotice,
     externalUrls: Array.from(externalUrlsSet),
+    topicShift,
   };
 }
 
@@ -439,6 +525,40 @@ export function enhanceInboundPrompt(
 
   enhancedText += resolvedPrompt;
 
+  // Attach topic shift notification and intention reset directive
+  if (
+    tierConfig?.spbConfig?.enableTopicShiftDetection !== false &&
+    anchors.topicShift?.hasShifted &&
+    anchors.topicShift.topicNotice
+  ) {
+    enhancedText = `${anchors.topicShift.topicNotice}\n\n${enhancedText}`;
+    appliedOptimizations.push("Topic Shift Detection & Recency Prioritization");
+  }
+
+  // Deep Prompt Understanding & Anti-Blind Testing Directive
+  const testGatingPolicy = tierConfig?.spbConfig?.testGatingPolicy ?? "never_unless_requested";
+  const userExplicitlyRequestedTests =
+    /\b(run test|run the test|execute test|npm test|npm run test|vitest|playwright|verify with tests)\b/i.test(
+      prompt
+    );
+
+  if (tierConfig?.spbConfig?.enableDeepPromptAnalysis !== false) {
+    let testingPolicyDirective = "";
+    if (testGatingPolicy === "never_unless_requested" && !userExplicitlyRequestedTests) {
+      testingPolicyDirective =
+        "\n\n[Test Execution Policy: Do NOT run test cases blindly. The user has NOT explicitly requested test execution in this prompt. " +
+        "Focus first on thoroughly understanding the user prompt, codebase architecture, and explicit requirements before taking any action. " +
+        "Only execute tests if explicitly asked by the user, if modifying test files, or if mandated in CLAUDE.md/AGENTS.md.]";
+    } else if (userExplicitlyRequestedTests) {
+      testingPolicyDirective =
+        "\n\n[Test Execution Policy: User explicitly requested test execution. Run the targeted tests and capture full execution proofs.]";
+    }
+    if (testingPolicyDirective && !enhancedText.includes("Test Execution Policy")) {
+      enhancedText += testingPolicyDirective;
+      appliedOptimizations.push("Deep Prompt Intent & Test-Gating Enforcement");
+    }
+  }
+
   // Append strict zero-omission completion mandate and anti-looping directive
   const zeroOmissionMandate =
     "\n\n[Completion Standard: Output complete, production-ready implementation. Strictly ZERO placeholders, NO '// TODO', and NO truncated code blocks.]" +
@@ -510,6 +630,7 @@ export function assignRoleDirective(
         roleScope =
           "You possess direct tool execution authority for running tests, capturing verification screenshots, and collecting execution logs. " +
           "MANDATORY: Execute all commands and tests autonomously using available tools. " +
+          "Do not run tests blindly unless requested by the user, if modifying test files, or mandated by project rules. " +
           "NEVER output instructions asking the user to manually run commands (e.g., npm run test:e2e, $ test, git). " +
           "NEVER halt prematurely before capturing all evidence, test outputs, and status proofs. " +
           "If a test or verification pipeline must be invoked, invoke it via tools (bash, MCP, browser). " +
@@ -545,8 +666,8 @@ export function assignRoleDirective(
           "3. When crashes, failures, or screenshots are reported, inspect the visual artifact and stack trace first. Do NOT skip crashes or write blind fixes. " +
           "4. Implement production-grade, complete changes with zero placeholders, mocks, or partial edits using file editing tools. " +
           "5. Write reusable local verification scripts (tests/tools) to verify behavior locally instead of issuing multiple repetitive LLM calls. " +
-          "6. Run test suites locally via tools to verify zero regressions. " +
-          "7. Deploy and verify against target cloud environment using existing credentials. " +
+          "6. Only run automated test suites if explicitly asked by the user, if modifying test files, or if mandated in project instructions. Do not run blind tests on simple edits. " +
+          "7. Deploy and verify against target cloud environment using existing credentials when applicable. " +
           "8. Resolve any side effects and stabilize before concluding. " +
           "MANDATORY: NEVER echo back manual CLI commands (npm, bash, curl, git, deploy) for the user to run. " +
           "NEVER claim completion or pass tests without physical tool execution. " +

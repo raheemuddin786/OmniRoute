@@ -77,6 +77,9 @@ export interface SpbRuntimeConfig {
   maxReprompts?: number;
   requireGitDiffEvidence?: boolean;
   requireTestPassBeforeDone?: boolean;
+  testGatingPolicy?: "never_unless_requested" | "always_enforce" | "only_for_tests";
+  enableDeepPromptAnalysis?: boolean;
+  enableTopicShiftDetection?: boolean;
   tokenBounds?: {
     apex?: Partial<SpbTokenBoundTier>;
     resilient?: Partial<SpbTokenBoundTier>;
@@ -105,6 +108,9 @@ export interface ConcreteSpbRuntimeConfig {
   maxReprompts: number;
   requireGitDiffEvidence: boolean;
   requireTestPassBeforeDone: boolean;
+  testGatingPolicy: "never_unless_requested" | "always_enforce" | "only_for_tests";
+  enableDeepPromptAnalysis: boolean;
+  enableTopicShiftDetection: boolean;
   tokenBounds: {
     apex: SpbTokenBoundTier;
     resilient: SpbTokenBoundTier;
@@ -133,6 +139,9 @@ export const DEFAULT_SPB_RUNTIME_CONFIG: ConcreteSpbRuntimeConfig = {
   maxReprompts: 2,
   requireGitDiffEvidence: true,
   requireTestPassBeforeDone: true,
+  testGatingPolicy: "never_unless_requested",
+  enableDeepPromptAnalysis: true,
+  enableTopicShiftDetection: true,
   tokenBounds: {
     apex: { high: 16384, medium: 12288, low: 8192 },
     resilient: { high: 8192, medium: 8192, low: 4096 },

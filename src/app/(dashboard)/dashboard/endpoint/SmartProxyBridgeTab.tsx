@@ -1941,6 +1941,76 @@ export function SmartProxyBridgeTab() {
                             Verify test execution before marking test items done
                           </span>
                         </div>
+
+                        {/* Test Gating Policy Selection */}
+                        <div className="flex flex-col justify-center rounded-md border p-2.5 bg-background">
+                          <label className="text-xs font-medium text-foreground block mb-1">
+                            Test Execution Policy
+                          </label>
+                          <select
+                            value={spbConfig.testGatingPolicy || "never_unless_requested"}
+                            onChange={(e) =>
+                              setSpbConfig((prev) => ({
+                                ...prev,
+                                testGatingPolicy: e.target.value as
+                                  "never_unless_requested" | "always_enforce" | "only_for_tests",
+                              }))
+                            }
+                            className="w-full text-xs rounded border border-input bg-background p-1 text-foreground"
+                          >
+                            <option value="never_unless_requested">
+                              Never unless explicitly requested
+                            </option>
+                            <option value="always_enforce">Always require test execution</option>
+                            <option value="only_for_tests">Only when modifying test files</option>
+                          </select>
+                          <span className="text-xs text-muted-foreground block mt-1">
+                            Prevents agents from running test suites blindly without understanding
+                            prompt
+                          </span>
+                        </div>
+
+                        {/* Deep Prompt Understanding Toggle */}
+                        <div className="flex flex-col justify-center rounded-md border p-2.5 bg-background">
+                          <label className="text-xs font-medium text-foreground flex items-center justify-between cursor-pointer">
+                            <span>Deep Prompt Understanding</span>
+                            <input
+                              type="checkbox"
+                              checked={spbConfig.enableDeepPromptAnalysis !== false}
+                              onChange={(e) =>
+                                setSpbConfig((prev) => ({
+                                  ...prev,
+                                  enableDeepPromptAnalysis: e.target.checked,
+                                }))
+                              }
+                              className="rounded border-input text-primary focus:ring-primary h-4 w-4"
+                            />
+                          </label>
+                          <span className="text-xs text-muted-foreground block mt-1">
+                            Analyze user intent &amp; context recency before taking any action
+                          </span>
+                        </div>
+
+                        {/* Topic Shift Detection Toggle */}
+                        <div className="flex flex-col justify-center rounded-md border p-2.5 bg-background">
+                          <label className="text-xs font-medium text-foreground flex items-center justify-between cursor-pointer">
+                            <span>Topic Shift Detection</span>
+                            <input
+                              type="checkbox"
+                              checked={spbConfig.enableTopicShiftDetection !== false}
+                              onChange={(e) =>
+                                setSpbConfig((prev) => ({
+                                  ...prev,
+                                  enableTopicShiftDetection: e.target.checked,
+                                }))
+                              }
+                              className="rounded border-input text-primary focus:ring-primary h-4 w-4"
+                            />
+                          </label>
+                          <span className="text-xs text-muted-foreground block mt-1">
+                            Notify user when context shifts and prioritize new topic intentions
+                          </span>
+                        </div>
                       </div>
                     </div>
 

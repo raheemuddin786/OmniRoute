@@ -948,9 +948,20 @@ export async function processSmartProxyRouting(
         activeGuidanceContract.baselineFileHashes = baselineSnapshot.hashes;
         activeGuidanceContract.baselineFileStats = baselineSnapshot.stats;
       }
+      const testGating = tierConfig?.spbConfig?.testGatingPolicy ?? "never_unless_requested";
+      const isTestExplicitlyRequested =
+        /\b(run test|run the test|execute test|npm test|npm run test|vitest|playwright|verify with tests)\b/i.test(
+          lastUserText
+        );
+      const shouldRequireTestBaseline =
+        testGating === "always_enforce" ||
+        (testGating === "never_unless_requested" && isTestExplicitlyRequested) ||
+        (testGating === "only_for_tests" && intent.taskPhase === "TESTING_AND_VERIFICATION");
+
       if (
         activeGuidanceContract.baselineTestPassed === undefined &&
-        tierConfig?.spbConfig?.requireTestPassBeforeDone
+        tierConfig?.spbConfig?.requireTestPassBeforeDone &&
+        shouldRequireTestBaseline
       ) {
         const testBaseline = snapshotRegressionBaseline(context.workspaceRoot);
         activeGuidanceContract.baselineTestPassed = testBaseline.testsPassing ?? true;
