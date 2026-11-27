@@ -1207,14 +1207,21 @@ export async function processSmartProxyRouting(
             messages[messages.length - 1]?.role === "tool");
         const isTurn1 = !isToolTurn && !existingCheckpoint;
 
+        const totalEstimatedMinutes = openItems.reduce(
+          (sum, it) => sum + (it.estimatedMinutes ?? 3),
+          0
+        );
+        const estTimelineNotice =
+          totalEstimatedMinutes > 0 ? ` | Est. Remaining: ~${totalEstimatedMinutes}m` : "";
+
         if (isTurn1) {
           checklistDirective =
-            `[SPB-IR Intent Checklist & Scope Fence: ${doneCount}/${activeGuidanceContract.intents.length} Complete]${violationsNotice}\n` +
+            `[SPB-IR Intent Checklist & Scope Fence: ${doneCount}/${activeGuidanceContract.intents.length} Complete${estTimelineNotice}]${violationsNotice}\n` +
             `Active Objectives:\n` +
             openItems
               .map(
                 (it) =>
-                  `- [${it.id}] (${it.layer.toUpperCase()}) [${it.kind}]: ${it.text} | Acceptance: ${it.acceptance}`
+                  `- [${it.id}] (${it.layer.toUpperCase()}) [${it.kind}]: ${it.text} (Est: ~${it.estimatedMinutes ?? 3}m) | Acceptance: ${it.acceptance}`
               )
               .join("\n") +
             `\nMandatory Guidelines:\n` +
@@ -1225,7 +1232,7 @@ export async function processSmartProxyRouting(
             `5. Baseline Verification: Run existing tests to verify baseline pass/fail status before applying changes.`;
         } else {
           // Later turns get a compact one-line status to prevent token bloat and agent distraction
-          checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete | Active: ${openItems.map((it) => `${it.id} (${it.text.slice(0, 35)})`).join(", ")}]${violationsNotice}`;
+          checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete${estTimelineNotice} | Active: ${openItems.map((it) => `${it.id} (${it.text.slice(0, 35)})`).join(", ")}]${violationsNotice}`;
         }
       }
     }

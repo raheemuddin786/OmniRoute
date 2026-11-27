@@ -490,11 +490,11 @@ export function detectAndRecoverFromStagnation(
     recoveryDirective =
       `[SPB Autonomous Self-Correction Alert: STALL / LOOP DETECTED (~${elapsedMinutes}m elapsed without code progress)]\n` +
       `You have been executing tools on this task for over ${elapsedMinutes} minute(s) without verified code modifications.\n` +
-      `Perform an immediate self-audit before invoking another tool:\n` +
-      `1. Hallucination check: Are you looking for files, symbols, endpoints, or error signatures that do NOT exist in this repo?\n` +
-      `2. Divergence check: Have you drifted away from the primary user objective?\n` +
-      `3. Token waste check: Are you running redundant reads/searches or repeating failing commands without new insights?\n` +
-      `If you have gathered sufficient context, construct a COMPLETE pre-plan: enumerate every file requiring changes, all type contracts, imports, and test surfaces. Then execute the full solution cleanly end-to-end without trial-and-error. Do NOT make blind micro-edits before planning.`;
+      `Perform an immediate non-disruptive self-audit to resume intended work without losing context:\n` +
+      `1. Checklist progress check: If you are currently working through an active checklist item, do NOT discard your work or restart from scratch. Continue directly to complete the current item and apply code modifications.\n` +
+      `2. Hallucination check: Are you looking for files, symbols, endpoints, or error signatures that do NOT exist in this repo? If so, stop searching and ground in known files.\n` +
+      `3. Divergence check: Have you drifted away from the primary user objective into tangential inspection or repetitive reading? Realign with the user's checklist goals immediately.\n` +
+      `4. Token waste check: Are you running redundant reads/searches or repeating failing commands without new insights? Stop reading and proceed to direct tool execution (Write/Edit/Bash) cleanly end-to-end.`;
 
     const testPattern = /\b(test|spec|verify|assert|coverage)\b/i;
     newTaskPhase = testPattern.test(taskPhase) ? "TESTING_AND_VERIFICATION" : "CODE_GENERATION";

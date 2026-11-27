@@ -35,6 +35,7 @@ export interface IntentLedgerItem {
   acceptance: string;
   status: IntentStatus;
   evidence?: string;
+  estimatedMinutes?: number;
 }
 
 export interface GuidanceContract {

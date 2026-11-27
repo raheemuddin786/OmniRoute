@@ -584,6 +584,20 @@ export function decomposeRequestIntoLedger(
     }
   };
 
+  // Helper to estimate duration in minutes based on layer, scope, and files
+  const estimateMinutes = (layer: IntentLayer, files: string[], desc: string): number => {
+    let base = 3;
+    if (layer === "ui") base = 5;
+    else if (layer === "data") base = 4;
+    else if (layer === "test") base = 4;
+    else if (layer === "config") base = 2;
+    else if (layer === "docs") base = 2;
+
+    if (files.length > 2) base += (files.length - 2) * 2;
+    if (/\b(e2e|playwright|integration|refactor|migration|end to end)\b/i.test(desc)) base += 3;
+    return Math.max(1, Math.min(base, 15));
+  };
+
   // 2. Build explicit ledger items
   for (let i = 0; i < explicitSegments.length; i++) {
     if (items.length >= maxItems) break;
@@ -601,6 +615,7 @@ export function decomposeRequestIntoLedger(
       targetFiles: files.length > 0 ? files : undefined,
       acceptance: getAcceptance(layer, seg),
       status: "open",
+      estimatedMinutes: estimateMinutes(layer, files, seg),
     });
   }
 
@@ -622,6 +637,7 @@ export function decomposeRequestIntoLedger(
       gap: "missing",
       acceptance: "Backend validates inputs and persists submitted data without error",
       status: "open",
+      estimatedMinutes: 4,
     });
   }
 
@@ -636,6 +652,7 @@ export function decomposeRequestIntoLedger(
       gap: "missing",
       acceptance: "Domain models and types align with updated schema",
       status: "open",
+      estimatedMinutes: 3,
     });
   }
 
@@ -652,6 +669,7 @@ export function decomposeRequestIntoLedger(
       gap: "missing",
       acceptance: "Automated test suite executes and passes with zero regressions",
       status: "open",
+      estimatedMinutes: 3,
     });
   }
 
