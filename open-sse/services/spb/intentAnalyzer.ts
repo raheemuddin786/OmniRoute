@@ -410,10 +410,10 @@ export function classifyIntent(
                 item.name
               )
             ) {
-              // Recognize file mutating script/bash commands (sed -i, python file write, echo >, tee, cp, mv)
+              // Recognize shell commands that perform file modification or creation
               const cmd = (input?.command || input?.cmd || input?.CommandLine || "") as string;
               if (
-                /(?:sed\s+-i|python[0-9]*\s+-c.*(?:open|write)|\b(?:echo|printf)\b.*>|\btee\b|\bcp\b|\bmv\b|\brm\b|git\s+apply)/i.test(
+                /(?:sed\s+-i|python[0-9]*\s+(?:-c|<<).*(?:open|write|truncate)|\bnode\s+(?:-e|--eval)\b.*(?:fs\.|writeFileSync|appendFile)|\b(?:echo|printf)\b.*>|\btee\b|\bcp\b|\bmv\b|\brm\b|\btouch\b|\bmkdir\b|\bcat\b.*>|git\s+(?:apply|checkout|commit|merge))/i.test(
                   cmd
                 )
               ) {
