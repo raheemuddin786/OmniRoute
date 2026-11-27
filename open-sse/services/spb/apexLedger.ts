@@ -1928,16 +1928,18 @@ export async function judgeCompletion(
       timestamp: Date.now(),
     });
 
+    // When judge LLM evaluation fails or is unavailable, evaluate mechanically using
+    // observed physical evidence (file writes, git diffs, test executions) rather than
+    // blindly marking all unverified items done and satisfied.
+    const fallbackRes = judgeWithoutDiff(ledger, evidence);
     return {
-      items: ledger.map((it) => ({
-        id: it.id,
-        status: it.status === "done" ? ("done" as const) : ("done_unverified" as const),
-        evidence: "Judge evaluation unavailable (timeout or parse error); fail-open",
-        missing: "",
+      ...fallbackRes,
+      items: fallbackRes.items.map((it) => ({
+        ...it,
+        evidence: it.evidence
+          ? `${it.evidence}; Judge evaluation unavailable (timeout or parse error); fail-open`
+          : "Judge evaluation unavailable (timeout or parse error); fail-open",
       })),
-      outOfScopeFiles: [],
-      reprompt: "",
-      isSatisfied: true,
     };
   }
 }

@@ -1642,7 +1642,7 @@ export async function processSpbOutboundZeroLoss(args: {
       args.taskPhase === "DETERMINISTIC_ROUTING";
 
     const claimsEditsInText =
-      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved)|changes (?:are|have been) (?:applied|made|committed)|(?:resolved|fixed|implemented|updated|verified)\s*&\s*verified|tests?\s*(?:passed|verified)|deployed?\s*(?:successfully|cleanly))\b/i.test(
+      /\b(I have (?:implemented|applied|modified|updated|created|fixed|resolved|formulated|executed|completed)|changes (?:are|have been) (?:applied|made|committed)|(?:resolved|fixed|implemented|updated|verified)\s*&\s*verified|tests?\s*(?:passed|verified)|deployed?\s*(?:successfully|cleanly)|(?:all )?(?:requirements|tasks|goals|items|specifications) (?:are )?(?:fully )?(?:met|satisfied|completed|verified)|executed (?:the )?(?:inspection|plan|task|verification) autonomously)\b/i.test(
         extracted.text.trim()
       );
 
