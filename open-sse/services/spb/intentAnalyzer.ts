@@ -440,12 +440,24 @@ export function classifyIntent(
           complexReasoningRegex.test(targetText)) &&
           !/\b(fix (?:the |a )?bug|debug|patch failing)\b/i.test(targetText)));
 
+  // Only treat user text as having test intent if they explicitly command test execution,
+  // or if there is an active test failure / diagnostic failure in recent tool turns.
+  // Mentioning words like 'test' in general prompts (e.g. 'write feature and test it later') should NOT
+  // immediately force the agent into TESTING_AND_VERIFICATION before code is understood or written.
+  const isExplicitTestCommand =
+    /\b(run (?:the )?(?:unit )?tests?|execute (?:the )?tests?|npm test|npm run test|vitest|playwright|verify test assertions)\b/i.test(
+      targetText
+    );
+  const hasActiveTestFailure =
+    Boolean(latestExtracted.hasTestOrDiagnosticFailure) ||
+    Boolean(latestExtracted.hasToolExecutionError);
+
   const hasTestKeywords =
-    (testRegex.test(targetText) &&
+    (isExplicitTestCommand &&
       !/^(?:how\s+(?:to|can\s+i|do\s+i)\s+run|how\s+to\s+test|explain\s+how\s+to\s+test)\b/i.test(
         targetText.trim()
       )) ||
-    (isToolResultTurn && testRegex.test(latestExtracted.toolResultText));
+    (isToolResultTurn && (hasActiveTestFailure || testRegex.test(latestExtracted.toolResultText)));
   const hasRefactorKeywords = !isToolResultTurn && refactorRegex.test(targetText);
   const hasDeterministicKeywords = !isToolResultTurn && deterministicRegex.test(targetText);
   const hasCodeKeywords =
