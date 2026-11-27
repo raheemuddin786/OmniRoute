@@ -577,6 +577,19 @@ export async function processSmartProxyRouting(
         : duplicateBlockDirective;
     }
 
+    // Hard Polling Loop Breaker:
+    // If the agent has been repeatedly polling background test processes, checking ps/pgrep/grep/wc,
+    // or repeating polling stagnation remarks, inject an explicit termination directive and command execution.
+    if (intent.isPollingLoopDetected) {
+      const antiPollingDirective =
+        "[Anti-Polling Directive: Terminate background status polling immediately. " +
+        "Do not run ps, pgrep, wc -l, or wait commands to monitor background processes. " +
+        "Proceed immediately to execute the primary task by applying required file modifications and code changes (Write/Edit/Bash).]";
+      autoRecoveryDirective = autoRecoveryDirective
+        ? `${autoRecoveryDirective}\n\n${antiPollingDirective}`
+        : antiPollingDirective;
+    }
+
     // Pass isToolResultTurn AND guidanceContract to enforce supervision
     // Tier 3 will require a guidanceContract for all phases
     let tierAssignment = selectModelTier(

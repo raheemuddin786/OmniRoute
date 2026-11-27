@@ -90,6 +90,7 @@ export interface IntentProfile {
   toolFailureDiagnostic?: ToolFailureDiagnostic;
   isDuplicateFileRead?: boolean;
   duplicateFilePath?: string;
+  isPollingLoopDetected?: boolean;
   guidanceContract?: GuidanceContract;
   originalPrompt?: string; // preserved context for recovery and debugging
   hasVisualOrCrashData?: boolean;
@@ -555,13 +556,24 @@ export function classifyIntent(
   // without an intervening code mutation, force CODE_GENERATION to break the infinite read loop.
   let isDuplicateFileRead = false;
   let duplicateFilePath: string | undefined;
+  let isPollingLoopDetected = false;
 
   const fileReadCounts = new Map<string, number>();
+  let consecutiveBashPollingCount = 0;
   // Use a sliding window of recent messages to avoid flagging reads from dozens of turns ago
   const recentMessagesWindow = messages.slice(-12);
   for (const msg of recentMessagesWindow) {
     if (msg.role === "assistant") {
       const rawTools: Array<{ name: string; args?: Record<string, unknown> }> = [];
+      const msgText =
+        typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content || "");
+      if (
+        /\b(stuck in a (?:useless )?polling loop|waiting for (?:the )?(?:background )?tests? to finish|polling loop for over an hour)\b/i.test(
+          msgText
+        )
+      ) {
+        isPollingLoopDetected = true;
+      }
       if (Array.isArray(msg.content)) {
         for (const part of msg.content) {
           if (
@@ -600,12 +612,26 @@ export function classifyIntent(
         const filePath = String(
           args.file_path || args.filePath || args.path || args.filename || ""
         ).trim();
+        const commandStr = String(args.command || args.cmd || "");
         const isReadTool =
           /^(read|read_file|view|readlocalfile|cat)$/i.test(toolName) || toolName.includes("read");
         const isMutationTool =
           /^(write|edit|file_write|patch|update|apply_patch)$/i.test(toolName) ||
           toolName.includes("write") ||
           toolName.includes("edit");
+
+        const isProcessOrPollingBash =
+          /^(bash|execute|terminal|sh)$/i.test(toolName) &&
+          /\b(ps\s|pgrep|grep -E|wc -l|jobs|sleep|wait|tail.*-f|kill -0)\b/i.test(commandStr);
+
+        if (isProcessOrPollingBash) {
+          consecutiveBashPollingCount++;
+          if (consecutiveBashPollingCount >= 2) {
+            isPollingLoopDetected = true;
+          }
+        } else if (isMutationTool) {
+          consecutiveBashPollingCount = 0;
+        }
 
         if (isReadTool && filePath) {
           const count = (fileReadCounts.get(filePath) || 0) + 1;
@@ -635,8 +661,8 @@ export function classifyIntent(
   } else if (hasPureArchitectureIntent || isBroadSystemContext || isMultiFileMutation) {
     taskPhase = "ARCHITECTURAL_PLANNING";
     complexityScore = hasPureArchitectureIntent ? 0.9 : isMultiFileMutation ? 0.88 : 0.85;
-  } else if (isDuplicateFileRead) {
-    // Hard break: repeated reading of the same file forces immediate code generation
+  } else if (isDuplicateFileRead || isPollingLoopDetected) {
+    // Hard break: repeated reading of the same file or process polling loop forces immediate code generation
     taskPhase = "CODE_GENERATION";
     complexityScore = 0.75;
   } else if (isToolResultTurn) {
@@ -682,6 +708,7 @@ export function classifyIntent(
     toolFailureDiagnostic: latestExtracted.toolFailureDiagnostic,
     isDuplicateFileRead,
     duplicateFilePath,
+    isPollingLoopDetected,
     originalPrompt: originalPromptText || "",
     hasVisualOrCrashData: latestExtracted.hasVisualOrCrashData,
     hasTestOrDiagnosticFailure: latestExtracted.hasTestOrDiagnosticFailure,
