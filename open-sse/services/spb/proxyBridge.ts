@@ -1260,13 +1260,17 @@ export async function processSmartProxyRouting(
             `2. Scope Fence: Confine modifications strictly to the target files required for these open items.\n` +
             `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.\n` +
             `4. Initial Inspection Directive: Report your initial assessment as [I#: exists|partial|missing] with cited evidence.\n` +
-            `5. Baseline Verification: Run existing tests to verify baseline pass/fail status before applying changes.\n` +
+            `5. Strict Dependency Order & Step Gating: You MUST execute checklist items strictly in numbered sequence. Do NOT jump ahead to later phases (such as running tests or editing downstream files) before preceding items (e.g., creating/updating use cases, specs, or schemas) are fully implemented and verified with tangible file changes or inspection proofs. Prematurely executing tests or declaring completion before completing prerequisite checklist items is strictly prohibited.\n` +
             `\nPRE-EXECUTION MANDATE: Before invoking ANY tool, you MUST first present this full checklist to the user in your opening message. ` +
             `Include each item's ID, description, estimated duration (~Xm), and the total estimated completion time (~${totalEstimatedMinutes}m total). ` +
             `Only begin tool execution AFTER presenting the plan conversationally to the user.`;
         } else {
-          // Later turns get a compact one-line status to prevent token bloat and agent distraction
-          checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete${estTimelineNotice} | Active: ${openItems.map((it) => `${it.id} (${it.text.slice(0, 35)})`).join(", ")}]${violationsNotice}`;
+          // Later turns get a compact status reinforcing the immediate next objective and prohibiting jumping ahead
+          const nextItem = openItems[0];
+          const nextFocus = nextItem
+            ? ` | Current Target: [${nextItem.id}] (${nextItem.layer.toUpperCase()}) ${nextItem.text.slice(0, 45)}`
+            : "";
+          checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete${estTimelineNotice}${nextFocus} | Do NOT jump ahead to later items until prerequisite items are resolved]${violationsNotice}`;
         }
       }
     }

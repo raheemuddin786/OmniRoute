@@ -553,7 +553,8 @@ export function enhanceInboundPrompt(
     let testingPolicyDirective = "";
     if (isUseCaseAndLiveE2ECompound) {
       testingPolicyDirective =
-        "\n\n[Intent Execution Mandate: Understand requirements end-to-end -> Create/update/upgrade use cases in checklist -> Update E2E test suite to match use cases -> Execute live E2E tests and report real results. Do NOT stall or pause after reading conventions. Proceed through all phases autonomously.]";
+        "\n\n[Intent Execution Mandate: Understand requirements end-to-end -> Create/update/upgrade use cases in checklist FIRST with verified file changes -> Update E2E test suite to match use cases -> Execute live E2E tests and report real results. " +
+        "MANDATORY STEP ORDER: Do NOT jump ahead to running tests before creating or updating the use cases and test suite. Complete and verify each prerequisite phase before advancing to the next. Proceed through all phases autonomously.]";
     } else if (testGatingPolicy === "never_unless_requested" && !userExplicitlyRequestedTests) {
       testingPolicyDirective =
         "\n\n[Test Execution Policy: Do NOT run test cases blindly. The user has NOT explicitly requested test execution in this prompt. " +

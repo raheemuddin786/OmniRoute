@@ -272,3 +272,83 @@ test("Gap 1: turn-1 checklist directive includes PRE-EXECUTION MANDATE sentence"
     "Expected PRE-EXECUTION MANDATE in the routing result for a turn-1 session with open checklist items"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Checklist Jumping Prevention & Strict Step-Order Gating
+// ---------------------------------------------------------------------------
+test("Checklist Jumping Prevention: turn-1 directive mandates strict dependency order and prohibits jumping ahead", async () => {
+  const { saveCheckpoint } = await import("../../src/lib/db/spbState.ts");
+  const { processSmartProxyRouting } = await import("../../open-sse/services/spb/proxyBridge.ts");
+
+  const sessionId = "spb_order_directive_" + Date.now();
+
+  const contract = {
+    taskSpecification: "Update use cases and run E2E tests",
+    intents: [
+      {
+        id: "I1",
+        text: "Update use cases in checklist",
+        layer: "doc",
+        kind: "explicit",
+        status: "open",
+        estimatedMinutes: 5,
+        acceptance: "Use cases documented",
+      },
+      {
+        id: "I2",
+        text: "Run E2E tests",
+        layer: "test",
+        kind: "explicit",
+        status: "open",
+        estimatedMinutes: 10,
+        acceptance: "All tests pass",
+      },
+    ],
+    strictCompletion: false,
+    nonGoals: [],
+    observedReadFiles: [],
+    observedWrittenFiles: [],
+    executedTestCommands: [],
+  };
+
+  saveCheckpoint({
+    sessionId,
+    promptAnchorHash: "sha256:order_gate_test",
+    taskPhase: "CODE_GENERATION",
+    modelTier: "tier_1_apex",
+    consecutiveReads: 0,
+    stagnationRecovered: 0,
+    statePayload: JSON.stringify({ messagesCount: 0 }),
+    createdAt: Date.now(),
+    guidanceContract: contract,
+  });
+
+  const result = await processSmartProxyRouting({
+    sessionId,
+    messages: [{ role: "user", content: "create checklist and execute immediately" }],
+  });
+
+  const contentStr = JSON.stringify(result);
+  assert.ok(
+    contentStr.includes("Strict Dependency Order & Step Gating") ||
+      contentStr.includes("Do NOT jump ahead"),
+    "Expected strict dependency order directive in turn-1 directive"
+  );
+});
+
+test("Checklist Jumping Prevention: compound use-case + e2e prompt enforces mandatory step order directive", async () => {
+  const { enhanceInboundPrompt } =
+    await import("../../open-sse/services/spb/inboundIntelligence.ts");
+
+  const prompt =
+    "create the checklist and execute immediately. Update use cases, run E2E tests covering 90% cases";
+  const result = enhanceInboundPrompt(prompt, "tier_2_resilient", "CODE_GENERATION", [
+    { role: "user", content: prompt },
+  ]);
+
+  assert.ok(
+    result.enhancedPrompt.includes("MANDATORY STEP ORDER") ||
+      result.enhancedPrompt.includes("Do NOT jump ahead to running tests"),
+    "Expected MANDATORY STEP ORDER directive for compound use-case + E2E prompt"
+  );
+});
