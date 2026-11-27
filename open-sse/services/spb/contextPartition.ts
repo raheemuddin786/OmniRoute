@@ -555,6 +555,12 @@ export function decomposeRequestIntoLedger(
       return "api";
     if (/\b(env|config|docker|package\.json|tsconfig|setting)\b/i.test(s)) return "config";
     if (/\b(doc|docs|readme|documentation|comment)\b/i.test(s)) return "docs";
+    if (
+      /\b(bash|shell|script|python|python3|node|exec|run script|execute script|chmod|sh\b|\.sh\b|cron|pipeline|cli command)\b/i.test(
+        s
+      )
+    )
+      return "config";
     return "api";
   };
 

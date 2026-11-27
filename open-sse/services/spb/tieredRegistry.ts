@@ -386,7 +386,12 @@ export function detectAndRecoverFromToolDeadlock(
     case "file_modified_since_read":
       specificAdvice =
         "The file was modified on disk since your last read (e.g., by another tool or formatter).\n" +
-        "ACTION REQUIRED: Re-read the file immediately before executing your next edit.";
+        "ACTION REQUIRED:\n" +
+        "1. Re-read the exact target line range before any edit attempt.\n" +
+        "2. If a string replacement failed or produced 'Entity replaced: False', debug-print the exact bytes of the target line " +
+        "(e.g., python3 -c \"with open('file') as x: print(repr(x.read()))\") to check for HTML entity encoding (&amp; vs &) " +
+        "or hidden whitespace before retrying.\n" +
+        "3. Only then attempt the replacement using the exact literal character sequence seen in the file.";
       break;
 
     case "tool_not_available":

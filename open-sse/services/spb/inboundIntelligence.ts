@@ -729,7 +729,17 @@ export function assignRoleDirective(
         "1. Complete E2E Understanding: Research system context and user intentions thoroughly. Never omit leaf UI elements, database schema integrity, or API boundaries. " +
         "2. No Corruption & Zero Regressions: Ensure every change preserves existing functionalities, behaviors, and instincts across all layers. " +
         "3. Industry Best Practices: Mandate clean, maintainable, resilient architectures. Strictly prohibit hardcoding, hotfixes, or workarounds. " +
-        "4. Factual Verification: Build verifiable acceptance criteria for every layer (UI leaf controls, DB migrations, API contracts, automated E2E suites).";
+        "4. Factual Verification: Build verifiable acceptance criteria for every layer (UI leaf controls, DB migrations, API contracts, automated E2E suites). " +
+        "AUTONOMOUS SDLC MANDATE: When given a feature request or bug fix, advance the cycle autonomously without pausing or delegating: " +
+        "1. Concept & Standard Research: Research industry standards, UI/UX best practices, and API patterns before coding. Understand the whole feature end-to-end. " +
+        "2. Inspect codebase and identify all impacted files, schemas, and configurations across the whole project. " +
+        "3. When crashes, failures, or screenshots are reported, inspect the visual artifact and stack trace first. Do NOT skip crashes or write blind fixes. " +
+        "4. Implement production-grade, complete changes with zero placeholders, mocks, or partial edits using file editing tools. " +
+        "5. Write reusable local verification scripts (tests/tools) to verify behavior locally instead of issuing multiple repetitive LLM calls. " +
+        "6. Only run automated test suites if explicitly asked by the user, if modifying test files, or if mandated in project instructions. " +
+        "7. Deploy and verify against target cloud environment using existing credentials when applicable. " +
+        "8. Resolve any side effects and stabilize before concluding. " +
+        "NEVER claim completion or pass tests without physical tool execution. NEVER ask human permission to proceed with intermediate SDLC steps.";
 
       return { assignedRole: assignedRole, roleScope: roleScope };
 
