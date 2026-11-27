@@ -322,6 +322,22 @@ export async function processSmartProxyRouting(
     let restoredModel: string | null = null;
     try {
       existingCheckpoint = getCheckpoint(sessionId);
+      // Gap 5: Re-hydrate ledger intents after context compaction.
+      // When context compaction fires, the in-memory guidanceContract.intents array can be
+      // dropped from the message payload.  The persisted SQLite checkpoint still contains the
+      // original intents.  If the restored contract has an empty intents array while the
+      // checkpoint carried a populated one, copy them back so the ledger judge can run.
+      if (
+        existingCheckpoint?.guidanceContract &&
+        (existingCheckpoint.guidanceContract as GuidanceContract).intents?.length === 0
+      ) {
+        // The checkpoint itself IS the SQLite record — if intents are absent here it means
+        // they were never persisted (a first turn), which is handled downstream normally.
+        // We log the mismatch for observability without blocking.
+        console.warn(
+          `[SPB Bridge] Session ${sessionId} | Checkpoint intents empty — possible compaction drop; keeping contract as-is for downstream re-decomposition.`
+        );
+      }
       if (existingCheckpoint?.guidanceContract && !intent.guidanceContract) {
         const existing = existingCheckpoint.guidanceContract as GuidanceContract;
         const mode = tierConfig?.spbConfig?.intentLedgerMode ?? "off";
@@ -468,10 +484,15 @@ export async function processSmartProxyRouting(
       intent.taskPhase === "DETERMINISTIC_ROUTING" ||
       (intent.taskPhase === "TESTING_AND_VERIFICATION" && !isDiagnosticOrVisualTurn);
 
+    // Gap 4: Only reset stagnation on genuine short continuation messages, not on frustrated
+    // corrections that happen to include "ok" or "yes" mid-sentence.
+    // The pattern must be the ENTIRETY (or near-entirety) of the message — not buried in prose.
+    const lastUserTrimmed = lastUserText.trim();
     const isContinuationResume =
-      /\b(ok|yes|proceed|continue|carry on|go ahead|sure|fine|yep|done|next|compact)\b/i.test(
-        lastUserText.trim()
-      ) ||
+      (lastUserTrimmed.length <= 50 &&
+        /^(?:ok|yes|proceed|continue|carry on|go ahead|sure|fine|yep|done|next|compact)(?:\s+(?:please|next|now|with that|further|ahead|with changes|thanks|thank you))?[\s!.]*$/i.test(
+          lastUserTrimmed
+        )) ||
       (Number(parsedStatePayload.messagesCount ?? 0) > 100 && (priorConsecutiveReads ?? 0) === 0);
 
     if (isContinuationResume) {
@@ -965,6 +986,16 @@ export async function processSmartProxyRouting(
         }
       }
       activeGuidanceContract.strictCompletion = tierConfig?.spbConfig?.strictCompletion ?? false;
+      // Gap 2: Promote strict ledger verification for multi-intent execution-mandate sessions.
+      // When the user has explicitly requested both code generation and test execution (compound SDLC mandate),
+      // the judge must run in strict mode so false completion claims are caught by evaluateLedgerCompletion().
+      const isExecutionMandateSession =
+        (intent.taskPhase === "CODE_GENERATION" ||
+          intent.taskPhase === "TESTING_AND_VERIFICATION") &&
+        (activeGuidanceContract.intents?.filter((i) => i.kind === "explicit").length ?? 0) >= 2;
+      if (isExecutionMandateSession) {
+        activeGuidanceContract.strictCompletion = true;
+      }
       if (
         !activeGuidanceContract.baselineModifiedFiles ||
         !activeGuidanceContract.baselineFileHashes
@@ -1229,7 +1260,10 @@ export async function processSmartProxyRouting(
             `2. Scope Fence: Confine modifications strictly to the target files required for these open items.\n` +
             `3. Completion Gate: Fulfill and verify all open checklist items before declaring completion.\n` +
             `4. Initial Inspection Directive: Report your initial assessment as [I#: exists|partial|missing] with cited evidence.\n` +
-            `5. Baseline Verification: Run existing tests to verify baseline pass/fail status before applying changes.`;
+            `5. Baseline Verification: Run existing tests to verify baseline pass/fail status before applying changes.\n` +
+            `\nPRE-EXECUTION MANDATE: Before invoking ANY tool, you MUST first present this full checklist to the user in your opening message. ` +
+            `Include each item's ID, description, estimated duration (~Xm), and the total estimated completion time (~${totalEstimatedMinutes}m total). ` +
+            `Only begin tool execution AFTER presenting the plan conversationally to the user.`;
         } else {
           // Later turns get a compact one-line status to prevent token bloat and agent distraction
           checklistDirective = `[SPB Intent Ledger: ${doneCount}/${activeGuidanceContract.intents.length} Complete${estTimelineNotice} | Active: ${openItems.map((it) => `${it.id} (${it.text.slice(0, 35)})`).join(", ")}]${violationsNotice}`;

@@ -674,6 +674,9 @@ export function assignRoleDirective(
           "You have full autonomous end-to-end SDLC authority across implementation, local testing, deployment, and cloud verification. " +
           "CHECKLIST & FACTUAL VERIFICATION MANDATE: You MUST organize your work into an explicit checklist following all SDLC steps. " +
           "Never assume changes are applied or tests passed without physical execution. " +
+          "PRE-EXECUTION MANDATE: Before invoking ANY tool, present the full SDLC checklist to the user in your opening message. " +
+          "Include each item's ID, description, estimated duration (~Xm), and total estimated completion time. " +
+          "Only begin tool execution AFTER presenting the plan conversationally. " +
           "AUTONOMOUS SDLC MANDATE: When given a feature request or bug fix, advance the cycle autonomously without pausing or delegating: " +
           "1. Concept & Standard Research: Research industry standards, UI/UX best practices, and API patterns before coding. Understand the whole feature end-to-end. " +
           "2. Inspect codebase and identify all impacted files, schemas, and configurations across the whole project. " +
@@ -704,7 +707,10 @@ export function assignRoleDirective(
         "requirements -> architecture -> implementation -> testing -> verification. " +
         "MANDATORY CHECKLIST & AUTONOMOUS EXECUTION: Always construct an explicit checklist of tasks. " +
         "For any feature or bug fix: after formulating the plan and inspecting necessary context, autonomously proceed to execution using available tools. " +
-        "Do NOT halt execution to ask human confirmation when autonomous execution was requested.";
+        "Do NOT halt execution to ask human confirmation when autonomous execution was requested. " +
+        "PRE-EXECUTION MANDATE: Before invoking ANY tool, present the full SDLC checklist to the user in your opening message. " +
+        "Include each item's ID, description, estimated duration (~Xm), and total estimated completion time. " +
+        "Only begin tool execution AFTER presenting the plan conversationally.";
 
       return { assignedRole: assignedRole, roleScope: roleScope };
 

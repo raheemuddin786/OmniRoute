@@ -1804,6 +1804,19 @@ export async function processSpbOutboundZeroLoss(args: {
           }
         }
       } else if (isStrict) {
+        // Gap 3: Before heuristic ledger evaluation, inject real test-execution evidence into the
+        // guidance contract so evaluateLedgerCompletion() can verify that E2E tests actually ran
+        // and passed (exitCode 0) rather than just checking for test-file git-diff presence.
+        const strictToolEvidence = extractToolEvidenceFromMessages(
+          args.body?.messages as unknown[]
+        );
+        const hasPassingTestExecution = strictToolEvidence.executedTestCommands.some(
+          (c) => c.exitCode === 0
+        );
+        if (hasPassingTestExecution && activeContract) {
+          activeContract.testExecutionPassed = true;
+          updateGuidanceContract(args.sessionId, activeContract);
+        }
         ledgerEval = evaluateLedgerCompletion(args.sessionId, extracted.text, diffReview, isStrict);
         if (!ledgerEval.isSatisfied && ledgerEval.suggestedReprompt) {
           evalResult.isSatisfied = false;
